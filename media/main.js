@@ -1,0 +1,931 @@
+const vscode = acquireVsCodeApi();
+const chatContainer = document.getElementById('chat-container'), prompt = document.getElementById('prompt');
+const sendBtn = document.getElementById('sendBtn'), stopBtn = document.getElementById('stopBtn');
+const slashMenu = document.getElementById('slash-menu'), plusMenu = document.getElementById('plus-menu');
+const modeToggle = document.getElementById('mode-toggle');
+let currentAiDiv = null, currentAiText = "", pendingImages = [], currentMode = 'plan', uploadedContext = [], robotAnimations = true, _lastAutoFiles = [], _currentSessionId = null;
+let _requestId = 0; // incremented on each send; used to discard stale Ready/chunk messages
+let _cancelActiveRename = null; // call this before any session list re-render
+let _userScrolledUp = false;
+const scrollBtn = document.getElementById('scroll-to-bottom');
+chatContainer.addEventListener('scroll', () => {
+  const atBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 60;
+  _userScrolledUp = !atBottom;
+  if (scrollBtn) scrollBtn.style.display = _userScrolledUp ? 'flex' : 'none';
+});
+window.scrollToBottom = () => { _userScrolledUp = false; if (scrollBtn) scrollBtn.style.display = 'none'; chatContainer.scrollTop = chatContainer.scrollHeight; };
+
+marked.setOptions({ highlight: (code, lang) => hljs.highlightAuto(code).value, langPrefix: 'hljs language-' });
+
+const BOT_SVG = `<svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path class="antenna" d="M12 8V4H8"></path><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><g class="eye-group"><path class="eye" d="M15 13v2"></path><path class="eye" d="M9 13v2"></path><path class="eye-lid" d="M14 14.5c.5.5 1.5.5 2 0"></path><path class="eye-lid" d="M8 14.5c.5.5 1.5.5 2 0"></path></g></svg>`;
+
+let _gromLogoIdle = false;
+let _gromLogoState = 'default';
+function updateGromLogo() {
+    if (!window.GROM_LOGOS) return;
+    const logo = document.getElementById('main-logo');
+    if (!logo) return;
+    const b = document.body;
+    let state;
+    if (b.classList.contains('grom-disconnected')) state = 'disconnected';
+    else if (b.classList.contains('grom-error')) state = 'error';
+    else if (b.classList.contains('grom-thinking') || b.classList.contains('mode-build')) state = 'building';
+    else state = 'default';
+    if (state === _gromLogoState) return;
+    _gromLogoState = state;
+    if (state === 'default') {
+        logo.innerHTML = window.GROM_IDLE_SVG || '';
+    } else if (state === 'building') {
+        logo.innerHTML = window.GROM_BUILD_SVG || '';
+    } else {
+        logo.innerHTML = `<img id="grom-logo-img" src="${GROM_LOGOS[state]}" alt="Grom" width="70" height="70">`;
+    }
+    const mini = document.getElementById('mini-grom');
+    if (mini && window.GROM_LOGOS) {
+        mini.src = state === 'default' ? GROM_LOGOS.default
+                 : state === 'building' ? GROM_LOGOS.building || GROM_LOGOS.default
+                 : GROM_LOGOS[state] || GROM_LOGOS.default;
+    }
+}
+
+window.toggleMode = () => {
+    currentMode = currentMode === 'plan' ? 'build' : 'plan';
+    document.body.classList.remove('mode-plan', 'mode-build');
+    document.body.classList.add('mode-' + currentMode);
+    modeToggle.classList.toggle('build', currentMode === 'build');
+    document.getElementById('plan-btn').classList.toggle('active', currentMode === 'plan');
+    document.getElementById('build-btn').classList.toggle('active', currentMode === 'build');
+    vscode.postMessage({ type: 'updateMode', mode: currentMode });
+    updateGromLogo();
+};
+
+window.toggleHistory = () => { const overlay = document.getElementById('history-overlay'); overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex'; };
+
+window.switchHistoryTab = (tab) => {
+  const isSessions = tab === 'sessions';
+  document.getElementById('session-list').style.display = isSessions ? '' : 'none';
+  const tlp = document.getElementById('task-log-panel');
+  tlp.style.display = isSessions ? 'none' : 'flex';
+  document.getElementById('tab-sessions').classList.toggle('active', isSessions);
+  document.getElementById('tab-tasklog').classList.toggle('active', !isSessions);
+};
+
+function renderTaskLog(entries) {
+  const list = document.getElementById('task-log-list');
+  const empty = document.getElementById('task-log-empty');
+  if (!entries || !entries.length) { empty.style.display = ''; list.innerHTML = ''; return; }
+  empty.style.display = 'none';
+  list.innerHTML = entries.slice().reverse().map(e => {
+    const t = new Date(e.ts).toLocaleTimeString();
+    const icon = { read_file:'📖', write_file:'✏️', list_directory:'📂', delete_file:'🗑️', search_files:'🔍', run_terminal:'⚡' }[e.tool] || '🔧';
+    return `<div class="task-log-entry">
+      <div class="task-log-header"><span>${icon} <code>${e.tool}</code></span><span class="task-log-time">${t}</span></div>
+      ${e.argsSummary ? `<div class="task-log-args">${e.argsSummary}</div>` : ''}
+      <div class="task-log-snippet">${e.snippet}</div>
+    </div>`;
+  }).join('');
+}
+
+function appendTaskLogEntry(entry) {
+  const list = document.getElementById('task-log-list');
+  const empty = document.getElementById('task-log-empty');
+  if (empty) empty.style.display = 'none';
+  const t = new Date(entry.ts).toLocaleTimeString();
+  const icon = { read_file:'📖', write_file:'✏️', list_directory:'📂', delete_file:'🗑️', search_files:'🔍', run_terminal:'⚡' }[entry.tool] || '🔧';
+  const div = document.createElement('div'); div.className = 'task-log-entry';
+  div.innerHTML = `<div class="task-log-header"><span>${icon} <code>${entry.tool}</code></span><span class="task-log-time">${t}</span></div>
+    ${entry.argsSummary ? `<div class="task-log-args">${entry.argsSummary}</div>` : ''}
+    <div class="task-log-snippet">${entry.snippet}</div>`;
+  if (list) list.prepend(div);
+}
+function renderApprovalCard(m) {
+  // Remove existing badge for this turn, replace with the card
+  if (currentAiDiv) {
+    const body = currentAiDiv.querySelector('.msg-body');
+    body.querySelectorAll('.tool-call-badge').forEach(el => el.remove());
+  }
+
+  const toolIcons = { write_file:'✏️', delete_file:'🗑️', run_terminal:'⚡' };
+  const icon = toolIcons[m.tool] || '🔧';
+  const isWrite = m.tool === 'write_file';
+  const isDelete = m.tool === 'delete_file';
+
+  // Build args summary
+  let argLines = '';
+  for (const [k, v] of Object.entries(m.args || {})) {
+    if (k === 'content') continue; // shown separately for write_file
+    argLines += `<div class="approval-arg"><span class="approval-arg-key">${k}</span><code class="approval-arg-val">${String(v).slice(0, 120)}</code></div>`;
+  }
+
+  // Build content preview for write_file
+  let diffHtml = '';
+  if (isWrite && m.args.content) {
+    const lines = m.args.content.split('\n').slice(0, 15);
+    const more = m.args.content.split('\n').length > 15;
+    diffHtml = `<div class="approval-preview">` +
+      lines.map(l => `<div class="approval-line-add">+ ${escapeHtml(l)}</div>`).join('') +
+      (more ? `<div class="approval-line-more">… (${m.args.content.split('\n').length} lines total)</div>` : '') +
+      `</div>`;
+    if (m.existingContent !== null && m.existingContent !== undefined) {
+      // Show as diff (removed/added) up to 20 lines combined
+      const oldLines = (m.existingContent || '').split('\n');
+      const newLines = m.args.content.split('\n');
+      diffHtml = buildMiniDiff(oldLines, newLines);
+    }
+  }
+
+  const card = document.createElement('div');
+  card.className = 'approval-card';
+  card.dataset.id = m.id;
+  card.innerHTML = `
+    <div class="approval-header">
+      <span class="approval-icon">${icon}</span>
+      <span class="approval-tool">${m.tool}</span>
+      <span class="approval-subtitle">${isDelete ? 'wants to delete a file' : isWrite ? (m.existingContent != null ? 'wants to modify a file' : 'wants to create a file') : 'wants to run a command'}</span>
+    </div>
+    <div class="approval-args">${argLines}</div>
+    ${diffHtml}
+    <div class="approval-actions">
+      <button class="approval-btn approval-allow" onclick="respondApproval('${m.id}','allow')">Allow</button>
+      <button class="approval-btn approval-allow-all" onclick="respondApproval('${m.id}','allowAll')">Allow All</button>
+      <button class="approval-btn approval-deny" onclick="respondApproval('${m.id}','deny')">Deny</button>
+      ${isWrite ? `<button class="approval-btn approval-diff" onclick="viewApprovalDiff('${m.id}')">View Diff</button>` : ''}
+    </div>`;
+
+  // Store content for the view diff button
+  if (isWrite) { card.dataset.path = m.args.path || ''; card.dataset.content = m.args.content || ''; }
+
+  if (currentAiDiv) {
+    currentAiDiv.querySelector('.msg-body').appendChild(card);
+  } else {
+    chatContainer.appendChild(card);
+  }
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function buildMiniDiff(oldLines, newLines) {
+  // Very simple line diff: show removed lines (red) and added lines (green), cap at 20 total
+  const MAX = 20;
+  const oldSet = new Set(oldLines);
+  const newSet = new Set(newLines);
+  const removed = oldLines.filter(l => !newSet.has(l)).slice(0, MAX);
+  const added = newLines.filter(l => !oldSet.has(l)).slice(0, MAX - removed.length);
+  if (!removed.length && !added.length) {
+    return `<div class="approval-preview"><div class="approval-line-more">No line changes detected (whitespace/formatting only)</div></div>`;
+  }
+  return `<div class="approval-preview">` +
+    removed.map(l => `<div class="approval-line-remove">- ${escapeHtml(l)}</div>`).join('') +
+    added.map(l => `<div class="approval-line-add">+ ${escapeHtml(l)}</div>`).join('') +
+    `</div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+window.respondApproval = (id, result) => {
+  const card = document.querySelector(`.approval-card[data-id="${id}"]`);
+  if (card) {
+    const label = result === 'allow' ? '✓ Allowed' : result === 'allowAll' ? '✓ Allowed All' : '✕ Denied';
+    const cls = result === 'deny' ? 'approval-resolved-deny' : 'approval-resolved-allow';
+    card.innerHTML = `<div class="approval-resolved ${cls}">${label}: <code>${card.querySelector('.approval-tool')?.textContent || ''}</code></div>`;
+  }
+  vscode.postMessage({ type: 'toolApprovalResponse', id, result });
+};
+
+window.viewApprovalDiff = (id) => {
+  const card = document.querySelector(`.approval-card[data-id="${id}"]`);
+  if (!card) return;
+  vscode.postMessage({ type: 'viewAgentDiff', path: card.dataset.path, content: card.dataset.content });
+};
+
+window.newSession = () => vscode.postMessage({ type: 'newSession' });
+window.popIcon = (el) => { el.classList.remove('clicked'); void el.offsetWidth; el.classList.add('clicked'); el.addEventListener('animationend', () => el.classList.remove('clicked'), { once: true }); };
+window.spinIcon = (el) => { const svg = el.querySelector('svg'); if (!svg) return; svg.style.animation = 'none'; void svg.offsetWidth; svg.style.animation = 'icon-spin 0.4s ease-out'; svg.addEventListener('animationend', () => svg.style.animation = '', { once: true }); };
+window.compactSession = () => vscode.postMessage({ type: 'compactSession' });
+
+function wireSessionListClicks() {
+  const list = document.getElementById('session-list');
+  if (!list) return;
+  list.onclick = (ev) => {
+    const del = ev.target.closest('[data-delete-id]');
+    if (del) { ev.stopPropagation(); vscode.postMessage({ type: 'deleteSession', sessionId: del.dataset.deleteId }); return; }
+    const ren = ev.target.closest('[data-rename-id]');
+    if (ren) {
+      ev.stopPropagation();
+      const item = ren.closest('[data-session-id]');
+      const titleEl = item.querySelector('.session-title');
+      const oldTitle = titleEl.textContent;
+      const input = document.createElement('input'); input.className = 'session-title-input'; input.value = oldTitle;
+      titleEl.replaceWith(input); input.focus(); input.select();
+      let finished = false;
+      const outsideClick = (e) => { if (document.contains(input) && !item.contains(e.target)) finish(true); };
+      document.addEventListener('mousedown', outsideClick);
+      const finish = (save) => {
+        if (finished) return; finished = true;
+        _cancelActiveRename = null;
+        document.removeEventListener('mousedown', outsideClick);
+        const t = save && document.contains(input) ? (input.value.trim() || oldTitle) : oldTitle;
+        if (document.contains(input)) {
+          const newTitleEl = document.createElement('div'); newTitleEl.className = 'session-title'; newTitleEl.textContent = t;
+          input.replaceWith(newTitleEl);
+        }
+        if (save && t !== oldTitle) vscode.postMessage({ type: 'renameSession', title: t, sessionId: ren.dataset.renameId });
+      };
+      _cancelActiveRename = () => finish(false);
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { finish(false); }
+      };
+      return;
+    }
+    // Don't switch session if a rename is in progress
+    if (_cancelActiveRename) return;
+    const item = ev.target.closest('[data-session-id]');
+    if (item) vscode.postMessage({ type: 'switchSession', sessionId: item.dataset.sessionId });
+  };
+}
+window.setProvider = (v) => { if (v.startsWith('custom:')) { const [, url, fmt] = v.split(':'); vscode.postMessage({ type: 'changeProvider', providerId: 'custom', url, useOllamaFormat: fmt === '1' }); } else { vscode.postMessage({ type: 'changeProvider', providerId: v }); } };
+window.openSettings = () => vscode.postMessage({ type: 'openSettings' });
+
+window.toggleSearch = () => {
+  const bar = document.getElementById('search-bar');
+  const visible = bar.style.display === 'flex';
+  bar.style.display = visible ? 'none' : 'flex';
+  if (!visible) { document.getElementById('search-input').focus(); }
+  else { window.searchChat(''); }
+};
+
+window.searchChat = (query) => {
+  const msgs = chatContainer.querySelectorAll('.msg');
+  const q = query.trim().toLowerCase();
+  let count = 0;
+  msgs.forEach(msg => {
+    msg.querySelectorAll('.search-highlight').forEach(el => { el.outerHTML = el.textContent; });
+    if (!q) { msg.style.display = ''; return; }
+    const text = msg.textContent.toLowerCase();
+    if (text.includes(q)) {
+      msg.style.display = '';
+      count++;
+      const body = msg.querySelector('.msg-body') || msg;
+      body.innerHTML = body.innerHTML.replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), '<mark class="search-highlight">$1</mark>');
+    } else { msg.style.display = 'none'; }
+  });
+  document.getElementById('search-count').textContent = q ? `${count} result${count !== 1 ? 's' : ''}` : '';
+};
+window.closeMemory = () => { document.getElementById('memory-overlay').style.display = 'none'; };
+window.saveMemory = () => { vscode.postMessage({ type: 'saveMemory', memory: document.getElementById('memory-editor').value }); };
+window.closeSysPrompt = () => { document.getElementById('sysprompt-overlay').style.display = 'none'; };
+window.saveSysPrompt = () => { vscode.postMessage({ type: 'setSystemPrompt', prompt: document.getElementById('sysprompt-editor').value }); };
+window.retryConnection = () => vscode.postMessage({ type: 'retryConnection' });
+window.openSettings = () => {
+  const overlay = document.getElementById('settings-overlay');
+  if (overlay.style.display === 'flex') { overlay.style.display = 'none'; return; }
+  overlay.style.display = 'flex';
+  document.getElementById('test-conn-result').textContent = '';
+  document.getElementById('mcp-tool-list').textContent = 'Loading…';
+  document.getElementById('mcp-tool-count').textContent = '';
+  vscode.postMessage({ type: 'getMcpStatus' });
+};
+window.closeSettings = () => { document.getElementById('settings-overlay').style.display = 'none'; };
+window.testConnection = () => {
+  const btn = document.getElementById('test-conn-btn');
+  const result = document.getElementById('test-conn-result');
+  btn.disabled = true; btn.textContent = 'Testing…';
+  result.textContent = ''; result.style.color = '';
+  vscode.postMessage({ type: 'testConnection' });
+};
+
+window.startEditingTitle = () => {
+    const container = document.getElementById('current-title-container');
+    const existing = document.getElementById('title-editor'); if (existing) return; // already editing
+    const oldTitle = (document.getElementById('current-title') || {}).textContent || 'Untitled';
+    container.onclick = null;
+    container.innerHTML = `<input type="text" class="title-input" id="title-editor" value="${oldTitle}">`;
+    const input = document.getElementById('title-editor'); input.focus(); input.select();
+    let _titleFinished = false;
+    const finish = (save) => {
+      if (_titleFinished) return; _titleFinished = true;
+      document.removeEventListener('mousedown', _titleOutsideClick);
+      const newTitle = save ? (input.value.trim() || oldTitle) : oldTitle;
+      container.innerHTML = `<span id="current-title">${newTitle}</span>`;
+      container.onclick = window.startEditingTitle;
+      if (save) vscode.postMessage({ type: 'renameSession', title: newTitle, sessionId: _currentSessionId });
+    };
+    const _titleOutsideClick = (e) => { if (!container.contains(e.target)) finish(true); };
+    document.addEventListener('mousedown', _titleOutsideClick);
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') { finish(false); }
+    };
+};
+
+window.copyMsg = (btn) => {
+    const msgBody = btn.closest('.msg').querySelector('.msg-body');
+    navigator.clipboard.writeText(msgBody.innerText);
+    const original = btn.innerHTML; btn.innerHTML = '<span>✓ Copied</span>';
+    setTimeout(() => btn.innerHTML = original, 2000);
+};
+
+function renderMsg(role, content, images = []) {
+  const div = document.createElement('div'); div.className = 'msg ' + role;
+  const body = document.createElement('div'); body.className = 'msg-body';
+  if (role === 'user') {
+      body.textContent = content;
+      images.forEach(img => { const imgEl = document.createElement('img'); imgEl.src = 'data:image/jpeg;base64,' + img; imgEl.style.cssText = 'max-width:100%;border-radius:8px;display:block;margin-top:6px'; body.appendChild(imgEl); });
+      div.appendChild(body);
+      const actions = document.createElement('div'); actions.className = 'msg-actions msg-actions-user';
+      const resendBtn = document.createElement('button'); resendBtn.className = 'action-text-btn';
+      resendBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-3.51"></path></svg> Resend`;
+      resendBtn.onclick = () => { prompt.value = content; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px'; sendBtn.onclick(); };
+      actions.appendChild(resendBtn);
+      div.appendChild(actions);
+  } else {
+      updateAiDisplay(body, content); div.appendChild(body);
+      const actions = document.createElement('div'); actions.className = 'msg-actions';
+      actions.innerHTML = `<button class="action-text-btn" onclick="window.copyMsg(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>`;
+      div.appendChild(actions);
+  }
+  chatContainer.appendChild(div); chatContainer.scrollTop = chatContainer.scrollHeight;
+  document.getElementById('empty-state').style.display = 'none'; document.getElementById('mini-grom')?.classList.add('visible'); return div;
+}
+
+function updateAiDisplay(container, text) {
+  if (text.includes('<think>')) {
+      const parts = text.split(/<\/think>/), think = parts[0].replace('<think>', '').trim(), main = parts[1] || "";
+      container.innerHTML = '<div class="think">' + (think ? marked.parse(think) : '') + '</div>' + marked.parse(main);
+  } else { container.innerHTML = marked.parse(text); }
+  container.querySelectorAll('pre').forEach(pre => {
+      const code = pre.querySelector('code').innerText, header = document.createElement('div'); header.className = 'code-header';
+      // Detect if the preceding sibling heading looks like a file path (### path/to/file.ext)
+      // Only show write-oriented buttons (Diff/Apply/Accept/Reject) for those blocks
+      const prevEl = pre.previousElementSibling;
+      const isFileSuggestion = prevEl && /h[1-6]/i.test(prevEl.tagName) && /[\w\-]+\.\w+/.test(prevEl.textContent);
+      if (isFileSuggestion) {
+        ['Diff', 'Apply'].forEach(label => {
+          const btn = document.createElement('button'); btn.className = 'code-btn'; btn.textContent = label;
+          btn.onclick = () => vscode.postMessage({ type: label.toLowerCase() + 'Code', code }); header.appendChild(btn);
+        });
+      }
+      const insertBtn = document.createElement('button'); insertBtn.className = 'code-btn'; insertBtn.textContent = 'Insert';
+      insertBtn.onclick = () => vscode.postMessage({ type: 'insertCode', code }); header.appendChild(insertBtn);
+      const runBtn = document.createElement('button'); runBtn.className = 'code-btn'; runBtn.textContent = 'Run';
+      runBtn.onclick = () => vscode.postMessage({ type: 'runInTerminal', code }); header.appendChild(runBtn);
+      const copyBtn = document.createElement('button'); copyBtn.className = 'code-btn'; copyBtn.textContent = 'Copy';
+      copyBtn.onclick = () => { navigator.clipboard.writeText(code); copyBtn.textContent = '✓'; setTimeout(() => copyBtn.textContent = 'Copy', 1500); }; header.appendChild(copyBtn);
+      if (isFileSuggestion) {
+        const acceptBtn = document.createElement('button'); acceptBtn.className = 'code-btn code-btn-accept'; acceptBtn.textContent = '✓ Accept';
+        acceptBtn.onclick = () => { vscode.postMessage({ type: 'acceptDiff', code }); acceptBtn.textContent = '✓ Applied'; acceptBtn.disabled = true; };
+        const rejectBtn = document.createElement('button'); rejectBtn.className = 'code-btn code-btn-reject'; rejectBtn.textContent = '✕ Reject';
+        rejectBtn.onclick = () => { acceptBtn.disabled = true; rejectBtn.disabled = true; acceptBtn.textContent = 'Rejected'; };
+        header.appendChild(acceptBtn); header.appendChild(rejectBtn);
+      }
+      pre.prepend(header); hljs.highlightElement(pre.querySelector('code'));
+  });
+  // Detect ### path/to/file.ext headings — add a "Save as file" button to the following code block
+  container.querySelectorAll('h3, h4').forEach(heading => {
+    const filePath = heading.textContent.trim();
+    if (!/[\w\-][\w\-\/]*\.\w{1,8}$/.test(filePath)) return;
+    let next = heading.nextElementSibling;
+    while (next && next.tagName !== 'PRE') next = next.nextElementSibling;
+    if (!next) return;
+    const code = next.querySelector('code')?.innerText || '';
+    const existingHeader = next.querySelector('.code-header');
+    if (!existingHeader) return;
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'code-btn code-btn-accept';
+    saveBtn.textContent = '💾 Save';
+    saveBtn.title = `Save as ${filePath}`;
+    saveBtn.onclick = () => {
+      vscode.postMessage({ type: 'createFile', path: filePath, content: code });
+      saveBtn.textContent = '✓ Saved'; saveBtn.disabled = true;
+    };
+    existingHeader.appendChild(saveBtn);
+  });
+}
+
+sendBtn.onclick = () => {
+  const val = prompt.value.trim(); if (!val && !pendingImages.length && !uploadedContext.length) return;
+  // Intercept /compact before sending to the model
+  if (val.toLowerCase() === '/compact') { prompt.value = ''; window.compactSession(); return; }
+  renderMsg('user', val, [...pendingImages]);
+  let fullText = val; if (uploadedContext.length > 0) { fullText += "\n\nADDITIONAL UPLOADED CONTEXT:\n" + uploadedContext.map(u => `[File: ${u.name}]\n${u.content}`).join('\n\n'); }
+  vscode.postMessage({ type: 'send', text: fullText, images: [...pendingImages], mode: currentMode });
+  prompt.value = ''; currentAiText = ""; currentAiDiv = renderMsg('ai', '');
+  currentAiDiv.querySelector('.msg-body').innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
+  _requestId++;
+  const _thisRequestId = _requestId;
+  currentAiDiv._requestId = _thisRequestId;
+  sendBtn.style.display = 'none'; stopBtn.style.display = 'flex';
+  document.body.classList.add('grom-thinking'); updateGromLogo();
+  pendingImages = []; uploadedContext = []; document.getElementById('image-preview').innerHTML = '';
+  document.getElementById('context-row').innerHTML = ''; prompt.style.height = 'auto';
+};
+
+stopBtn.onclick = () => {
+  vscode.postMessage({ type: 'abort' });
+  // Re-enable send immediately so the user can type a follow-up without waiting for Ready
+  sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; document.body.classList.remove('grom-thinking'); updateGromLogo();
+  if (currentAiDiv) {
+    currentAiDiv.querySelector('.thinking-dots')?.remove();
+    if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = '*Cancelled.*';
+  }
+};
+prompt.oninput = () => { resetIdle(true); prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px'; if (prompt.value === '/') window.toggleSlashMenu(true); else window.toggleSlashMenu(false); };
+prompt.onkeydown = (e) => { resetIdle(true); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.onclick(); } };
+
+prompt.addEventListener('paste', (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile(); if (!file) continue;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const b64 = ev.target.result.split(',')[1]; pendingImages.push(b64);
+        const div = document.createElement('div'); div.className = 'preview-item'; div.style = 'position:relative; width:40px; height:40px;';
+        const img = document.createElement('img'); img.src = ev.target.result; img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:4px';
+        const rm = document.createElement('span'); rm.style.cssText = 'position:absolute;top:-5px;right:-5px;background:var(--vscode-errorForeground);color:white;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:10px'; rm.textContent = '×';
+        rm.onclick = () => { div.remove(); const idx = pendingImages.indexOf(b64); if (idx >= 0) pendingImages.splice(idx, 1); };
+        div.appendChild(img); div.appendChild(rm);
+        document.getElementById('image-preview').appendChild(div);
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+});
+
+window.toggleSlashMenu = (show) => { slashMenu.style.display = show ? 'flex' : 'none'; if(show) plusMenu.style.display = 'none'; };
+window.togglePlusMenu = () => { plusMenu.style.display = plusMenu.style.display === 'flex' ? 'none' : 'flex'; slashMenu.style.display = 'none'; };
+document.addEventListener('mousedown', (e) => {
+    resetIdle(true);
+    if (!slashMenu.contains(e.target) && !document.getElementById('slash-btn').contains(e.target)) window.toggleSlashMenu(false);
+    if (!plusMenu.contains(e.target) && !document.getElementById('plus-btn').contains(e.target)) plusMenu.style.display = 'none';
+});
+
+let idleTimer = null, thoughtInterval = null, mouseCenterTimer = null, rotationCount = 0;
+const THOUGHTS = ['10101', '</%>', 'JSON...', '0xAFF', 'if(true)', 'thinking...', 'byte[]'];
+
+function getEyes() { return [document.getElementById('eye-left'), document.getElementById('eye-right')].filter(Boolean); }
+
+function resetIdle(forceWake = false) {
+    const logo = document.getElementById('main-logo'), bubble = document.getElementById('thought-bubble');
+    const eyes = getEyes();
+    const isAsleep = eyes.length > 0 && eyes[0].classList.contains('asleep');
+    if (bubble) bubble.classList.remove('active');
+    clearInterval(thoughtInterval); thoughtInterval = null;
+    if (!robotAnimations) { eyes.forEach(e => e.classList.remove('asleep')); return; }
+    if (isAsleep && !forceWake) return;
+    clearTimeout(mouseCenterTimer);
+    if (isAsleep && logo && forceWake) {
+        logo.classList.add('surprised'); const mark = document.createElement('div'); mark.className = 'startle-mark active'; mark.textContent = '!!';
+        logo.appendChild(mark); setTimeout(() => { logo.classList.remove('surprised'); mark.remove(); }, 600);
+    }
+    eyes.forEach(e => { e.classList.remove('asleep'); e.style.transform = ''; });
+    clearTimeout(idleTimer); rotationCount = 0; idleTimer = setTimeout(showThoughts, 15000);
+}
+
+function showThoughts() {
+    if (!robotAnimations) return;
+    const logo = document.getElementById('main-logo'); if (!logo || thoughtInterval) return;
+    let bubble = document.getElementById('thought-bubble');
+    if (!bubble) { bubble = document.createElement('div'); bubble.id = 'thought-bubble'; bubble.className = 'thought-bubble'; logo.appendChild(bubble); }
+    bubble.classList.add('active'); let idx = 0; bubble.textContent = THOUGHTS[0];
+    thoughtInterval = setInterval(() => {
+        idx++;
+        if (idx >= THOUGHTS.length) {
+            idx = 0; rotationCount++;
+            if (rotationCount >= 2) {
+                bubble.textContent = 'zzZZ...';
+                getEyes().forEach(e => { e.style.transform = 'scaleY(0.5)'; });
+                setTimeout(() => { getEyes().forEach(e => { e.style.transform = 'scaleY(0.2) scaleX(1.2)'; }); }, 400);
+                setTimeout(() => { getEyes().forEach(e => { e.style.transform = ''; e.classList.add('asleep'); }); }, 800);
+                clearInterval(thoughtInterval); thoughtInterval = null; return;
+            }
+        }
+        bubble.textContent = THOUGHTS[idx];
+    }, 2000);
+}
+
+document.addEventListener('mouseleave', () => { mouseCenterTimer = setTimeout(() => { getEyes().forEach(e => e.style.transform = ''); }, 5000); });
+document.addEventListener('mouseenter', () => clearTimeout(mouseCenterTimer));
+document.addEventListener('mousemove', (e) => {
+    if (!robotAnimations) return;
+    const eyes = getEyes();
+    if (!eyes.length) return;
+    if (eyes[0].classList.contains('asleep')) return;
+    resetIdle();
+    const logo = document.getElementById('main-logo');
+    if (!logo) return;
+    const rect = logo.getBoundingClientRect();
+    if (!rect.width) return;
+    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    const angle = Math.atan2(e.clientY - cy, e.clientX - cx);
+    const dist = Math.min(40, Math.hypot(e.clientX - cx, e.clientY - cy) / 1);
+    eyes.forEach(eye => { eye.style.transform = `translate(${Math.cos(angle) * dist}px, ${Math.sin(angle) * dist}px)`; });
+});
+
+window.insertSlash = (cmd) => {
+    if (cmd.startsWith('/')) prompt.value = cmd + ' '; else prompt.value = cmd;
+    window.toggleSlashMenu(false); prompt.focus(); prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px';
+};
+
+function updateContextChips(files) {
+    const row = document.getElementById('context-row'); row.innerHTML = '';
+    files.forEach(f => {
+        const chip = document.createElement('div'); chip.className = 'context-chip';
+        const t = f.tokens > 1000 ? (f.tokens/1000).toFixed(1) + 'k' : f.tokens;
+        chip.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg><span>${f.name}</span><span style="opacity:0.5; font-size:9px; margin-left:2px;">${t}</span>`;
+        row.appendChild(chip);
+    });
+    uploadedContext.forEach((u, i) => {
+        const chip = document.createElement('div'); chip.className = 'context-chip';
+        const t = Math.ceil(u.content.length / 4);
+        const ts = t > 1000 ? (t/1000).toFixed(1) + 'k' : t;
+        chip.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg><span>${u.name}</span><span style="opacity:0.5; font-size:9px; margin-left:2px;">${ts}</span><span class="chip-remove" onclick="removeUploaded(${i})">×</span>`;
+        row.appendChild(chip);
+    });
+}
+
+window.removeUploaded = (i) => { uploadedContext.splice(i, 1); updateContextChips(_lastAutoFiles); };
+
+function handleFileUpload(input) {
+    if (input.files && input.files[0]) {
+        const file = input.files[0], reader = new FileReader();
+        if (file.type.startsWith('image/')) {
+            reader.onload = (e) => {
+                const b64 = e.target.result.split(',')[1]; pendingImages.push(b64);
+                const div = document.createElement('div'); div.className = 'preview-item'; div.style = 'position:relative; width:40px; height:40px;';
+                const img = document.createElement('img'); img.src = e.target.result; img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:4px';
+                const rm = document.createElement('span'); rm.style.cssText = 'position:absolute;top:-5px;right:-5px;background:var(--vscode-errorForeground);color:white;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:10px'; rm.textContent = '×';
+                rm.onclick = () => { div.remove(); const idx = pendingImages.indexOf(b64); if (idx >= 0) pendingImages.splice(idx, 1); };
+                div.appendChild(img); div.appendChild(rm);
+                document.getElementById('image-preview').appendChild(div);
+            };
+            reader.readAsDataURL(file);
+        } else {
+            reader.onload = (e) => { uploadedContext.push({ name: file.name, content: e.target.result }); vscode.postMessage({ type: 'getFiles' }); };
+            reader.readAsText(file);
+        }
+    }
+}
+
+window.addEventListener('message', e => {
+  const m = e.data;
+  switch (m.type) {
+    case 'filesUsed': _lastAutoFiles = m.files || []; updateContextChips(_lastAutoFiles); break;
+    case 'showMemory':
+      document.getElementById('memory-editor').value = m.memory || '';
+      document.getElementById('memory-overlay').style.display = 'flex';
+      document.getElementById('memory-editor').focus();
+      break;
+    case 'memorySaved':
+      document.getElementById('memory-overlay').style.display = 'none';
+      break;
+    case 'showSystemPrompt':
+      document.getElementById('sysprompt-editor').value = m.prompt || '';
+      document.getElementById('sysprompt-overlay').style.display = 'flex';
+      document.getElementById('sysprompt-editor').focus();
+      break;
+    case 'systemPromptSaved':
+      document.getElementById('sysprompt-overlay').style.display = 'none';
+      break;
+    case 'compacting':
+    case 'compacted': {
+      const notice = document.createElement('div');
+      notice.className = 'compact-notice';
+      notice.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8M9 9l-6-6m6 6V4.2M9 9H4.2"/></svg>conversation compacted`;
+      chatContainer.appendChild(notice);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+      break;
+    }
+    case 'loadSessions':
+      _currentSessionId = m.currentSessionId;
+      robotAnimations = m.robotAnimations !== false;
+      currentMode = m.mode || 'plan';
+
+      document.body.classList.remove('mode-plan', 'mode-build');
+      document.body.classList.add('mode-' + currentMode);
+
+      if (!robotAnimations) {
+          const bubble = document.getElementById('thought-bubble'); if (bubble) bubble.classList.remove('active');
+          clearInterval(thoughtInterval); thoughtInterval = null;
+          document.querySelectorAll('.eye').forEach(e => e.classList.remove('closed'));
+          document.querySelectorAll('.eye-lid').forEach(l => l.classList.remove('visible'));
+          document.querySelectorAll('.eye-group').forEach(g => {
+              g.style.transform = 'translate(0,0)';
+              g.style.transition = 'none';
+          });
+      } else {
+          document.querySelectorAll('.eye-group').forEach(g => g.style.transition = 'transform 0.1s ease-out');
+      }
+
+      modeToggle.classList.toggle('build', currentMode === 'build');
+      document.getElementById('plan-btn').classList.toggle('active', currentMode === 'plan');
+      document.getElementById('build-btn').classList.toggle('active', currentMode === 'build');
+
+      _cancelActiveRename?.();
+      document.getElementById('session-list').innerHTML = m.sessions.map(s => {
+        const safeTitle = escapeHtml(s.title);
+        return `<div class="session-item ${s.id === m.currentSessionId ? 'active' : ''}" data-session-id="${s.id}" title="Resume this conversation">
+            <div class="session-title">${safeTitle}</div>
+            <div class="session-actions">
+              <div class="session-rename" data-rename-id="${s.id}" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></div>
+              <div class="session-delete" data-delete-id="${s.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></div>
+            </div>
+        </div>`;
+      }).join('');
+      wireSessionListClicks();
+
+      const titleSpan = document.getElementById('current-title'), titleContainer = document.getElementById('current-title-container');
+      if (titleSpan && titleContainer) {
+          const current = m.sessions.find(s => s.id === m.currentSessionId);
+          titleSpan.textContent = current ? current.title : 'Untitled';
+          titleContainer.onclick = window.startEditingTitle;
+      }
+
+      const greeting = m.customGreeting || "Hey. I'm Grom. Ready when you are.";
+      const defaultLogoContent = m.customLogo
+          ? (m.customLogo.startsWith('http') || m.customLogo.startsWith('data:') ? `<img src="${m.customLogo}" alt="Grom">` : m.customLogo)
+          : (window.GROM_IDLE_SVG || '');
+      _gromLogoState = 'default';
+      chatContainer.innerHTML = `<div class="empty-state" id="empty-state"><div class="empty-logo" id="main-logo" style="position:relative;">${defaultLogoContent}</div><div class="empty-text typing" id="main-greeting"></div></div>`;
+      const greetEl = document.getElementById('main-greeting');
+      let i = 0; greetEl.textContent = '';
+      const typeInterval = setInterval(() => { greetEl.textContent += greeting[i++]; if (i >= greeting.length) { clearInterval(typeInterval); greetEl.classList.remove('typing'); } }, 80);
+      updateGromLogo();
+
+      if (m.presets) {
+          const menu = document.getElementById('slash-menu');
+          menu.innerHTML = '';
+          m.presets.forEach(p => {
+            const item = document.createElement('div'); item.className = 'menu-item';
+            const preview = p.text.startsWith('/') ? '' : p.text.slice(0, 30) + (p.text.length > 30 ? '...' : '');
+            item.innerHTML = `<span class="menu-cmd">${escapeHtml(p.label)}</span><span style="opacity:0.5; font-size:10px;">${escapeHtml(preview)}</span>`;
+            item.dataset.insertText = p.text;
+            item.addEventListener('click', () => window.insertSlash(item.dataset.insertText));
+            menu.appendChild(item);
+          });
+          const compact = document.createElement('div'); compact.className = 'menu-item';
+          compact.innerHTML = `<span class="menu-cmd">Compact</span> <span style="opacity:0.5; font-size:10px;">Truncate history</span>`;
+          compact.addEventListener('click', () => { window.compactSession(); window.toggleSlashMenu(false); });
+          menu.appendChild(compact);
+      }
+
+      renderTaskLog(m.taskLog || []);
+      // Reset to sessions tab on session switch
+      window.switchHistoryTab('sessions');
+
+      if (m.history.length > 0) {
+          document.getElementById('empty-state').style.display = 'none';
+          document.getElementById('mini-grom')?.classList.add('visible');
+          m.history.forEach(msg => {
+            if (msg.role === 'system' && msg.content === '__compacted__') {
+              const notice = document.createElement('div');
+              notice.className = 'compact-notice';
+              notice.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8M9 9l-6-6m6 6V4.2M9 9H4.2"/></svg>conversation compacted`;
+              chatContainer.appendChild(notice);
+            } else if (msg.role !== 'system') {
+              renderMsg(msg.role === 'user' ? 'user' : 'ai', msg.content, msg.images);
+            }
+          });
+      }
+      break;
+    case 'chunk': if (currentAiDiv) { currentAiText += m.text; const body = currentAiDiv.querySelector('.msg-body'); const dots = body.querySelector('.thinking-dots'); if (dots) dots.remove(); updateAiDisplay(body, currentAiText); if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight; } break;
+    case 'toolCall': {
+      if (currentAiDiv) {
+        const body = currentAiDiv.querySelector('.msg-body');
+        const dots = body.querySelector('.thinking-dots'); if (dots) dots.remove();
+        // Remove any previous tool-call badge for this turn
+        body.querySelectorAll('.tool-call-badge').forEach(el => el.remove());
+        const badge = document.createElement('div');
+        badge.className = 'tool-call-badge';
+        badge.innerHTML = `<span class="tool-call-spinner"></span><span>Using tool <code>${m.tool}</code>…</span>`;
+        body.appendChild(badge);
+        if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+      break;
+    }
+    case 'status': if (m.text === 'Ready') {
+      // Ignore Ready from a previous aborted request if a new one is already in flight
+      if (currentAiDiv && currentAiDiv._requestId && currentAiDiv._requestId !== _requestId) break;
+      sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; document.body.classList.remove('grom-thinking'); updateGromLogo();
+      vscode.postMessage({ type: 'updateHistory', text: currentAiText });
+      if (currentAiDiv) {
+        currentAiDiv.querySelector('.tool-call-badge')?.remove();
+        const dots = currentAiDiv.querySelector('.thinking-dots');
+        if (dots) { dots.remove(); if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = ''; }
+      }
+    } break;
+    case 'statusUpdate':
+      document.getElementById('conn-status').textContent = m.status;
+      const dot = document.getElementById('status-dot'); dot.className = 'status-dot';
+      if (m.status === 'Connected') {
+        dot.classList.add('online');
+        document.body.classList.remove('grom-disconnected', 'grom-error');
+        clearTimeout(_retryTimer);
+      } else if (m.status.includes('...')) {
+      } else if (m.status === 'Disconnected') {
+        dot.classList.add('offline');
+        document.body.classList.remove('grom-error');
+        document.body.classList.add('grom-disconnected');
+        scheduleRetry();
+      } else {
+        dot.classList.add('offline');
+        document.body.classList.remove('grom-disconnected');
+        document.body.classList.add('grom-error');
+        scheduleRetry();
+      }
+      updateGromLogo();
+      const ps = document.getElementById('provider-select');
+      // Rebuild dropdown to include any custom providers
+      ps.innerHTML = `<option value="ollama">Ollama</option><option value="lmstudio">LM Studio</option><option value="opencode">Open Code</option><option value="openai">OpenAI</option>`;
+      if (m.customProviders?.length) {
+        m.customProviders.forEach((cp, i) => {
+          const opt = document.createElement('option');
+          opt.value = `custom:${i}`;
+          opt.textContent = cp.name;
+          ps.appendChild(opt);
+        });
+      }
+      ps._customProviders = m.customProviders || [];
+      ps.onchange = (ev) => {
+        const val = ev.target.value;
+        if (val.startsWith('custom:')) {
+          const idx = parseInt(val.split(':')[1]);
+          const cp = ps._customProviders[idx];
+          vscode.postMessage({ type: 'changeProvider', providerId: 'custom', url: cp.url, useOllamaFormat: cp.useOllamaFormat ?? false });
+        } else {
+          vscode.postMessage({ type: 'changeProvider', providerId: val });
+        }
+      };
+      // Set current selection
+      if (m.useOllama) ps.value = 'ollama';
+      else if (m.url?.includes('1234')) ps.value = 'lmstudio';
+      else if (m.url?.includes('opencode')) ps.value = 'opencode';
+      else if (m.url?.includes('openai.com')) ps.value = 'openai';
+      else if (m.customProviders?.length) {
+        const idx = m.customProviders.findIndex(cp => m.url?.startsWith(cp.url));
+        if (idx >= 0) ps.value = `custom:${idx}`;
+      }
+      const capsBar = document.getElementById('model-caps');
+      if (capsBar) {
+          capsBar.innerHTML = '';
+          if (m.caps?.reasoning) capsBar.innerHTML += `<div class="cap-icon cap-reasoning" title="Reasoning model — supports extended thinking"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.54z"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.54z"></path></svg></div>`;
+          if (m.caps?.vision) capsBar.innerHTML += `<div class="cap-icon cap-vision" title="Vision model — can process images"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E8A838" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></div>`;
+          if (m.caps?.tools) capsBar.innerHTML += `<div class="cap-icon cap-tools" title="Tool use — can call functions"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3B8FCC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></div>`;
+      }
+      if (m.model) { const ms = document.getElementById('model-select'); ms.innerHTML = m.models.map(mdl => `<option value="${mdl}" ${mdl === m.model ? 'selected' : ''}>${mdl}</option>`).join(''); ms.onchange = (ev) => vscode.postMessage({ type: 'changeModel', model: ev.target.value }); }
+      break;
+    case 'usageUpdate': {
+      const circle = document.getElementById('usage-fill'), circ = 56.5;
+      circle.style.strokeDashoffset = circ - (m.contextPercent / 100) * circ;
+      const total = (m.inputTokens || 0) + (m.outputTokens || 0);
+      document.getElementById('usage-display').title = `${total.toLocaleString()} / ${(m.contextWindow || 0).toLocaleString()} tokens (${m.contextPercent || 0}%)`;
+      break;
+    }
+    case 'setTheme':
+        const themeClass = 'theme-' + m.theme.toLowerCase().replace(' ', '-');
+        Array.from(document.body.classList).forEach(c => { if (c.startsWith('theme-')) document.body.classList.remove(c); });
+        document.body.classList.add(themeClass);
+        break;
+    case 'testConnectionResult': {
+      const btn = document.getElementById('test-conn-btn');
+      const result = document.getElementById('test-conn-result');
+      if (btn) { btn.disabled = false; btn.textContent = 'Test Connection'; }
+      if (result) {
+        result.textContent = (m.ok ? '✓ ' : '✕ ') + m.message;
+        result.style.color = m.ok ? 'var(--vscode-testing-iconPassed,#73c991)' : 'var(--vscode-errorForeground,#f48771)';
+      }
+      break;
+    }
+    case 'mcpStatus': {
+      const list = document.getElementById('mcp-tool-list');
+      const count = document.getElementById('mcp-tool-count');
+      if (!list) break;
+      if (!m.tools || m.tools.length === 0) {
+        list.textContent = 'No MCP tools configured. Add servers via grom.mcpServers in settings.';
+        if (count) count.textContent = '';
+      } else {
+        if (count) count.textContent = `(${m.tools.length})`;
+        list.innerHTML = m.tools.map(t =>
+          `<div style="padding:2px 0;"><code style="opacity:0.9;">${t.name}</code> — <span style="opacity:0.6;">${t.description || ''}</span></div>`
+        ).join('');
+      }
+      break;
+    }
+    case 'taskLogEntry': appendTaskLogEntry(m.entry); break;
+    case 'sessionListUpdate': {
+      _cancelActiveRename?.();
+      const list = document.getElementById('session-list');
+      if (list) {
+        list.innerHTML = m.sessions.map(s => {
+          const safeTitle = escapeHtml(s.title);
+          return `<div class="session-item ${s.id === m.currentSessionId ? 'active' : ''}" data-session-id="${s.id}">
+            <div class="session-title">${safeTitle}</div>
+            <div class="session-actions">
+              <div class="session-rename" data-rename-id="${s.id}" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></div>
+              <div class="session-delete" data-delete-id="${s.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></div>
+            </div>
+          </div>`;
+        }).join('');
+      }
+      const headerTitle = document.getElementById('current-title');
+      if (headerTitle) {
+        const current = m.sessions.find(s => s.id === m.currentSessionId);
+        if (current) headerTitle.textContent = current.title;
+      }
+      wireSessionListClicks();
+      break;
+    }
+    case 'sessionTitleUpdate': {
+      const item = document.querySelector(`[data-session-id="${m.sessionId}"] .session-title`);
+      if (item) item.textContent = m.title;
+      // Also update the header title if this is the active session
+      const headerTitle = document.getElementById('current-title');
+      if (headerTitle) headerTitle.textContent = m.title;
+      break;
+    }
+    case 'toolApproval': renderApprovalCard(m); break;
+    case 'toolDenied': {
+      if (currentAiDiv) {
+        const body = currentAiDiv.querySelector('.msg-body');
+        body.querySelectorAll('.tool-call-badge').forEach(el => el.remove());
+        const badge = document.createElement('div');
+        badge.className = 'tool-call-badge tool-call-denied';
+        badge.innerHTML = `<span>✕ Denied <code>${m.tool}</code></span>`;
+        body.appendChild(badge);
+      }
+      break;
+    }
+    case 'fileCreated': {
+      // Find any save button that was waiting and confirm it
+      document.querySelectorAll('.code-btn-accept').forEach(btn => {
+        if (btn.title === `Save as ${m.path}`) { btn.textContent = '✓ Saved'; btn.disabled = true; }
+      });
+      break;
+    }
+    case 'triggerAction': prompt.value = m.text; sendBtn.onclick(); break;
+    case 'fileList': _allFiles = m.files || []; showFilePicker(''); break;
+  }
+});
+
+let _allFiles = [];
+const filePicker = document.createElement('div');
+filePicker.id = 'file-picker'; filePicker.className = 'floating-menu'; filePicker.style.display = 'none';
+document.getElementById('input-container').appendChild(filePicker);
+
+const CONTEXT_PROVIDERS = [
+  { name: 'problems', desc: 'VS Code errors & warnings' },
+  { name: 'git', desc: 'Current git diff' },
+  { name: 'terminal', desc: 'Recent terminal output' },
+  { name: 'docs', desc: 'Search indexed documentation (@docs:name for specific source)' },
+  { name: 'url:', desc: 'Fetch a URL  e.g. @url:https://...' },
+];
+
+function showFilePicker(query) {
+  const atMatch = prompt.value.match(/@(\S*)$/);
+  if (!atMatch) { filePicker.style.display = 'none'; return; }
+  const q = atMatch[1].toLowerCase();
+  const specials = CONTEXT_PROVIDERS.filter(p => p.name.startsWith(q) || q === '');
+  const fileMatches = _allFiles.filter(f => f.name.toLowerCase().includes(q)).slice(0, 8);
+  if (!specials.length && !fileMatches.length) { filePicker.style.display = 'none'; return; }
+  const specialHtml = specials.map(p =>
+    `<div class="menu-item" onclick="window.pickFile('@${p.name}')"><span class="menu-cmd" style="color:var(--accent);">@${p.name}</span><span style="opacity:0.5;font-size:10px;margin-left:6px;">${p.desc}</span></div>`
+  ).join('');
+  const fileHtml = fileMatches.map(f =>
+    `<div class="menu-item" data-path="${f.name}" onclick="window.pickFile('${f.name}')"><span class="menu-cmd">${f.name}</span></div>`
+  ).join('');
+  filePicker.innerHTML = specialHtml + fileHtml;
+  filePicker.style.display = 'flex';
+}
+
+window.pickFile = (name) => {
+  // Special providers pass the full '@name' string; files pass just the name
+  const insertion = name.startsWith('@') ? name + ' ' : `@${name} `;
+  prompt.value = prompt.value.replace(/@\S*$/, insertion);
+  filePicker.style.display = 'none';
+  prompt.focus();
+};
+
+prompt.addEventListener('input', () => {
+  const atMatch = prompt.value.match(/@(\S*)$/);
+  if (atMatch) {
+    if (_allFiles.length === 0) vscode.postMessage({ type: 'getFiles' });
+    else showFilePicker(atMatch[1]);
+  } else { filePicker.style.display = 'none'; }
+});
+
+document.addEventListener('mousedown', (e) => {
+  if (!filePicker.contains(e.target)) filePicker.style.display = 'none';
+});
+let _retryTimer = null;
+function scheduleRetry() {
+    clearTimeout(_retryTimer);
+    _retryTimer = setTimeout(() => vscode.postMessage({ type: 'retryConnection' }), 5000);
+}
+// Periodic idle check — updates status dot even when no message is sent
+setInterval(() => vscode.postMessage({ type: 'retryConnection' }), 15000);
+
+vscode.postMessage({ type: 'ready' }); resetIdle(true); setTimeout(() => prompt.focus(), 100);

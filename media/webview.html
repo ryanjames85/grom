@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="{{CSP}}">
+  <script src="{{MARKED_JS}}"></script>
+  <link rel="stylesheet" href="{{GITHUB_DARK_CSS}}">
+  <script src="{{HIGHLIGHT_JS}}"></script>
+  <link rel="stylesheet" href="{{STYLES_CSS}}">
+  <script>
+    window.GROM_LOGOS = {
+      default: '{{LOGO_DEFAULT}}',
+      building: '{{LOGO_BUILDING}}',
+      disconnected: '{{LOGO_DISCONNECTED}}',
+      error: '{{LOGO_ERROR}}'
+    };
+
+    window.GROM_IDLE_SVG = `{{LOGO_INLINE_SVG}}`;
+    window.GROM_BUILD_SVG = `{{LOGO_BUILD_SVG}}`;
+  </script>
+</head>
+<body class="mode-plan">
+  <div id="error-boundary" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--vscode-inputValidation-errorBackground,#5a1d1d);color:var(--vscode-inputValidation-errorForeground,#f48771);padding:10px 14px;font-size:12px;line-height:1.5;display:none;flex-direction:column;gap:6px;">
+    <div style="display:flex;align-items:flex-start;gap:8px;">
+      <span style="font-size:16px;line-height:1;">⚠</span>
+      <div style="flex:1;">
+        <div style="font-weight:600;margin-bottom:2px;">Grom encountered an error</div>
+        <div id="error-boundary-msg" style="opacity:0.85;word-break:break-word;"></div>
+      </div>
+      <button onclick="document.getElementById('error-boundary').style.display='none'" style="background:none;border:none;color:inherit;cursor:pointer;opacity:0.7;font-size:14px;padding:0;line-height:1;flex-shrink:0;">✕</button>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="location.reload()" style="padding:4px 12px;font-size:11px;background:rgba(255,255,255,0.15);color:inherit;border:1px solid rgba(255,255,255,0.2);border-radius:4px;cursor:pointer;">Reload panel</button>
+    </div>
+  </div>
+
+  <div id="header">
+    <div class="header-top">
+      <div class="header-title" id="current-title-container" onclick="window.startEditingTitle()" title="Click to rename this conversation">
+        <img id="mini-grom" src="{{LOGO_DEFAULT}}" alt="Grom" width="18" height="18">
+        <span id="current-title">Untitled</span>
+        <span class="edit-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.818 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg></span>
+      </div>
+      <div class="header-actions">
+        <div class="usage-radial" id="usage-display" title="Context usage"><svg width="22" height="22" style="transform:rotate(-90deg)"><circle stroke="rgba(128,128,128,0.2)" stroke-width="2" fill="transparent" r="9" cx="11" cy="11"/><circle id="usage-fill" stroke="var(--accent)" stroke-width="2" fill="transparent" r="9" cx="11" cy="11" stroke-dasharray="56.5" stroke-dashoffset="56.5" class="progress-ring__circle"/></svg></div>
+        <button class="icon-btn" onclick="window.popIcon(this);window.toggleSearch()" title="Search chat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></button>
+        <button class="icon-btn" onclick="window.popIcon(this);window.compactSession()" title="Compact history"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8M9 9l-6-6m6 6V4.2M9 9H4.2"/></svg></button>
+        <button class="icon-btn" onclick="window.popIcon(this);window.toggleHistory()" title="History"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></button>
+        <button class="icon-btn" onclick="window.popIcon(this);window.newSession()" title="New Chat"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><line x1="12" y1="7" x2="12" y2="13"></line><line x1="9" y1="10" x2="15" y2="10"></line></svg></button>
+        <button class="icon-btn" onclick="window.popIcon(this);vscode.postMessage({type:'getSystemPrompt'})" title="Session system prompt"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h8"/><path d="M8 14h5"/></svg></button>
+        <button class="icon-btn" onclick="window.popIcon(this);vscode.postMessage({type:'openMemory'})" title="Grom Memory"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-1.14"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-1.14"/></svg></button>
+        <button class="icon-btn" onclick="window.popIcon(this);vscode.postMessage({type:'exportChat'})" title="Export chat to Markdown"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></button>
+        <button class="icon-btn" onclick="window.popIcon(this);vscode.postMessage({type:'importChat'})" title="Import chat from Markdown"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg></button>
+        <button class="icon-btn spin" onclick="window.spinIcon(this);window.openSettings()" title="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
+      </div>
+    </div>
+    <div id="search-bar" style="display:none; padding:6px 10px; border-bottom:1px solid var(--border); gap:6px; align-items:center;">
+      <input id="search-input" type="text" placeholder="Search chat…" oninput="window.searchChat(this.value)" style="flex:1;background:var(--item-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;outline:none;">
+      <span id="search-count" style="font-size:11px;opacity:0.5;white-space:nowrap;"></span>
+      <button class="icon-btn" onclick="window.toggleSearch()" style="flex-shrink:0;">✕</button>
+    </div>
+    <div class="header-bottom">
+      <div class="status-pill" onclick="window.retryConnection()" title="Retry connection"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.6;flex-shrink:0"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg><div id="status-dot" class="status-dot"></div><span id="conn-status">Checking...</span></div>
+      <select id="provider-select" class="control-select" onchange="window.setProvider(this.value)" title="Provider"><option value="ollama">Ollama</option><option value="lmstudio">LM Studio</option><option value="opencode">Open Code</option><option value="openai">OpenAI</option></select>
+      <select id="model-select" class="control-select" title="Model"></select>
+    </div>
+  </div>
+
+  <div id="chat-container">
+    <div class="empty-state" id="empty-state">
+      <div class="empty-logo" id="main-logo" style="position:relative;">{{LOGO_INLINE_SVG}}</div>
+      <div class="empty-text" id="main-greeting">Hey. I'm Grom. Ready when you are.</div>
+    </div>
+  </div>
+  <button id="scroll-to-bottom" onclick="window.scrollToBottom()" title="Scroll to latest" style="display:none;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  </button>
+
+  <div id="sysprompt-overlay" style="display:none;">
+    <div class="overlay-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h8"/><path d="M8 14h5"/></svg>
+        <span style="font-weight:bold">Session System Prompt</span>
+      </div>
+      <button class="icon-btn" onclick="window.closeSysPrompt()">✕</button>
+    </div>
+    <div style="padding:10px 12px;font-size:11px;opacity:0.6;line-height:1.6;">Override the system prompt for this session only. Replaces the default PLAN/BUILD instructions. Leave blank to use defaults.</div>
+    <textarea id="sysprompt-editor" style="flex:1;resize:none;background:var(--item-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;margin:0 10px;padding:10px;font-size:12px;font-family:inherit;line-height:1.6;width:calc(100% - 20px);box-sizing:border-box;overflow-y:auto;overflow-x:hidden;white-space:pre-wrap;word-wrap:break-word;" placeholder="e.g. You are an expert Python developer. Always suggest type hints. Respond concisely."></textarea>
+    <div style="display:flex;gap:8px;padding:10px;justify-content:flex-end;">
+      <button class="icon-btn" onclick="window.closeSysPrompt()" style="padding:6px 12px;font-size:12px;">Cancel</button>
+      <button onclick="window.saveSysPrompt()" style="padding:6px 14px;font-size:12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Save</button>
+    </div>
+  </div>
+
+  <div id="memory-overlay" style="display:none;">
+    <div class="overlay-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+        <span style="font-weight:bold">Grom Memory</span>
+      </div>
+      <button class="icon-btn" onclick="window.closeMemory()">✕</button>
+    </div>
+    <div style="padding:10px 12px;font-size:11px;opacity:0.6;line-height:1.6;">These are your personal rules for Grom — like custom instructions in other AI tools. Write anything you always want the model to know or follow. It's injected into every new chat automatically.<br><br>Examples: <em>Only use JavaScript. Never suggest pushing code. Always add error handling. My stack is React + Node.</em></div>
+    <textarea id="memory-editor" style="flex:1;resize:none;background:var(--item-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;margin:0 10px;padding:10px;font-size:12px;font-family:inherit;line-height:1.6;width:calc(100% - 20px);box-sizing:border-box;overflow-y:auto;overflow-x:hidden;white-space:pre-wrap;word-wrap:break-word;" placeholder="Write your rules and preferences here...&#10;&#10;e.g.&#10;- Only suggest JavaScript, never TypeScript&#10;- Never push code directly, always explain changes first&#10;- My project uses React 18 and Express&#10;- Always include error handling&#10;- Keep responses concise"></textarea>
+    <div style="display:flex;gap:8px;padding:10px;justify-content:flex-end;">
+      <button class="icon-btn" onclick="window.closeMemory()" style="padding:6px 12px;font-size:12px;">Cancel</button>
+      <button onclick="window.saveMemory()" style="padding:6px 14px;font-size:12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Save</button>
+    </div>
+  </div>
+
+  <div id="history-overlay">
+    <div class="overlay-header">
+      <div style="display:flex;gap:0;">
+        <button id="tab-sessions" class="tab-btn active" onclick="window.switchHistoryTab('sessions')">Sessions</button>
+        <button id="tab-tasklog" class="tab-btn" onclick="window.switchHistoryTab('tasklog')">Task Log</button>
+      </div>
+      <button class="icon-btn" onclick="window.toggleHistory()">✕</button>
+    </div>
+    <div class="session-list" id="session-list"></div>
+    <div id="task-log-panel" style="display:none;flex:1;overflow-y:auto;padding:10px;display:none;flex-direction:column;gap:6px;">
+      <div id="task-log-empty" style="opacity:0.4;font-size:12px;padding:10px;">No tool calls in this session yet. Start a task that uses file tools or MCP.</div>
+      <div id="task-log-list"></div>
+    </div>
+  </div>
+
+  <div id="settings-overlay" style="display:none;">
+    <div class="overlay-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span style="font-weight:bold">Settings</span>
+      </div>
+      <button class="icon-btn" onclick="window.closeSettings()">✕</button>
+    </div>
+    <div style="padding:10px 12px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px;">
+      <div class="settings-section">
+        <div class="settings-section-title">Connection</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="test-conn-btn" onclick="window.testConnection()" style="padding:5px 12px;font-size:12px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Test Connection</button>
+          <span id="test-conn-result" style="font-size:11px;opacity:0.8;"></span>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title">MCP Tools <span id="mcp-tool-count" style="opacity:0.5;font-weight:normal;font-size:11px;"></span></div>
+        <div id="mcp-tool-list" style="font-size:11px;opacity:0.7;line-height:1.8;">Loading…</div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:5px;opacity:0.7"><circle cx="12" cy="12" r="3"></circle><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"></path><path d="M12 2v2M12 20v2M2 12h2M20 12h2"></path></svg>
+          Advanced Settings
+        </div>
+        <button onclick="vscode.postMessage({type:'openSettings'})" style="padding:6px 12px;font-size:12px;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;width:100%;text-align:left;display:flex;align-items:center;gap:6px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.6;flex-shrink:0"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          Open Grom Settings
+          <span style="margin-left:auto;opacity:0.5">→</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="slash-menu" class="floating-menu"></div>
+
+  <div id="plus-menu" class="floating-menu" style="min-width: 200px; left: 15px; right: auto;">
+    <div class="menu-item" onclick="document.getElementById('img-upload').click(); window.togglePlusMenu(false);"><span class="menu-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg></span> Upload file</div>
+    <div class="menu-item" onclick="window.togglePlusMenu(false); vscode.postMessage({type:'getFiles'}); prompt.value+='@'; prompt.focus();"><span class="menu-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg></span> Add context</div>
+  </div>
+
+  <div id="input-container">
+    <div id="context-row" class="context-row"></div>
+    <div id="image-preview" style="display:flex; gap:5px; margin-bottom:5px;"></div>
+    <div class="input-box">
+      <textarea id="prompt" placeholder="Ask your model..." rows="1"></textarea>
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <span id="plus-btn" class="tool-icon" onclick="window.togglePlusMenu(); event.stopPropagation();"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
+          <span id="slash-btn" class="tool-icon" onclick="window.toggleSlashMenu(true); event.stopPropagation();">/</span>
+          <div id="model-caps" style="display:flex; gap:6px; margin-left:4px; opacity:0.5;"></div>
+          <input type="file" id="img-upload" hidden onchange="handleFileUpload(this)">
+        </div>
+        <div class="toolbar-right">
+          <div id="mode-toggle" class="mode-toggle" onclick="window.toggleMode()"><div class="mode-slider"></div><div id="plan-btn" class="mode-btn active">PLAN</div><div id="build-btn" class="mode-btn">BUILD</div></div>
+          <div class="send-btn" id="sendBtn" title="Send (Enter)">↑</div>
+          <div class="send-btn" id="stopBtn" style="display:none; background:var(--vscode-errorForeground)">■</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{MAIN_JS}}"></script>
+  <script>
+    window.onerror = function(msg, src, line, col, err) {
+      const el = document.getElementById('error-boundary');
+      const msgEl = document.getElementById('error-boundary-msg');
+      if (el && msgEl) { msgEl.textContent = msg + (src ? ' (' + src.split('/').pop() + ':' + line + ')' : ''); el.style.display = 'flex'; }
+      return false;
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+      const el = document.getElementById('error-boundary');
+      const msgEl = document.getElementById('error-boundary-msg');
+      if (el && msgEl) { msgEl.textContent = e.reason?.message || String(e.reason); el.style.display = 'flex'; }
+    });
+  </script>
+</body>
+</html>

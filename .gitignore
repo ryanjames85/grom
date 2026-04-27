@@ -1,6 +1,8 @@
 out/
 node_modules/
-media/
+media/github-dark.min.css
+media/highlight.min.js
+media/marked.min.js
 .vscode-test/
 *.vsix
 *.tgz

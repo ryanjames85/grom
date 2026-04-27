@@ -423,7 +423,7 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "copy-media": "node scripts/build-highlight.mjs && node -e \"const fs=require('fs');fs.mkdirSync('media',{recursive:true});fs.cpSync('node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css','media/github-dark.min.css');fs.cpSync('node_modules/marked/lib/marked.umd.js','media/marked.min.js');fs.cpSync('src/webview/styles.css','media/styles.css');fs.cpSync('src/webview/main.js','media/main.js');\"",
+    "copy-media": "node scripts/build-highlight.mjs && node -e \"const fs=require('fs');fs.mkdirSync('media',{recursive:true});fs.cpSync('node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css','media/github-dark.min.css');fs.cpSync('node_modules/marked/lib/marked.umd.js','media/marked.min.js');\"",
     "vscode:prepublish": "npm run copy-media && npm run compile",
     "tsc": "tsc",
     "test": "mocha -r ts-node/register \"src/test/**/*.test.ts\""
