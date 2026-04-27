@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
 
@@ -30,7 +31,7 @@ jobs:
         run: npm run vscode:prepublish
 
       - name: Package .vsix
-        run: npx vsce package --no-dependencies
+        run: npx @vscode/vsce package --no-dependencies
 
       - name: Upload .vsix artifact
         uses: actions/upload-artifact@v4
@@ -38,3 +39,10 @@ jobs:
           name: grom-vsix
           path: '*.vsix'
           retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.vsix'
+          generate_release_notes: true
