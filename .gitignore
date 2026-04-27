@@ -1,0 +1,15 @@
+out/
+node_modules/
+media/
+.vscode-test/
+*.vsix
+*.tgz
+.idea/
+.env
+*.js.map
+.DS_Store
+Thumbs.db
+.claude/
+.artifacts/
+ROADMAP.md
+

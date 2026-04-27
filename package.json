@@ -1,0 +1,447 @@
+{
+  "name": "grom",
+  "displayName": "Grom",
+  "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
+  "version": "0.1.0",
+  "publisher": "local-llm-dev",
+  "icon": "resources/icon.png",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "llm",
+    "local",
+    "ollama",
+    "lmstudio",
+    "chat",
+    "privacy",
+    "offline",
+    "copilot"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ryanjames85/grom"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "grom-container",
+          "title": "Grom",
+          "icon": "resources/bot-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "grom-container": [
+        {
+          "icon": "",
+          "type": "webview",
+          "id": "localChatView",
+          "name": "Grom"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "grom.start",
+        "title": "Start Grom"
+      },
+      {
+        "command": "grom.explain",
+        "title": "Grom: Explain This"
+      },
+      {
+        "command": "grom.refactor",
+        "title": "Grom: Refactor This"
+      },
+      {
+        "command": "grom.terminalDebug",
+        "title": "Grom: Debug This"
+      },
+      {
+        "command": "grom.reindex",
+        "title": "Grom: Reindex Workspace"
+      },
+      {
+        "command": "grom.inlineEdit",
+        "title": "Grom: Edit (Inline)"
+      },
+      {
+        "command": "grom.acceptInlineDiff",
+        "title": "Grom: Accept Inline Diff"
+      },
+      {
+        "command": "grom.rejectInlineDiff",
+        "title": "Grom: Reject Inline Diff"
+      },
+      {
+        "command": "grom.compose",
+        "title": "Grom: Compose (Multi-file Edit)"
+      },
+      {
+        "command": "grom.toggleAutocomplete",
+        "title": "Grom: Toggle Autocomplete"
+      },
+      {
+        "command": "grom.undoComposer",
+        "title": "Grom: Undo Last Composer Changes"
+      },
+      {
+        "command": "grom.reindexDocs",
+        "title": "Grom: Reindex Documentation Sources"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "grom.start",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g"
+      },
+      {
+        "command": "grom.inlineEdit",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "grom.acceptInlineDiff",
+        "key": "ctrl+shift+y",
+        "mac": "cmd+shift+y"
+      },
+      {
+        "command": "grom.rejectInlineDiff",
+        "key": "ctrl+shift+u",
+        "mac": "cmd+shift+u"
+      },
+      {
+        "command": "grom.compose",
+        "key": "ctrl+shift+o",
+        "mac": "cmd+shift+o"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "grom.explain",
+          "group": "navigation",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "grom.refactor",
+          "group": "navigation",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "grom.inlineEdit",
+          "group": "navigation",
+          "when": "editorHasSelection"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "grom.terminalDebug",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Grom",
+      "properties": {
+        "grom.mcpServers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Display name for this MCP server"
+              },
+              "command": {
+                "type": "string",
+                "description": "Command to launch the MCP server, e.g. npx"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments to pass to the command"
+              },
+              "env": {
+                "type": "object",
+                "description": "Environment variables to set"
+              }
+            },
+            "required": [
+              "name",
+              "command"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "MCP (Model Context Protocol) servers to connect to. Each server exposes tools the model can call.\n\nExample:\n```json\n[\n  {\n    \"name\": \"filesystem\",\n    \"command\": \"npx\",\n    \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path/to/workspace\"]\n  }\n]\n```"
+        },
+        "grom.ragEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable codebase indexing for smarter context retrieval (RAG). Indexes your workspace files on startup."
+        },
+        "grom.embeddingModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Ollama model to use for semantic RAG embeddings. Leave blank to use keyword search (TF-IDF) only.\n\nRecommended models (run `ollama pull <name>` first):\n- `nomic-embed-text` — fast, 274MB, great quality\n- `mxbai-embed-large` — larger, higher accuracy\n- `all-minilm` — very fast, smaller\n\nWith an embedding model, Grom understands meaning — `fetch data` will find chunks about `axios.get`."
+        },
+        "grom.autocomplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline code completions (ghost text) as you type."
+        },
+        "grom.autocompleteModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model to use for inline completions. Leave blank to use the same model as chat.\n\nFor best results use a dedicated FIM (fill-in-middle) model — these are trained specifically for code completion and are much faster:\n- `qwen2.5-coder:1.5b` — fast, good quality\n- `deepseek-coder:1.3b` — very fast\n- `starcoder2:3b` — strong multi-language\n\nRun e.g. `ollama pull qwen2.5-coder:1.5b` to download."
+        },
+        "grom.apiUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Base URL for your local LLM server (Ollama: http://127.0.0.1:11434, LM Studio: http://127.0.0.1:1234)"
+        },
+        "grom.customProviders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Display name for this provider"
+              },
+              "url": {
+                "type": "string",
+                "description": "Base URL, e.g. http://127.0.0.1:8080"
+              },
+              "useOllamaFormat": {
+                "type": "boolean",
+                "description": "Use Ollama /api/chat format. Uncheck for OpenAI-compatible APIs."
+              }
+            },
+            "required": [
+              "name",
+              "url"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Custom LLM providers to add to the provider dropdown. Each entry needs a `name`, `url`, and optionally `useOllamaFormat` (default: false for OpenAI-compatible).\n\nExample:\n```json\n[\n  {\n    \"name\": \"My Local Server\",\n    \"url\": \"http://127.0.0.1:8080\",\n    \"useOllamaFormat\": false\n  }\n]\n```"
+        },
+        "grom.model": {
+          "type": "string",
+          "default": "qwen2.5-coder",
+          "description": "The model name to use."
+        },
+        "grom.useOllamaFormat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to use Ollama's /api/chat format. Uncheck for LM Studio / OpenAI-style APIs."
+        },
+        "grom.modelPricing": {
+          "type": "object",
+          "default": {
+            "qwen2.5-coder": {
+              "input": 0,
+              "output": 0,
+              "context": 32000
+            },
+            "qwen2.5": {
+              "input": 0,
+              "output": 0,
+              "context": 32000
+            },
+            "llama3": {
+              "input": 0,
+              "output": 0,
+              "context": 8192
+            },
+            "llama3.1": {
+              "input": 0,
+              "output": 0,
+              "context": 128000
+            },
+            "mistral": {
+              "input": 0,
+              "output": 0,
+              "context": 8192
+            },
+            "codellama": {
+              "input": 0,
+              "output": 0,
+              "context": 16384
+            }
+          },
+          "description": "Model pricing: input/output per 1M tokens, context window size."
+        },
+        "grom.theme": {
+          "type": "string",
+          "enum": [
+            "Grom",
+            "Cyberpunk",
+            "Classic",
+            "High Contrast"
+          ],
+          "default": "Grom",
+          "description": "The visual theme for the chat interface."
+        },
+        "grom.robotAnimations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable interactive robot animations (eye-tracking, idle thoughts, and sleep mode)."
+        },
+        "grom.languageModels": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Override the model for specific languages in both chat and autocomplete (fallback if the specific maps below are not set). Keys are VS Code language IDs.\n\nExample:\n```json\n{ \"python\": \"qwen2.5-coder:1.5b\", \"typescript\": \"qwen2.5-coder:32b\" }\n```"
+        },
+        "grom.chatLanguageModels": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Override the chat model for specific languages. Takes priority over `grom.languageModels`. Keys are VS Code language IDs.\n\nExample:\n```json\n{ \"python\": \"deepseek-coder-v2\", \"rust\": \"qwen2.5-coder:32b\" }\n```"
+        },
+        "grom.autocompleteLanguageModels": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Override the autocomplete model for specific languages. Takes priority over `grom.languageModels`. Keys are VS Code language IDs.\n\nExample:\n```json\n{ \"python\": \"qwen2.5-coder:1.5b\", \"go\": \"deepseek-coder:1.3b\" }\n```"
+        },
+        "grom.agentEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the agentic loop. When on, Grom can read/write files, search, and run terminal commands autonomously to complete tasks. Disable to return to simple single-shot responses."
+        },
+        "grom.agentMaxIterations": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum number of tool-call iterations per agent task before the loop stops."
+        },
+        "grom.docSources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Short name shown in @docs results, e.g. \"react\""
+              },
+              "url": {
+                "type": "string",
+                "description": "Root URL to crawl, e.g. \"https://react.dev/reference\""
+              }
+            },
+            "required": [
+              "name",
+              "url"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "External documentation sites for Grom to index. Use `@docs` or `@docs:name` in chat to search them.\n\nExample:\n```json\n[\n  { \"name\": \"react\", \"url\": \"https://react.dev/reference/react\" },\n  { \"name\": \"mdn\", \"url\": \"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference\" },\n  { \"name\": \"vscode\", \"url\": \"https://code.visualstudio.com/api/references/vscode-api\" }\n]\n```\n\nGrom crawls up to 40 pages per source, respecting same-origin links."
+        },
+        "grom.customGreeting": {
+          "type": "string",
+          "default": "",
+          "description": "Override the greeting message shown in the empty chat state. Leave blank for the default."
+        },
+        "grom.customLogo": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the chat logo. Can be a URL (`https://...`), a `data:` URI, or a single emoji/text character."
+        },
+        "grom.presets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          "default": [
+            {
+              "label": "Explain Code",
+              "text": "/explain"
+            },
+            {
+              "label": "Refactor Code",
+              "text": "/refactor"
+            },
+            {
+              "label": "Fix Bugs",
+              "text": "/fix"
+            },
+            {
+              "label": "Write Tests",
+              "text": "/tests"
+            },
+            {
+              "label": "Write Docs",
+              "text": "/docs"
+            },
+            {
+              "label": "Code Review",
+              "text": "/review"
+            },
+            {
+              "label": "Commit Message",
+              "text": "/commit"
+            },
+            {
+              "label": "Web Search",
+              "text": "/search "
+            },
+            {
+              "label": "Optimize Performance",
+              "text": "Analyze this code for performance bottlenecks and suggest optimizations."
+            }
+          ],
+          "description": "User-defined prompt presets/snippets."
+        }
+      }
+    }
+  },
+  "overrides": {
+    "serialize-javascript": "7.0.5"
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "copy-media": "node scripts/build-highlight.mjs && node -e \"const fs=require('fs');fs.mkdirSync('media',{recursive:true});fs.cpSync('node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css','media/github-dark.min.css');fs.cpSync('node_modules/marked/lib/marked.umd.js','media/marked.min.js');fs.cpSync('src/webview/styles.css','media/styles.css');fs.cpSync('src/webview/main.js','media/main.js');\"",
+    "vscode:prepublish": "npm run copy-media && npm run compile",
+    "tsc": "tsc",
+    "test": "mocha -r ts-node/register \"src/test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@highlightjs/cdn-assets": "^11.11.1",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^18.0.0",
+    "@types/sinon": "^21.0.1",
+    "@types/vscode": "^1.85.0",
+    "chai": "^6.2.2",
+    "esbuild": "^0.28.0",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.2",
+    "mocha": "^11.3.0",
+    "sinon": "^21.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  }
+}
