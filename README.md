@@ -1,7 +1,7 @@
 # Grom
 
 <p align="center">
-  <img src="resources/readme-grom-logo.svg" width="120" alt="Grom" />
+  <img src="resources/icon.png" width="120" alt="Grom" />
 </p>
 
 **Your AI. Stays on your machine. Built by one person in Ireland.**
