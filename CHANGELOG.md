@@ -4,6 +4,24 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.1.2] — 2026-04-28
+
+### Internal
+- Made `.btn-cancel` self-contained, removing dependency on `.icon-btn`
+
+---
+
+## [0.1.1] — 2026-04-27
+
+### Internal
+- Removed all debug logging left over from session rename development
+- Moved all inline styles out of `webview.html` and `main.js` into named CSS classes in `styles.css`
+- Fixed `copy-media` build script referencing stale `src/webview/` paths
+- Replaced SVG with PNG in README for marketplace compatibility
+- Converted extension icon to PNG
+
+---
+
 ## [0.1.0] — 2026-04-26
 
 Initial public release.

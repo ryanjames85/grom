@@ -201,7 +201,7 @@ window.viewApprovalDiff = (id) => {
 
 window.newSession = () => vscode.postMessage({ type: 'newSession' });
 window.popIcon = (el) => { el.classList.remove('clicked'); void el.offsetWidth; el.classList.add('clicked'); el.addEventListener('animationend', () => el.classList.remove('clicked'), { once: true }); };
-window.spinIcon = (el) => { const svg = el.querySelector('svg'); if (!svg) return; svg.style.animation = 'none'; void svg.offsetWidth; svg.style.animation = 'icon-spin 0.4s ease-out'; svg.addEventListener('animationend', () => svg.style.animation = '', { once: true }); };
+window.spinIcon = (el) => { const svg = el.querySelector('svg'); if (!svg) return; svg.classList.remove('spinning'); void svg.offsetWidth; svg.classList.add('spinning'); svg.addEventListener('animationend', () => svg.classList.remove('spinning'), { once: true }); };
 window.compactSession = () => vscode.postMessage({ type: 'compactSession' });
 
 function wireSessionListClicks() {
@@ -444,9 +444,9 @@ prompt.addEventListener('paste', (e) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const b64 = ev.target.result.split(',')[1]; pendingImages.push(b64);
-        const div = document.createElement('div'); div.className = 'preview-item'; div.style = 'position:relative; width:40px; height:40px;';
-        const img = document.createElement('img'); img.src = ev.target.result; img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:4px';
-        const rm = document.createElement('span'); rm.style.cssText = 'position:absolute;top:-5px;right:-5px;background:var(--vscode-errorForeground);color:white;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:10px'; rm.textContent = '×';
+        const div = document.createElement('div'); div.className = 'preview-item';
+        const img = document.createElement('img'); img.src = ev.target.result; img.className = 'img-preview-img';
+        const rm = document.createElement('span'); rm.className = 'img-remove-btn'; rm.textContent = '×';
         rm.onclick = () => { div.remove(); const idx = pendingImages.indexOf(b64); if (idx >= 0) pendingImages.splice(idx, 1); };
         div.appendChild(img); div.appendChild(rm);
         document.getElementById('image-preview').appendChild(div);
@@ -556,9 +556,9 @@ function handleFileUpload(input) {
         if (file.type.startsWith('image/')) {
             reader.onload = (e) => {
                 const b64 = e.target.result.split(',')[1]; pendingImages.push(b64);
-                const div = document.createElement('div'); div.className = 'preview-item'; div.style = 'position:relative; width:40px; height:40px;';
-                const img = document.createElement('img'); img.src = e.target.result; img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:4px';
-                const rm = document.createElement('span'); rm.style.cssText = 'position:absolute;top:-5px;right:-5px;background:var(--vscode-errorForeground);color:white;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:10px'; rm.textContent = '×';
+                const div = document.createElement('div'); div.className = 'preview-item';
+                const img = document.createElement('img'); img.src = e.target.result; img.className = 'img-preview-img';
+                const rm = document.createElement('span'); rm.className = 'img-remove-btn'; rm.textContent = '×';
                 rm.onclick = () => { div.remove(); const idx = pendingImages.indexOf(b64); if (idx >= 0) pendingImages.splice(idx, 1); };
                 div.appendChild(img); div.appendChild(rm);
                 document.getElementById('image-preview').appendChild(div);
