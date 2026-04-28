@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import { RagIndex, RagFile } from '../rag';
 
 (global as any).vscode = {
   workspace: {
@@ -162,5 +163,75 @@ describe('sad path', () => {
 
   it('cosineSimilarity returns 0 for empty vectors', () => {
     expect(cosineSimilarity(new Float32Array([]), new Float32Array([]))).to.equal(0);
+  });
+});
+
+describe('RagIndex BM25', () => {
+  async function buildIndex(files: RagFile[]): Promise<RagIndex> {
+    const idx = new RagIndex();
+    await idx.build(files);
+    return idx;
+  }
+
+  it('returns empty string when index is empty', async () => {
+    const idx = new RagIndex();
+    expect(idx.query('anything')).to.equal('');
+  });
+
+  it('ranks a relevant chunk above an irrelevant one', async () => {
+    const idx = await buildIndex([
+      { path: 'auth.ts', content: 'function authenticateUser(token: string) {\n  return verifyJwt(token);\n}' },
+      { path: 'utils.ts', content: 'function formatDate(d: Date) {\n  return d.toISOString();\n}' }
+    ]);
+    const result = idx.query('authenticate user token', 2);
+    expect(result).to.include('auth.ts');
+    expect(result.indexOf('auth.ts')).to.be.lessThan(result.indexOf('utils.ts') === -1 ? Infinity : result.indexOf('utils.ts'));
+  });
+
+  it('returns empty string when no chunks match the query', async () => {
+    const idx = await buildIndex([
+      { path: 'foo.ts', content: 'const x = 1;' }
+    ]);
+    expect(idx.query('zzzznonexistentterm')).to.equal('');
+  });
+
+  it('exact match boost surfaces the right chunk', async () => {
+    const idx = await buildIndex([
+      { path: 'a.ts', content: 'function processPayment(amount: number) {}' },
+      { path: 'b.ts', content: 'function handleRequest(req: Request) {}' }
+    ]);
+    const result = idx.query('processPayment');
+    expect(result).to.include('a.ts');
+  });
+
+  it('length normalisation: shorter dense chunk scores higher than diluted long chunk', async () => {
+    const shortChunk = 'function fetchUser(id: string) { return db.users.find(id); }';
+    const longChunk = shortChunk + '\n' + Array(40).fill('// padding line with unrelated content about formatting dates and colours').join('\n');
+    const idx = await buildIndex([
+      { path: 'long.ts', content: longChunk },
+      { path: 'short.ts', content: shortChunk }
+    ]);
+    const result = idx.query('fetchUser id');
+    expect(result.indexOf('short.ts')).to.be.lessThan(result.indexOf('long.ts') === -1 ? Infinity : result.indexOf('long.ts'));
+  });
+
+  it('filename match boosts chunks from a relevantly-named file', async () => {
+    const idx = await buildIndex([
+      { path: 'auth-service.ts', content: 'export function login(user: string) {}' },
+      { path: 'unrelated.ts', content: 'export function login(user: string) {}' }
+    ]);
+    const result = idx.query('auth login');
+    expect(result.indexOf('auth-service.ts')).to.be.lessThan(result.indexOf('unrelated.ts') === -1 ? Infinity : result.indexOf('unrelated.ts'));
+  });
+
+  it('returns top K results', async () => {
+    const files: RagFile[] = Array.from({ length: 10 }, (_, i) => ({
+      path: `file${i}.ts`,
+      content: `function handler${i}(request: Request) { return response${i}; }`
+    }));
+    const idx = await buildIndex(files);
+    const result = idx.query('handler request response', 3);
+    const matches = result.split('---').filter(s => s.trim());
+    expect(matches.length).to.be.at.most(3);
   });
 });
