@@ -4,6 +4,15 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.2.0] — 2026-04-28
+
+### New
+- **BM25 search** — replaced TF-IDF with BM25 for significantly better keyword retrieval quality; improves RAG results for everyone with no config required
+- **Composer diff review** — the 💾 Save button now opens a side-by-side diff before writing; Accept applies, Skip discards. New files are still written immediately.
+- **`browse_web` agent tool** — the agentic loop can now fetch and read live web pages, enabling research, doc lookups, and API checks during tasks
+
+---
+
 ## [0.1.2] — 2026-04-28
 
 ### Internal

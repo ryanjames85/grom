@@ -183,11 +183,30 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           if (normalised.includes('..')) break;
           const uri = vscode.Uri.joinPath(folders[0].uri, normalised);
           const parentUri = vscode.Uri.joinPath(uri, '..');
-          try { await vscode.workspace.fs.createDirectory(parentUri); } catch {}
-          await vscode.workspace.fs.writeFile(uri, Buffer.from(data.content as string, 'utf8'));
-          const doc = await vscode.workspace.openTextDocument(uri);
-          await vscode.window.showTextDocument(doc, { preview: false });
-          webviewView.webview.postMessage({ type: 'fileCreated', path: data.path });
+          const content = data.content as string;
+          let isNew = false;
+          try { await vscode.workspace.fs.stat(uri); } catch { isNew = true; }
+          if (isNew) {
+            try { await vscode.workspace.fs.createDirectory(parentUri); } catch {}
+            await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+            const doc = await vscode.workspace.openTextDocument(uri);
+            await vscode.window.showTextDocument(doc, { preview: false });
+            webviewView.webview.postMessage({ type: 'fileCreated', path: data.path });
+          } else {
+            await diffAgentWrite(data.path as string, content);
+            const action = await vscode.window.showInformationMessage(
+              `Apply Grom's changes to ${normalised.split('/').pop()}?`,
+              { modal: false },
+              'Apply', 'Skip'
+            );
+            await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+            if (action === 'Apply') {
+              await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+              const doc = await vscode.workspace.openTextDocument(uri);
+              await vscode.window.showTextDocument(doc, { preview: false });
+              webviewView.webview.postMessage({ type: 'fileCreated', path: data.path });
+            }
+          }
           break;
         }
         case 'showAlert': vscode.window.showInformationMessage(data.message); break;

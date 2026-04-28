@@ -84,7 +84,7 @@ Select code, press `Ctrl+Shift+I`, describe what you want. Grom rewrites it and 
 
 Press `Ctrl+Shift+O` or type `/compose` to enter compose mode. Describe the changes you want across your codebase. Grom outputs each file in a structured format. Review per-file or apply everything at once. Undo the whole run with one click if you change your mind.
 
-Every code block Grom writes in compose format gets a **💾 Save** button — click it to write the file directly without going through the full Compose flow.
+Every code block Grom writes in compose format gets a **💾 Save** button — click it to open a diff view showing exactly what will change. Accept to write the file, Skip to discard. New files are created immediately with no diff step.
 
 ### Remembers Your Conversations
 - Multiple chat sessions, persistent across restarts
@@ -123,6 +123,7 @@ When you give Grom a task, it doesn't just reply once — it works through it st
 | `delete_file` | Delete a file |
 | `search_files` | Search workspace files by regex pattern |
 | `run_terminal` | Run a shell command and return its output |
+| `browse_web` | Fetch a live web page and return its text content |
 
 The loop continues until the task is done, the model gives a final answer, or it hits the `grom.agentMaxIterations` limit (default: 20). Every tool call is logged in the **Task Log** tab next to the Sessions list.
 
@@ -145,7 +146,7 @@ Every code block Grom writes has one-click actions:
 | **Run** | Send directly to the active terminal |
 | **✓ Accept** | Apply the suggested change to the whole file |
 | **✕ Reject** | Dismiss the suggestion |
-| **💾 Save** | Write the block as a new file (shown when Grom names the file with `### path/file.ext`) |
+| **💾 Save** | Preview a diff then write the file (shown when Grom names the file with `### path/file.ext`) |
 
 ### Background Notifications
 When Grom finishes a task while the panel is hidden (e.g. you switched to a different view), a VS Code notification appears so you know it's done without having to check. On Windows, a desktop toast notification is also fired so it surfaces even when VS Code is minimised.

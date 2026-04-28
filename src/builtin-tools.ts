@@ -14,6 +14,7 @@
  */
 
 import * as vscode from 'vscode';
+import { stripHtml } from './utils';
 
 export interface ToolDef {
   name: string;
@@ -80,6 +81,15 @@ export const BUILTIN_TOOLS: ToolDef[] = [
       type: 'object',
       properties: { command: { type: 'string', description: 'Shell command to execute' } },
       required: ['command']
+    }
+  },
+  {
+    name: 'browse_web',
+    description: 'Fetch a web page and return its readable text content. Use to read documentation, check live APIs, or research topics online. Safe — read only.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'Full URL to fetch, e.g. https://example.com/docs' } },
+      required: ['url']
     }
   }
 ];
@@ -204,6 +214,18 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
           resolve(result);
         });
       });
+    }
+
+    case 'browse_web': {
+      const url = args.url as string;
+      if (!url?.startsWith('http')) return 'Error: url must start with http:// or https://';
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Grom/1.0)' } });
+        if (!res.ok) return `Error: HTTP ${res.status} ${res.statusText}`;
+        const html = await res.text();
+        const text = stripHtml(html).slice(0, 8000);
+        return `[${url}]\n\n${text}`;
+      } catch (e: any) { return `Error fetching ${url}: ${e.message}`; }
     }
 
     default:
