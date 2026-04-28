@@ -92,7 +92,12 @@ export function activate(context: vscode.ExtensionContext) {
   buildRag();
 
   let _reindexTimer: NodeJS.Timeout | undefined;
-  const _scheduleReindex = () => { clearTimeout(_reindexTimer); _reindexTimer = setTimeout(() => buildRag(true), 3000); };
+  const _scheduleReindex = (uri: vscode.Uri) => {
+    const ext = path.extname(uri.fsPath).toLowerCase();
+    if (!INDEXED_EXTS.has(ext)) return;
+    clearTimeout(_reindexTimer);
+    _reindexTimer = setTimeout(() => buildRag(true), 3000);
+  };
   const fileWatcher = vscode.workspace.createFileSystemWatcher('**/*');
   fileWatcher.onDidCreate(_scheduleReindex);
   fileWatcher.onDidDelete(_scheduleReindex);

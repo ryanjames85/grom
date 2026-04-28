@@ -4,6 +4,15 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.2.1] — 2026-04-28
+
+### Fixed
+- **Hybrid RAG** — replaced fixed-weight score blend (35% BM25 + 65% cosine) with Reciprocal Rank Fusion (RRF), eliminating the score-normalisation instability that could suppress good BM25 results
+- **Semantic query embedding** — query-time embedding was silently returning null due to a missing config reference; semantic retrieval now works correctly end-to-end
+- **File watcher** — re-index was triggering on every file change regardless of type; now only indexed extensions (`.ts`, `.py`, `.md`, etc.) schedule a re-index
+
+---
+
 ## [0.2.0] — 2026-04-28
 
 ### New
