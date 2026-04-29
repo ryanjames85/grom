@@ -4,6 +4,13 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.2.2] — 2026-04-29
+
+### New
+- **API key support** — custom providers now accept an optional `apiKey` field; sent as `Authorization: Bearer <key>` on every request, enabling cloud providers like Google Gemini to be used alongside local models
+
+---
+
 ## [0.2.1] — 2026-04-28
 
 ### Fixed

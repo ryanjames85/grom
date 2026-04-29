@@ -218,7 +218,8 @@ export class GromInlineCompletionProvider implements vscode.InlineCompletionItem
     const fallbackLangModels = config.get<Record<string, string>>('languageModels', {});
     const model = autocompleteLangModels[lang] || fallbackLangModels[lang] || config.get<string>('autocompleteModel') || config.get<string>('model') || 'qwen2.5-coder';
     const useOllama = config.get<boolean>('useOllamaFormat') ?? true;
-    const client = new LocalLLMClient(apiUrl, model, useOllama);
+    const apiKey = config.get<string>('apiKey', '');
+    const client = new LocalLLMClient(apiUrl, model, useOllama, apiKey || undefined);
     const controller = new AbortController();
     token.onCancellationRequested(() => controller.abort());
 

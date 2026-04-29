@@ -228,7 +228,7 @@ No API keys. No subscriptions. No data leaving your machine.
 | `grom.ragEnabled` | Enable codebase indexing | `true` |
 | `grom.embeddingModel` | Ollama model for semantic RAG | _(blank)_ |
 | `grom.mcpServers` | MCP server definitions | `[]` |
-| `grom.customProviders` | Add your own provider endpoints | `[]` |
+| `grom.customProviders` | Add your own provider endpoints (supports optional `apiKey`) | `[]` |
 | `grom.robotAnimations` | Enable Grom's animations | `true` |
 | `grom.theme` | UI theme: Grom, Cyberpunk, Classic, High Contrast | `Grom` |
 | `grom.presets` | Custom prompt shortcuts shown in `/` menu | see defaults |
@@ -262,9 +262,17 @@ In your VS Code settings (`grom.customProviders`):
     "name": "My Local Server",
     "url": "http://127.0.0.1:8080",
     "useOllamaFormat": false
+  },
+  {
+    "name": "Gemini",
+    "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "useOllamaFormat": false,
+    "apiKey": "YOUR_GEMINI_API_KEY"
   }
 ]
 ```
+
+The `apiKey` field is optional — leave it out for local servers. When set, it is sent as `Authorization: Bearer <key>` on every request.
 
 ### MCP Servers
 

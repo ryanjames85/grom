@@ -81,7 +81,8 @@ export class AgentLoop {
     const fallbackLangModels = config.get<Record<string, string>>('languageModels', {});
     const model = chatLangModels[activeLang] || fallbackLangModels[activeLang] || baseModel;
     const useOllamaFormat = config.get<boolean>('useOllamaFormat') || false;
-    this._client = new LocalLLMClient(apiUrl, model, useOllamaFormat);
+    const apiKey = config.get<string>('apiKey', '');
+    this._client = new LocalLLMClient(apiUrl, model, useOllamaFormat, apiKey || undefined);
 
     // Assemble context from RAG, @ mentions, and the active file
     const usedFiles = new Set<string>();

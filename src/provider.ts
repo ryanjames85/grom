@@ -234,18 +234,21 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         case 'changeProvider': {
           let newUrl: string;
           let isOllama: boolean;
+          const cfg = vscode.workspace.getConfiguration('grom');
           if (data.providerId === 'custom') {
             newUrl = data.url;
             isOllama = data.useOllamaFormat ?? false;
+            await cfg.update('apiKey', data.apiKey || '', vscode.ConfigurationTarget.Global);
           } else {
             isOllama = data.providerId === 'ollama';
             newUrl = 'http://127.0.0.1:11434';
             if (data.providerId === 'lmstudio') newUrl = 'http://127.0.0.1:1234';
             else if (data.providerId === 'opencode') newUrl = 'https://api.opencode.ai';
             else if (data.providerId === 'openai') newUrl = 'https://api.openai.com';
+            await cfg.update('apiKey', '', vscode.ConfigurationTarget.Global);
           }
-          await vscode.workspace.getConfiguration('grom').update('useOllamaFormat', isOllama, vscode.ConfigurationTarget.Global);
-          await vscode.workspace.getConfiguration('grom').update('apiUrl', newUrl, vscode.ConfigurationTarget.Global);
+          await cfg.update('useOllamaFormat', isOllama, vscode.ConfigurationTarget.Global);
+          await cfg.update('apiUrl', newUrl, vscode.ConfigurationTarget.Global);
           await this._checkConnection(newUrl, data.model || 'qwen2.5-coder', isOllama);
           break;
         }
@@ -470,7 +473,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           const userMsg = firstUserMsg.content.slice(0, 200);
           const prompt = `Summarize this user request into a concise 3-word title (no quotes, no punctuation): "${userMsg}"`;
           const cfg = vscode.workspace.getConfiguration('grom');
-          const titleClient = new LocalLLMClient(cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434', cfg.get<string>('model') || 'qwen2.5-coder', cfg.get<boolean>('useOllamaFormat') ?? true);
+          const titleClient = new LocalLLMClient(cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434', cfg.get<string>('model') || 'qwen2.5-coder', cfg.get<boolean>('useOllamaFormat') ?? true, cfg.get<string>('apiKey', '') || undefined);
           const titleAbort = new AbortController();
           const titleTimeout = setTimeout(() => titleAbort.abort(), 8000);
           const aiTitle = await titleClient.chat([{ role: 'user', content: prompt }], titleAbort.signal);
@@ -508,7 +511,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
-      const client = new LocalLLMClient(url, model, useOllama);
+      const apiKey = config.get<string>('apiKey', '');
+      const client = new LocalLLMClient(url, model, useOllama, apiKey || undefined);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       const models = await client.getAvailableModels(controller.signal);

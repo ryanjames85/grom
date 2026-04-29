@@ -137,13 +137,15 @@ class OllamaProvider implements ILLMProvider {
  */
 class OpenAICompatibleProvider implements ILLMProvider {
   private baseUrl: string;
-  constructor(baseUrl: string) {
+  private authHeader: Record<string, string>;
+  constructor(baseUrl: string, apiKey?: string) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.authHeader = apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {};
   }
 
   /** Returns model IDs from the /v1/models endpoint. */
   async getModels(signal?: AbortSignal): Promise<string[]> {
-    const res = await fetch(`${this.baseUrl}/v1/models`, { signal });
+    const res = await fetch(`${this.baseUrl}/v1/models`, { headers: this.authHeader, signal });
     if (!res.ok) throw new Error(`Provider error: ${res.statusText}`);
     const data: any = await res.json();
     return data.data?.map((m: any) => m.id) || [];
@@ -164,7 +166,7 @@ class OpenAICompatibleProvider implements ILLMProvider {
       tools: ['tool', 'function', 'agent', 'qwen3', 'qwen2.5', 'mistral-nemo', 'command-r', 'firefunction', 'gemma-4', 'gemma4', 'llama-3', 'llama3', 'mistral', 'phi-4', 'phi4'].some(k => shortName.includes(k))
     };
     try {
-      const res = await fetch(`${this.baseUrl}/v1/models`, { signal });
+      const res = await fetch(`${this.baseUrl}/v1/models`, { headers: this.authHeader, signal });
       if (!res.ok) return nameBased;
       const data: any = await res.json();
       const entry = data.data?.find((e: any) => e.id === model || e.id === shortName);
@@ -204,7 +206,7 @@ class OpenAICompatibleProvider implements ILLMProvider {
 
     const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeader },
       body: JSON.stringify({ model, messages: formattedMessages, stream: true }),
       signal
     });
@@ -251,7 +253,7 @@ class OpenAICompatibleProvider implements ILLMProvider {
   async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
     const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeader },
       body: JSON.stringify({ model, messages, stream: false }),
       signal
     });
@@ -273,11 +275,11 @@ export class LocalLLMClient {
   private model: string;
 
   /** Selects Ollama or OpenAI-compatible transport based on useOllamaFormat. */
-  constructor(baseUrl: string, model: string, useOllamaFormat: boolean) {
+  constructor(baseUrl: string, model: string, useOllamaFormat: boolean, apiKey?: string) {
     this.model = model;
     this.provider = useOllamaFormat
         ? new OllamaProvider(baseUrl)
-        : new OpenAICompatibleProvider(baseUrl);
+        : new OpenAICompatibleProvider(baseUrl, apiKey);
   }
 
   /** Returns all model names available on the configured server. */

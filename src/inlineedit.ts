@@ -35,6 +35,7 @@ export async function inlineEdit(context: vscode.ExtensionContext) {
   const apiUrl = config.get<string>('apiUrl') || 'http://127.0.0.1:11434';
   const model = config.get<string>('model') || 'qwen2.5-coder';
   const useOllama = config.get<boolean>('useOllamaFormat') ?? true;
+  const apiKey = config.get<string>('apiKey', '');
 
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
@@ -45,7 +46,7 @@ export async function inlineEdit(context: vscode.ExtensionContext) {
     cancelToken.onCancellationRequested(() => controller.abort());
 
     try {
-      const client = new LocalLLMClient(apiUrl, model, useOllama);
+      const client = new LocalLLMClient(apiUrl, model, useOllama, apiKey || undefined);
       const messages = [
         {
           role: 'system' as const,

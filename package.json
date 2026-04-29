@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "local-llm-dev",
   "icon": "resources/icon.png",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -215,6 +215,11 @@
           "default": "http://127.0.0.1:11434",
           "description": "Base URL for your local LLM server (Ollama: http://127.0.0.1:11434, LM Studio: http://127.0.0.1:1234)"
         },
+        "grom.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the active provider. Set automatically when you select a custom provider that has an apiKey configured."
+        },
         "grom.customProviders": {
           "type": "array",
           "items": {
@@ -231,6 +236,10 @@
               "useOllamaFormat": {
                 "type": "boolean",
                 "description": "Use Ollama /api/chat format. Uncheck for OpenAI-compatible APIs."
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API key sent as Authorization: Bearer <key>. Required for cloud providers like Gemini."
               }
             },
             "required": [
@@ -239,7 +248,7 @@
             ]
           },
           "default": [],
-          "markdownDescription": "Custom LLM providers to add to the provider dropdown. Each entry needs a `name`, `url`, and optionally `useOllamaFormat` (default: false for OpenAI-compatible).\n\nExample:\n```json\n[\n  {\n    \"name\": \"My Local Server\",\n    \"url\": \"http://127.0.0.1:8080\",\n    \"useOllamaFormat\": false\n  }\n]\n```"
+          "markdownDescription": "Custom LLM providers to add to the provider dropdown. Each entry needs a `name`, `url`, and optionally `useOllamaFormat` (default: false for OpenAI-compatible) and `apiKey` (sent as `Authorization: Bearer`).\n\nExample:\n```json\n[\n  {\n    \"name\": \"My Local Server\",\n    \"url\": \"http://127.0.0.1:8080\",\n    \"useOllamaFormat\": false\n  },\n  {\n    \"name\": \"Gemini\",\n    \"url\": \"https://generativelanguage.googleapis.com/v1beta/openai\",\n    \"useOllamaFormat\": false,\n    \"apiKey\": \"YOUR_GEMINI_API_KEY\"\n  }\n]\n```"
         },
         "grom.model": {
           "type": "string",
