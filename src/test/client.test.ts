@@ -258,4 +258,188 @@ describe('LocalLLMClient', () => {
     const models = await client.getAvailableModels();
     expect(models).to.be.an('array');
   });
+
+  // --- Auth types (OpenAI-compatible) ---
+
+  describe('authType', () => {
+    it('sends Authorization: Bearer header for bearer auth', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false, 'my-key', 'bearer');
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [] }) } as any);
+      await client.getAvailableModels();
+      const headers = fetchStub.lastCall.args[1].headers;
+      expect(headers['Authorization']).to.equal('Bearer my-key');
+    });
+
+    it('sends x-api-key header for x-api-key auth', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false, 'my-key', 'x-api-key');
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [] }) } as any);
+      await client.getAvailableModels();
+      const headers = fetchStub.lastCall.args[1].headers;
+      expect(headers['x-api-key']).to.equal('my-key');
+      expect(headers['Authorization']).to.be.undefined;
+    });
+
+    it('sends no auth header for none auth', async () => {
+      const client = new LocalLLMClient('http://localhost:8080', 'local-model', false, undefined, 'none');
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [] }) } as any);
+      await client.getAvailableModels();
+      const headers = fetchStub.lastCall.args[1].headers;
+      expect(headers['Authorization']).to.be.undefined;
+      expect(headers['x-api-key']).to.be.undefined;
+    });
+
+    it('sends no auth header when no key provided', async () => {
+      const client = new LocalLLMClient('http://localhost:8080', 'local-model', false);
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [] }) } as any);
+      await client.getAvailableModels();
+      const headers = fetchStub.lastCall.args[1].headers;
+      expect(headers['Authorization']).to.be.undefined;
+    });
+  });
+
+  // --- Anthropic provider ---
+
+  describe('providerFormat: anthropic', () => {
+    const anthropicClient = () => new LocalLLMClient('https://api.anthropic.com', 'claude-sonnet-4-5', false, 'sk-ant-key', undefined, 'anthropic');
+
+    it('sends x-api-key and anthropic-version headers', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [] }) } as any);
+      await client.getAvailableModels();
+      const headers = fetchStub.lastCall.args[1].headers;
+      expect(headers['x-api-key']).to.equal('sk-ant-key');
+      expect(headers['anthropic-version']).to.equal('2023-06-01');
+    });
+
+    it('fetches models from /v1/models', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [{ id: 'claude-opus-4-5' }, { id: 'claude-sonnet-4-5' }] }) } as any);
+      const models = await client.getAvailableModels();
+      expect(models).to.deep.equal(['claude-opus-4-5', 'claude-sonnet-4-5']);
+      expect(fetchStub.lastCall.args[0]).to.include('/v1/models');
+    });
+
+    it('returns fallback model list when /v1/models fails', async () => {
+      const client = anthropicClient();
+      fetchStub.rejects(new Error('Network error'));
+      const models = await client.getAvailableModels();
+      expect(models).to.be.an('array').that.is.not.empty;
+      expect(models.some((m: string) => m.includes('claude'))).to.be.true;
+    });
+
+    it('detects vision and tools capabilities for claude models', async () => {
+      const client = anthropicClient();
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+      expect(caps.tools).to.be.true;
+    });
+
+    it('posts to /v1/messages not /v1/chat/completions', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {});
+      expect(fetchStub.lastCall.args[0]).to.include('/v1/messages');
+      expect(fetchStub.lastCall.args[0]).to.not.include('/v1/chat/completions');
+    });
+
+    it('extracts system message to top-level system field', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      const messages: any[] = [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: 'Hello' },
+      ];
+      await client.streamChatWithCallback(messages, () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.system).to.equal('You are a helpful assistant.');
+      expect(body.messages.every((m: any) => m.role !== 'system')).to.be.true;
+    });
+
+    it('includes max_tokens in request body', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.max_tokens).to.be.a('number').and.greaterThan(0);
+    });
+
+    it('streams content_block_delta text_delta events', async () => {
+      const client = anthropicClient();
+      const lines = [
+        'data: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } }) + '\n',
+        'data: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ' world' } }) + '\n',
+        'data: ' + JSON.stringify({ type: 'message_stop' }) + '\n',
+      ];
+      fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
+      const chunks: string[] = [];
+      const result = await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], (c) => chunks.push(c));
+      expect(chunks).to.deep.equal(['Hello', ' world']);
+      expect(result).to.equal('Hello world');
+    });
+
+    it('ignores non-text-delta SSE events', async () => {
+      const client = anthropicClient();
+      const lines = [
+        'data: ' + JSON.stringify({ type: 'message_start', message: {} }) + '\n',
+        'data: ' + JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) + '\n',
+        'data: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hi' } }) + '\n',
+        'data: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n',
+        'data: ' + JSON.stringify({ type: 'message_stop' }) + '\n',
+      ];
+      fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
+      const chunks: string[] = [];
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], (c) => chunks.push(c));
+      expect(chunks).to.deep.equal(['Hi']);
+    });
+
+    it('returns content[0].text from non-streaming chat', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, json: async () => ({ content: [{ type: 'text', text: 'Hello there' }] }) } as any);
+      const result = await client.chat([{ role: 'user', content: 'hi' }]);
+      expect(result).to.equal('Hello there');
+    });
+
+    it('non-streaming chat also posts to /v1/messages', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, json: async () => ({ content: [{ type: 'text', text: 'ok' }] }) } as any);
+      await client.chat([{ role: 'user', content: 'hi' }]);
+      expect(fetchStub.lastCall.args[0]).to.include('/v1/messages');
+    });
+
+    it('formats images in Anthropic source format', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      const messages: any[] = [{ role: 'user', content: 'describe this', images: ['abc123'] }];
+      await client.streamChatWithCallback(messages, () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const content = body.messages[0].content;
+      expect(content).to.be.an('array');
+      const imageBlock = content.find((c: any) => c.type === 'image');
+      expect(imageBlock).to.exist;
+      expect(imageBlock.source.type).to.equal('base64');
+      expect(imageBlock.source.data).to.equal('abc123');
+    });
+
+    it('throws on non-ok streaming response', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: false, text: async () => '{"error":{"message":"invalid api key"}}' } as any);
+      try {
+        await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {});
+        expect.fail('should have thrown');
+      } catch (e: any) {
+        expect(e.message).to.include('invalid api key');
+      }
+    });
+
+    it('throws on non-ok chat response', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: false, text: async () => 'rate limit exceeded' } as any);
+      try {
+        await client.chat([{ role: 'user', content: 'hi' }]);
+        expect.fail('should have thrown');
+      } catch (e: any) {
+        expect(e.message).to.include('rate limit exceeded');
+      }
+    });
+  });
 });

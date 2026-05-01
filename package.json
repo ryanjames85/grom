@@ -215,11 +215,6 @@
           "default": "http://127.0.0.1:11434",
           "description": "Base URL for your local LLM server (Ollama: http://127.0.0.1:11434, LM Studio: http://127.0.0.1:1234)"
         },
-        "grom.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "API key for the active provider. Set automatically when you select a custom provider that has an apiKey configured."
-        },
         "grom.customProviders": {
           "type": "array",
           "items": {
@@ -237,9 +232,17 @@
                 "type": "boolean",
                 "description": "Use Ollama /api/chat format. Uncheck for OpenAI-compatible APIs."
               },
-              "apiKey": {
+              "authType": {
                 "type": "string",
-                "description": "API key sent as Authorization: Bearer <key>. Required for cloud providers like Gemini."
+                "enum": ["bearer", "x-api-key", "none"],
+                "default": "bearer",
+                "description": "How to send the API key. 'bearer' = Authorization: Bearer, 'x-api-key' = x-api-key header, 'none' = no auth (local servers)."
+              },
+              "providerFormat": {
+                "type": "string",
+                "enum": ["openai", "anthropic"],
+                "default": "openai",
+                "description": "Wire format for chat requests. 'openai' = /v1/chat/completions (default), 'anthropic' = /v1/messages (Claude models)."
               }
             },
             "required": [
@@ -248,7 +251,7 @@
             ]
           },
           "default": [],
-          "markdownDescription": "Custom LLM providers to add to the provider dropdown. Each entry needs a `name`, `url`, and optionally `useOllamaFormat` (default: false for OpenAI-compatible) and `apiKey` (sent as `Authorization: Bearer`).\n\nExample:\n```json\n[\n  {\n    \"name\": \"My Local Server\",\n    \"url\": \"http://127.0.0.1:8080\",\n    \"useOllamaFormat\": false\n  },\n  {\n    \"name\": \"Gemini\",\n    \"url\": \"https://generativelanguage.googleapis.com/v1beta/openai\",\n    \"useOllamaFormat\": false,\n    \"apiKey\": \"YOUR_GEMINI_API_KEY\"\n  }\n]\n```"
+          "markdownDescription": "Custom LLM providers. **OpenAI and Anthropic are already built-in** — use this for other cloud providers or self-hosted servers at non-default ports.\n\nAPI keys are stored securely in the OS keychain. Grom will prompt for a key the first time you select a provider that needs one.\n\n**Fields** (`name` and `url` are required, everything else is optional):\n- `providerFormat` — `openai` (default, works for almost everything) or `anthropic` for a self-hosted Claude-compatible proxy\n- `authType` — `bearer` (default), `x-api-key`, or `none` for keyless local servers\n- `useOllamaFormat` — `true` only for servers that use Ollama's `/api/chat` format instead of `/v1/chat/completions`\n\n**Examples:**\n```json\n[\n  { \"name\": \"Gemini\",     \"url\": \"https://generativelanguage.googleapis.com/v1beta/openai\" },\n  { \"name\": \"Groq\",       \"url\": \"https://api.groq.com/openai\" },\n  { \"name\": \"Mistral\",    \"url\": \"https://api.mistral.ai\" },\n  { \"name\": \"OpenRouter\", \"url\": \"https://openrouter.ai/api\" },\n  { \"name\": \"Together\",   \"url\": \"https://api.together.xyz\" },\n  { \"name\": \"Local (no key)\", \"url\": \"http://127.0.0.1:8080\", \"authType\": \"none\" },\n  { \"name\": \"Claude proxy\",   \"url\": \"https://my-proxy.example.com\", \"providerFormat\": \"anthropic\" }\n]\n```\n\nAll cloud providers above require an API key from their respective websites."
         },
         "grom.model": {
           "type": "string",
@@ -432,8 +435,9 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
+    "build": "npm run copy-media && npm run compile",
     "copy-media": "node scripts/build-highlight.mjs && node -e \"const fs=require('fs');fs.mkdirSync('media',{recursive:true});fs.cpSync('node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css','media/github-dark.min.css');fs.cpSync('node_modules/marked/lib/marked.umd.js','media/marked.min.js');\"",
-    "vscode:prepublish": "npm run copy-media && npm run compile",
+    "vscode:prepublish": "npm run build",
     "tsc": "tsc",
     "test": "mocha -r ts-node/register \"src/test/**/*.test.ts\""
   },

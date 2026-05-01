@@ -246,6 +246,38 @@ function wireSessionListClicks() {
   };
 }
 window.setProvider = (v) => { if (v.startsWith('custom:')) { const [, url, fmt] = v.split(':'); vscode.postMessage({ type: 'changeProvider', providerId: 'custom', url, useOllamaFormat: fmt === '1' }); } else { vscode.postMessage({ type: 'changeProvider', providerId: v }); } };
+
+function _updateKeyBtn(val, customProviders) {
+  const btn = document.getElementById('api-key-btn');
+  if (!btn) return;
+  if (val.startsWith('custom:')) {
+    const cp = customProviders?.[parseInt(val.split(':')[1])];
+    const needsKey = cp && !cp.useOllamaFormat && (cp.authType || 'bearer') !== 'none';
+    btn.style.display = needsKey ? '' : 'none';
+    btn.dataset.providerName = cp?.name || '';
+    btn.title = cp?.hasKey ? `Update API key for ${cp.name}` : `Set API key for ${cp.name}`;
+    btn.style.opacity = cp?.hasKey ? '0.5' : '1';
+  } else if (val === 'openai' || val === 'opencode' || val === 'anthropic') {
+    btn.style.display = '';
+    btn.dataset.providerId = val;
+    delete btn.dataset.providerName;
+    const labels = { openai: 'OpenAI', opencode: 'OpenCode', anthropic: 'Anthropic' };
+    btn.title = `Set API key for ${labels[val]}`;
+    btn.style.opacity = '0.5';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+window.setProviderKey = () => {
+  const btn = document.getElementById('api-key-btn');
+  if (!btn) return;
+  if (btn.dataset.providerName) {
+    vscode.postMessage({ type: 'setProviderKey', providerName: btn.dataset.providerName });
+  } else if (btn.dataset.providerId) {
+    vscode.postMessage({ type: 'setProviderKey', providerId: btn.dataset.providerId });
+  }
+};
 window.openSettings = () => vscode.postMessage({ type: 'openSettings' });
 
 window.toggleSearch = () => {
@@ -755,20 +787,23 @@ window.addEventListener('message', e => {
         if (val.startsWith('custom:')) {
           const idx = parseInt(val.split(':')[1]);
           const cp = ps._customProviders[idx];
-          vscode.postMessage({ type: 'changeProvider', providerId: 'custom', url: cp.url, useOllamaFormat: cp.useOllamaFormat ?? false });
+          vscode.postMessage({ type: 'changeProvider', providerId: 'custom', url: cp.url, useOllamaFormat: cp.useOllamaFormat ?? false, providerName: cp.name });
         } else {
           vscode.postMessage({ type: 'changeProvider', providerId: val });
         }
+        _updateKeyBtn(val, ps._customProviders);
       };
       // Set current selection
       if (m.useOllama) ps.value = 'ollama';
       else if (m.url?.includes('1234')) ps.value = 'lmstudio';
       else if (m.url?.includes('opencode')) ps.value = 'opencode';
       else if (m.url?.includes('openai.com')) ps.value = 'openai';
+      else if (m.url?.includes('anthropic.com')) ps.value = 'anthropic';
       else if (m.customProviders?.length) {
         const idx = m.customProviders.findIndex(cp => m.url?.startsWith(cp.url));
         if (idx >= 0) ps.value = `custom:${idx}`;
       }
+      _updateKeyBtn(ps.value, ps._customProviders);
       const capsBar = document.getElementById('model-caps');
       if (capsBar) {
           capsBar.innerHTML = '';

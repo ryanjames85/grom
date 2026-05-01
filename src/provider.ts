@@ -20,7 +20,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LocalLLMClient, ChatMessage } from './client';
+import { LocalLLMClient, ChatMessage, AuthType, ProviderFormat } from './client';
 import { SessionManager, ChatSession, TaskLogEntry } from './session';
 import { getCustomPrompts } from './context';
 import { insertCode, applyCode, diffCode, acceptDiff, diffAgentWrite } from './editor';
@@ -57,10 +57,61 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /** Resolves the secret storage key, auth type, and wire format for the active provider URL. */
+  private async _resolveProviderKey(url: string, useOllama: boolean): Promise<{ key: string | undefined; authType: AuthType; providerFormat: ProviderFormat }> {
+    if (useOllama) return { key: undefined, authType: 'none', providerFormat: 'ollama' };
+    const customProviders = vscode.workspace.getConfiguration('grom').get<any[]>('customProviders') || [];
+    const cp = customProviders.find(p => url.startsWith(p.url.replace(/\/+$/, '')));
+    if (cp) {
+      const providerFormat: ProviderFormat = cp.providerFormat || 'openai';
+      const authType: AuthType = cp.authType || (providerFormat === 'anthropic' ? 'x-api-key' : 'bearer');
+      const key = await this._context.secrets.get(`grom.key.custom.${cp.name}`);
+      return { key, authType, providerFormat };
+    }
+    if (url.includes('openai.com')) return { key: await this._context.secrets.get('grom.key.openai'), authType: 'bearer', providerFormat: 'openai' };
+    if (url.includes('opencode.ai')) return { key: await this._context.secrets.get('grom.key.opencode'), authType: 'bearer', providerFormat: 'openai' };
+    if (url.includes('anthropic.com')) return { key: await this._context.secrets.get('grom.key.anthropic'), authType: 'x-api-key', providerFormat: 'anthropic' };
+    return { key: undefined, authType: 'none', providerFormat: 'openai' };
+  }
+
+  /** One-time migration: moves any plaintext apiKey values out of settings and into SecretStorage. */
+  private async _migrateApiKeys() {
+    const cfg = vscode.workspace.getConfiguration('grom');
+    // Migrate old top-level grom.apiKey
+    const oldKey = cfg.get<string>('apiKey', '');
+    if (oldKey) {
+      const url = cfg.get<string>('apiUrl') || '';
+      const useOllama = cfg.get<boolean>('useOllamaFormat') ?? true;
+      if (!useOllama && url) {
+        const customProviders = cfg.get<any[]>('customProviders') || [];
+        const cp = customProviders.find(p => url.startsWith(p.url.replace(/\/+$/, '')));
+        if (cp) await this._context.secrets.store(`grom.key.custom.${cp.name}`, oldKey);
+        else if (url.includes('openai.com')) await this._context.secrets.store('grom.key.openai', oldKey);
+        else if (url.includes('opencode.ai')) await this._context.secrets.store('grom.key.opencode', oldKey);
+        else if (url.includes('anthropic.com')) await this._context.secrets.store('grom.key.anthropic', oldKey);
+      }
+      await cfg.update('apiKey', undefined, vscode.ConfigurationTarget.Global);
+    }
+    // Migrate apiKey fields embedded in customProviders array entries
+    const customProviders = cfg.get<any[]>('customProviders') || [];
+    let dirty = false;
+    const cleaned = await Promise.all(customProviders.map(async (cp) => {
+      if (cp.apiKey) {
+        await this._context.secrets.store(`grom.key.custom.${cp.name}`, cp.apiKey);
+        const { apiKey: _, ...rest } = cp;
+        dirty = true;
+        return rest;
+      }
+      return cp;
+    }));
+    if (dirty) await cfg.update('customProviders', cleaned, vscode.ConfigurationTarget.Global);
+  }
+
   public resolveWebviewView(webviewView: vscode.WebviewView) {
     this._view = webviewView;
     webviewView.webview.options = { enableScripts: true, localResourceRoots: [this._context.extensionUri] };
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+    void this._migrateApiKeys();
 
     // Keep the webview alive when the user switches to another panel so that
     // in-flight streaming chunks and approval cards are not lost.
@@ -232,24 +283,64 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           await this._checkConnection();
           break;
         case 'changeProvider': {
+          const cfg = vscode.workspace.getConfiguration('grom');
           let newUrl: string;
           let isOllama: boolean;
-          const cfg = vscode.workspace.getConfiguration('grom');
           if (data.providerId === 'custom') {
             newUrl = data.url;
             isOllama = data.useOllamaFormat ?? false;
-            await cfg.update('apiKey', data.apiKey || '', vscode.ConfigurationTarget.Global);
+            if (!isOllama) {
+              const cp = (cfg.get<any[]>('customProviders') || []).find((p: any) => p.name === data.providerName);
+              const authType: AuthType = cp?.authType || 'bearer';
+              if (authType !== 'none') {
+                const existing = await this._context.secrets.get(`grom.key.custom.${data.providerName}`);
+                if (!existing) {
+                  const entered = await vscode.window.showInputBox({ prompt: `Enter API key for ${data.providerName}`, password: true, ignoreFocusOut: true, placeHolder: 'sk-...' });
+                  if (entered?.trim()) await this._context.secrets.store(`grom.key.custom.${data.providerName}`, entered.trim());
+                }
+              }
+            }
           } else {
             isOllama = data.providerId === 'ollama';
             newUrl = 'http://127.0.0.1:11434';
             if (data.providerId === 'lmstudio') newUrl = 'http://127.0.0.1:1234';
-            else if (data.providerId === 'opencode') newUrl = 'https://api.opencode.ai';
-            else if (data.providerId === 'openai') newUrl = 'https://api.openai.com';
-            await cfg.update('apiKey', '', vscode.ConfigurationTarget.Global);
+            else if (data.providerId === 'opencode') {
+              newUrl = 'https://api.opencode.ai';
+              const existing = await this._context.secrets.get('grom.key.opencode');
+              if (!existing) {
+                const entered = await vscode.window.showInputBox({ prompt: 'Enter your OpenCode API key', password: true, ignoreFocusOut: true, placeHolder: 'sk-...' });
+                if (entered?.trim()) await this._context.secrets.store('grom.key.opencode', entered.trim());
+              }
+            } else if (data.providerId === 'openai') {
+              newUrl = 'https://api.openai.com';
+              const existing = await this._context.secrets.get('grom.key.openai');
+              if (!existing) {
+                const entered = await vscode.window.showInputBox({ prompt: 'Enter your OpenAI API key', password: true, ignoreFocusOut: true, placeHolder: 'sk-...' });
+                if (entered?.trim()) await this._context.secrets.store('grom.key.openai', entered.trim());
+              }
+            } else if (data.providerId === 'anthropic') {
+              newUrl = 'https://api.anthropic.com';
+              const existing = await this._context.secrets.get('grom.key.anthropic');
+              if (!existing) {
+                const entered = await vscode.window.showInputBox({ prompt: 'Enter your Anthropic API key', password: true, ignoreFocusOut: true, placeHolder: 'sk-ant-...' });
+                if (entered?.trim()) await this._context.secrets.store('grom.key.anthropic', entered.trim());
+              }
+            }
           }
           await cfg.update('useOllamaFormat', isOllama, vscode.ConfigurationTarget.Global);
           await cfg.update('apiUrl', newUrl, vscode.ConfigurationTarget.Global);
           await this._checkConnection(newUrl, data.model || 'qwen2.5-coder', isOllama);
+          break;
+        }
+        case 'setProviderKey': {
+          const label = data.providerName || data.providerId;
+          const secretKey = data.providerName ? `grom.key.custom.${data.providerName}` : `grom.key.${data.providerId}`;
+          const entered = await vscode.window.showInputBox({ prompt: `API key for ${label} (leave blank to clear)`, password: true, ignoreFocusOut: true, placeHolder: 'sk-...' });
+          if (entered !== undefined) {
+            if (entered.trim()) await this._context.secrets.store(secretKey, entered.trim());
+            else await this._context.secrets.delete(secretKey);
+            await this._checkConnection();
+          }
           break;
         }
       }
@@ -473,7 +564,10 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           const userMsg = firstUserMsg.content.slice(0, 200);
           const prompt = `Summarize this user request into a concise 3-word title (no quotes, no punctuation): "${userMsg}"`;
           const cfg = vscode.workspace.getConfiguration('grom');
-          const titleClient = new LocalLLMClient(cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434', cfg.get<string>('model') || 'qwen2.5-coder', cfg.get<boolean>('useOllamaFormat') ?? true, cfg.get<string>('apiKey', '') || undefined);
+          const titleUrl = cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434';
+          const titleUseOllama = cfg.get<boolean>('useOllamaFormat') ?? true;
+          const { key: titleKey, authType: titleAuthType, providerFormat: titleFormat } = await this._resolveProviderKey(titleUrl, titleUseOllama);
+          const titleClient = new LocalLLMClient(titleUrl, cfg.get<string>('model') || 'qwen2.5-coder', titleUseOllama, titleKey, titleAuthType, titleFormat);
           const titleAbort = new AbortController();
           const titleTimeout = setTimeout(() => titleAbort.abort(), 8000);
           const aiTitle = await titleClient.chat([{ role: 'user', content: prompt }], titleAbort.signal);
@@ -511,19 +605,32 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
-      const apiKey = config.get<string>('apiKey', '');
-      const client = new LocalLLMClient(url, model, useOllama, apiKey || undefined);
+      const { key, authType, providerFormat } = await this._resolveProviderKey(url, useOllama);
+      const client = new LocalLLMClient(url, model, useOllama, key, authType, providerFormat);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       const models = await client.getAvailableModels(controller.signal);
-      const caps = await client.getCapabilities(controller.signal);
+      // If the stored model isn't served by this provider, snap to the first available one.
+      // This happens on first connect when settings still hold the previous provider's model name.
+      const activeModel = models.length > 0 && !models.includes(model) ? models[0] : model;
+      const capsClient = activeModel !== model
+        ? new LocalLLMClient(url, activeModel, useOllama, key, authType, providerFormat)
+        : client;
+      const caps = await capsClient.getCapabilities(controller.signal);
       clearTimeout(timeout);
+      if (activeModel !== model) {
+        await vscode.workspace.getConfiguration('grom').update('model', activeModel, vscode.ConfigurationTarget.Global);
+      }
       const agentEnabled = vscode.workspace.getConfiguration('grom').get<boolean>('agentEnabled', true);
       const mcpToolCount = this._mcp.getAllTools().length;
       // Tools icon: show if model supports it OR Grom's own agent/MCP tools are active
       if (agentEnabled || mcpToolCount > 0) caps.tools = true;
-      const customProviders = vscode.workspace.getConfiguration('grom').get<any[]>('customProviders') || [];
-      this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model, models, caps, useOllama, customProviders });
+      const rawProviders = vscode.workspace.getConfiguration('grom').get<any[]>('customProviders') || [];
+      const customProviders = await Promise.all(rawProviders.map(async (cp: any) => ({
+        name: cp.name, url: cp.url, useOllamaFormat: cp.useOllamaFormat, authType: cp.authType || 'bearer',
+        hasKey: !!(await this._context.secrets.get(`grom.key.custom.${cp.name}`))
+      })));
+      this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model: activeModel, models, caps, useOllama, customProviders });
     } catch (err: any) {
       const isNetworkError = err.message?.includes('fetch failed') || err.name === 'AbortError' || err.message?.includes('ECONNREFUSED');
       this._view?.webview.postMessage({ type: 'statusUpdate', status: isNetworkError ? 'Disconnected' : 'Error', color: 'var(--vscode-errorForeground)', url, useOllama });

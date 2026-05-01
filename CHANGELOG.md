@@ -4,9 +4,35 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.0] — 2026-05-01
+
+### New
+
+- **Anthropic / Claude** — built-in provider using the native `/v1/messages` API; system messages extracted to the top-level `system` field, correct SSE `content_block_delta` streaming, Anthropic image format, and a static fallback model list if `/v1/models` is unreachable
+- **OpenAI built-in** — OpenAI added to the provider dropdown alongside Ollama, LM Studio, Open Code, and Anthropic; no custom provider entry needed
+- **Secure API key storage** — keys are no longer stored in `settings.json`; Grom prompts on first select and stores keys in the OS keychain (Windows Credential Manager, macOS Keychain, libsecret on Linux) via VS Code SecretStorage. Existing `apiKey` entries in settings are migrated automatically on first load
+- **Lock icon** — click the padlock next to the provider dropdown to update or clear a stored key at any time
+- **`authType` field** — custom providers now accept `bearer` (default), `x-api-key`, or `none`; controls which auth header is sent
+- **`providerFormat` field** — custom providers now accept `openai` (default) or `anthropic`; selects the correct wire format for chat requests
+- **`npm run build`** — combined `copy-media + compile` shortcut for development
+
+### Fixed
+
+- **First-load capability detection** — when the model stored in settings is not served by the active provider (e.g. switching from Ollama to LM Studio), Grom now snaps to the first available model for capability detection instead of computing capabilities against the wrong model name and returning stale results. The active model is also persisted so subsequent loads are correct
+- **`window.toggleMode` on cold start** — missing media files (`marked.min.js`, `highlight.min.js`, `github-dark.min.css`) caused `main.js` to throw before `toggleMode` was defined; fixed by ensuring `npm run build` is run as part of the dev setup
+
+### Internal
+
+- **`src/providers.ts`** — all provider implementations (`OllamaProvider`, `OpenAICompatibleProvider`, `AnthropicProvider`) and the `createProvider` factory extracted from `client.ts` into their own module; adding a new provider now requires one class and one line in the factory
+- **`src/client.ts`** — reduced to a thin `LocalLLMClient` facade; re-exports types for backwards compatibility with all existing importers
+- **18 new tests** — auth type header construction (`bearer`, `x-api-key`, `none`) and full Anthropic provider coverage (streaming, non-streaming, system message extraction, image format, models fallback, capabilities, error paths); 178 tests total
+
+---
+
 ## [0.2.2] — 2026-04-29
 
 ### New
+
 - **API key support** — custom providers now accept an optional `apiKey` field; sent as `Authorization: Bearer <key>` on every request, enabling cloud providers like Google Gemini to be used alongside local models
 
 ---
@@ -14,6 +40,7 @@ All notable changes to Grom are documented here.
 ## [0.2.1] — 2026-04-28
 
 ### Fixed
+
 - **Hybrid RAG** — replaced fixed-weight score blend (35% BM25 + 65% cosine) with Reciprocal Rank Fusion (RRF), eliminating the score-normalisation instability that could suppress good BM25 results
 - **Semantic query embedding** — query-time embedding was silently returning null due to a missing config reference; semantic retrieval now works correctly end-to-end
 - **File watcher** — re-index was triggering on every file change regardless of type; now only indexed extensions (`.ts`, `.py`, `.md`, etc.) schedule a re-index
@@ -23,6 +50,7 @@ All notable changes to Grom are documented here.
 ## [0.2.0] — 2026-04-28
 
 ### New
+
 - **BM25 search** — replaced TF-IDF with BM25 for significantly better keyword retrieval quality; improves RAG results for everyone with no config required
 - **Composer diff review** — the 💾 Save button now opens a side-by-side diff before writing; Accept applies, Skip discards. New files are still written immediately.
 - **`browse_web` agent tool** — the agentic loop can now fetch and read live web pages, enabling research, doc lookups, and API checks during tasks
@@ -32,6 +60,7 @@ All notable changes to Grom are documented here.
 ## [0.1.2] — 2026-04-28
 
 ### Internal
+
 - Made `.btn-cancel` self-contained, removing dependency on `.icon-btn`
 
 ---
@@ -39,6 +68,7 @@ All notable changes to Grom are documented here.
 ## [0.1.1] — 2026-04-27
 
 ### Internal
+
 - Removed all debug logging left over from session rename development
 - Moved all inline styles out of `webview.html` and `main.js` into named CSS classes in `styles.css`
 - Fixed `copy-media` build script referencing stale `src/webview/` paths
@@ -52,6 +82,7 @@ All notable changes to Grom are documented here.
 Initial public release.
 
 ### Core chat
+
 - Streaming chat panel with Markdown rendering and syntax highlighting
 - PLAN / BUILD mode toggle — adjusts system prompt tone for architecture vs. implementation
 - Multiple sessions with rename, delete, compact, export to Markdown, and import from Markdown
@@ -66,6 +97,7 @@ Initial public release.
 - Context window indicator — radial progress circle shows token usage
 
 ### Agentic loop
+
 - Built-in file tools: `read_file`, `write_file`, `delete_file`, `list_directory`, `search_files`, `run_terminal`
 - MCP (Model Context Protocol) server support — connects to any stdio MCP server configured in settings
 - Tool name namespacing (`serverName__toolName`) to avoid collisions across servers
@@ -75,6 +107,7 @@ Initial public release.
 - Agent loop hardening: prose suppression in JSON mode, one reprompt nudge when model drifts mid-task
 
 ### Context providers (@ mentions)
+
 - `@filename` — attaches a workspace file by fuzzy name match
 - `@problems` — all current VS Code errors and warnings
 - `@git` — uncommitted diff (`git diff HEAD`)
@@ -83,17 +116,20 @@ Initial public release.
 - `@docs` / `@docs:name` — searches indexed documentation sources
 
 ### RAG
+
 - Workspace codebase indexing with TF-IDF + optional semantic embeddings via Ollama
 - Bigram matching, exact-substring 2× boost, filename 1.3× boost
 - Automatic re-index on file change (3-second debounce)
 - One-time prompt to configure an embedding model if none is set
 
 ### Docs indexing
+
 - Crawls configured documentation URLs (up to 40 pages per source, same-origin only)
 - TF-IDF retrieval with `@docs` context mentions
 - Re-indexes on `grom.docSources` config change
 
 ### Autocomplete
+
 - Inline ghost-text completions via VS Code's InlineCompletionItemProvider
 - FIM (fill-in-the-middle) prompt format
 - Adaptive debounce — slows down automatically when acceptance rate is low
@@ -102,12 +138,14 @@ Initial public release.
 - Per-language model overrides (`grom.autocompleteLanguageModels`)
 
 ### Editor commands
+
 - **Inline edit** (`grom.inlineEdit`) — select code, give an instruction, review diff, accept or reject
 - **Composer** (`/compose`) — multi-file changes with per-file review, path-traversal guards, and undo
 - **Explain / Refactor** — right-click or command palette actions that pre-fill the chat
 - **Run in Terminal** — code blocks have a Run button that sends the command to the active terminal
 
 ### Settings & configuration
+
 - Supports Ollama, LM Studio, and any OpenAI-compatible API
 - Per-language model routing (`grom.chatLanguageModels`, `grom.languageModels`)
 - Custom slash commands via `.grom/*.md` files in the workspace
@@ -117,6 +155,7 @@ Initial public release.
 - Documentation sources (`grom.docSources`)
 
 ### Developer / quality
+
 - All pure-logic modules (`rag.ts`, `docs-index.ts`, `client.ts`, `composer.ts`) are VS Code-free and unit-testable without stubs
 - 96 unit tests covering session management, RAG scoring, streaming client, MCP parsing, and editor utilities
 - Error boundary in webview — JS crashes show a dismissable banner with a Reload button instead of a silent blank panel
@@ -126,7 +165,7 @@ Initial public release.
 ### Configuration reference
 
 | Setting | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `grom.apiUrl` | `http://127.0.0.1:11434` | LLM server base URL |
 | `grom.model` | `qwen2.5-coder` | Chat model |
 | `grom.useOllamaFormat` | `true` | Use Ollama API format |
