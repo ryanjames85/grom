@@ -192,6 +192,14 @@ Type `/` to open the command menu:
 
 Grom works with local servers (no account or key needed) or cloud providers (bring your own key).
 
+**Editors:**
+
+Grom runs in VS Code and any VS Code-compatible editor:
+
+- [Visual Studio Code](https://code.visualstudio.com/) — recommended
+- [Google Antigravity](https://antigravity.dev/) — confirmed working
+- Cursor, Windsurf, and other VS Code forks should work too
+
 **Local — runs entirely on your machine:**
 
 - [Ollama](https://ollama.com/) — recommended, free, runs most open models

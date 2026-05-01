@@ -2,13 +2,14 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "local-llm-dev",
   "icon": "resources/icon.png",
   "license": "PolyForm-Noncommercial-1.0.0",
   "categories": [
     "AI",
     "Chat",
+    "Machine Learning",
     "Other"
   ],
   "keywords": [
@@ -17,10 +18,23 @@
     "local",
     "ollama",
     "lmstudio",
+    "anthropic",
+    "claude",
+    "openai",
     "chat",
+    "code-completion",
+    "autocomplete",
+    "agent",
+    "mcp",
+    "rag",
     "privacy",
     "offline",
-    "copilot"
+    "local-ai",
+    "code-assistant",
+    "copilot-alternative",
+    "deepseek",
+    "qwen",
+    "byollm"
   ],
   "repository": {
     "type": "git",

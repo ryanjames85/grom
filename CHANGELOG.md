@@ -4,6 +4,16 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.1] — 2026-05-01
+
+### Fixed
+
+- **Custom provider/model dropdowns** — replaced native OS `<select>` elements with fully styled custom dropdowns; consistent look across all platforms, accent-coloured border on open, chevron animation, selected option highlighted, long model names truncate with ellipsis
+- **Anthropic missing from provider list** — Anthropic disappeared from the provider dropdown after the first status update due to it being omitted from the JS rebuild; now always included
+- **Narrow panel layout** — provider row wraps at ≤ 280 px (model select drops to a full-width second line); bottom input toolbar wraps at ≤ 280 px; lower-priority header icons (compact, system prompt, export, import) hide at ≤ 240 px; status label collapses to dot-only at ≤ 240 px; long words in chat messages no longer overflow
+
+---
+
 ## [0.3.0] — 2026-05-01
 
 ### New

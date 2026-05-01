@@ -8,6 +8,43 @@ let _requestId = 0; // incremented on each send; used to discard stale Ready/chu
 let _cancelActiveRename = null; // call this before any session list re-render
 let _userScrolledUp = false;
 const scrollBtn = document.getElementById('scroll-to-bottom');
+
+function _escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function _initGromSelect(elId) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.innerHTML = `<button class="grom-select-btn" type="button"><span class="grom-select-label">—</span><svg class="grom-select-chevron" width="8" height="5" viewBox="0 0 8 5" fill="currentColor"><path d="M0 0l4 5 4-5z"/></svg></button><div class="grom-select-menu"></div>`;
+  const btn = el.querySelector('.grom-select-btn'), lbl = el.querySelector('.grom-select-label'), menu = el.querySelector('.grom-select-menu');
+  let _val = '', _opts = [], _change = null;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const was = el.classList.contains('open');
+    document.querySelectorAll('.grom-select.open').forEach(s => s.classList.remove('open'));
+    if (!was) el.classList.add('open');
+  });
+  document.addEventListener('click', () => el.classList.remove('open'));
+  el.setOptions = opts => {
+    _opts = opts;
+    menu.innerHTML = opts.map(o => `<div class="grom-select-option${o.value === _val ? ' selected' : ''}" data-value="${_escHtml(o.value)}"><span class="grom-select-opt-label">${_escHtml(o.label)}</span></div>`).join('');
+    menu.querySelectorAll('.grom-select-option').forEach(opt => opt.addEventListener('click', e => {
+      e.stopPropagation();
+      const v = opt.dataset.value;
+      el.setValue(v);
+      el.classList.remove('open');
+      if (_change) _change({ target: { value: v } });
+    }));
+  };
+  el.setValue = v => {
+    _val = v;
+    const o = _opts.find(o => o.value === v);
+    lbl.textContent = o ? o.label : (v || '—');
+    menu.querySelectorAll('.grom-select-option').forEach(o2 => o2.classList.toggle('selected', o2.dataset.value === v));
+  };
+  Object.defineProperty(el, 'value', { get: () => _val, set: v => el.setValue(v), configurable: true });
+  Object.defineProperty(el, 'onchange', { set: fn => { _change = fn; }, configurable: true });
+}
+_initGromSelect('provider-select');
+_initGromSelect('model-select');
 chatContainer.addEventListener('scroll', () => {
   const atBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 60;
   _userScrolledUp = !atBottom;
@@ -771,16 +808,15 @@ window.addEventListener('message', e => {
       }
       updateGromLogo();
       const ps = document.getElementById('provider-select');
-      // Rebuild dropdown to include any custom providers
-      ps.innerHTML = `<option value="ollama">Ollama</option><option value="lmstudio">LM Studio</option><option value="opencode">Open Code</option><option value="openai">OpenAI</option>`;
-      if (m.customProviders?.length) {
-        m.customProviders.forEach((cp, i) => {
-          const opt = document.createElement('option');
-          opt.value = `custom:${i}`;
-          opt.textContent = cp.name;
-          ps.appendChild(opt);
-        });
-      }
+      const providerOpts = [
+        { value: 'ollama',    label: 'Ollama' },
+        { value: 'lmstudio', label: 'LM Studio' },
+        { value: 'opencode', label: 'Open Code' },
+        { value: 'openai',   label: 'OpenAI' },
+        { value: 'anthropic',label: 'Anthropic' },
+        ...(m.customProviders || []).map((cp, i) => ({ value: `custom:${i}`, label: cp.name }))
+      ];
+      ps.setOptions(providerOpts);
       ps._customProviders = m.customProviders || [];
       ps.onchange = (ev) => {
         const val = ev.target.value;
@@ -793,7 +829,6 @@ window.addEventListener('message', e => {
         }
         _updateKeyBtn(val, ps._customProviders);
       };
-      // Set current selection
       if (m.useOllama) ps.value = 'ollama';
       else if (m.url?.includes('1234')) ps.value = 'lmstudio';
       else if (m.url?.includes('opencode')) ps.value = 'opencode';
@@ -811,7 +846,7 @@ window.addEventListener('message', e => {
           if (m.caps?.vision) capsBar.innerHTML += `<div class="cap-icon cap-vision" title="Vision model — can process images"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E8A838" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></div>`;
           if (m.caps?.tools) capsBar.innerHTML += `<div class="cap-icon cap-tools" title="Tool use — can call functions"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3B8FCC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></div>`;
       }
-      if (m.model) { const ms = document.getElementById('model-select'); ms.innerHTML = m.models.map(mdl => `<option value="${mdl}" ${mdl === m.model ? 'selected' : ''}>${mdl}</option>`).join(''); ms.onchange = (ev) => vscode.postMessage({ type: 'changeModel', model: ev.target.value }); }
+      if (m.model) { const ms = document.getElementById('model-select'); ms.setOptions((m.models || []).map(mdl => ({ value: mdl, label: mdl }))); ms.value = m.model; ms.onchange = (ev) => vscode.postMessage({ type: 'changeModel', model: ev.target.value }); }
       break;
     case 'usageUpdate': {
       const circle = document.getElementById('usage-fill'), circ = 56.5;
