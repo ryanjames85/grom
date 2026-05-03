@@ -117,8 +117,11 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
    */
   function safePath(raw: string): { uri: vscode.Uri; rel: string } | { error: string } {
     if (!root) return { error: 'No workspace folder open.' };
+    // Normalize and prevent absolute paths or traversal
     const rel = (raw as string).replace(/\\/g, '/').replace(/^\/+/, '');
-    if (rel.includes('..') || rel.startsWith('/')) return { error: 'Path traversal not allowed.' };
+    if (rel.includes('..') || /^[a-zA-Z]:/.test(rel) || rel.startsWith('/')) {
+      return { error: 'Path traversal or absolute paths not allowed.' };
+    }
     return { uri: vscode.Uri.joinPath(root, rel), rel };
   }
 
@@ -149,11 +152,10 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
     }
 
     case 'list_directory': {
-      if (!root) return 'Error: No workspace folder open.';
-      const subPath = ((args.path as string) || '').replace(/\\/g, '/').replace(/^\/+/, '');
-      if (subPath.includes('..')) return 'Error: Path traversal not allowed.';
+      const p = safePath((args.path as string) || '');
+      if ('error' in p) return `Error: ${p.error}`;
       try {
-        const uri = subPath ? vscode.Uri.joinPath(root, subPath) : root;
+        const uri = p.uri;
         const entries = await vscode.workspace.fs.readDirectory(uri);
         const lines = entries
           .filter(([n]) => !BLOCKED_DIRS.has(n))
@@ -175,36 +177,48 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
     case 'search_files': {
       const pattern = args.pattern as string;
       const glob = (args.glob as string) || '**/*';
+      const exclude = Array.from(BLOCKED_DIRS).map(d => `**/${d}/**`).join(',');
       try {
         let re: RegExp;
-        // Treat the pattern as a regex; fall back to literal string if it's invalid regex
         try { re = new RegExp(pattern, 'gi'); } catch { re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); }
-        const files = await vscode.workspace.findFiles(glob, '**/node_modules/**', 300);
-        const matches: string[] = [];
-        for (const uri of files) {
-          if (matches.length >= 60) { matches.push('...(more results omitted)'); break; }
-          try {
-            const bytes = await vscode.workspace.fs.readFile(uri);
-            const text = Buffer.from(bytes).toString('utf8');
-            const lines = text.split('\n');
-            const rel = vscode.workspace.asRelativePath(uri);
-            for (let i = 0; i < lines.length && matches.length < 60; i++) {
-              re.lastIndex = 0;
-              if (re.test(lines[i])) matches.push(`${rel}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
-            }
-          } catch { /* unreadable file — skip */ }
+
+        async function performSearch(regex: RegExp): Promise<string[]> {
+          const files = await vscode.workspace.findFiles(glob, `{${exclude}}`, 300);
+          const results: string[] = [];
+          for (const uri of files) {
+            if (results.length >= 60) { results.push('...(more results omitted)'); break; }
+            try {
+              const bytes = await vscode.workspace.fs.readFile(uri);
+              const text = Buffer.from(bytes).toString('utf8');
+              const lines = text.split('\n');
+              const rel = vscode.workspace.asRelativePath(uri);
+              for (let i = 0; i < lines.length && results.length < 60; i++) {
+                regex.lastIndex = 0;
+                if (regex.test(lines[i])) results.push(`${rel}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
+              }
+            } catch { /* unreadable file — skip */ }
+          }
+          return results;
         }
-        return matches.length ? matches.join('\n') : 'No matches found.';
+
+        let matches = await performSearch(re);
+
+        // Deep Dive Fallback: if no results found with regex, try a case-insensitive literal search
+        if (matches.length === 0) {
+          const fuzzyRe = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+          matches = await performSearch(fuzzyRe);
+        }
+
+        return matches.length > 0 ? matches.join('\n') : 'No matches found.';
       } catch (e: any) { return `Error searching: ${e.message}`; }
     }
 
     case 'run_terminal': {
       const command = args.command as string;
-      // Show the command in the visible terminal so the user can see what's running
+      // Capture output via child_process so the result can be fed back to the model.
+      // We show the terminal but don't send text to it to avoid double-execution.
       const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Grom Agent');
       terminal.show(true);
-      terminal.sendText(command);
-      // Also capture output via child_process so the result can be fed back to the model
       return new Promise((resolve) => {
         const { exec } = require('child_process') as typeof import('child_process');
         const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

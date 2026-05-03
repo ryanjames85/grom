@@ -37,7 +37,13 @@ describe('LocalLLMClient', () => {
 
   it('detects vision and tools for Ollama models', async () => {
     const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder', true);
-    fetchStub.resolves({ ok: true, json: async () => ({ model_info: { 'qwen.vision': true, 'qwen.tools': true } }) } as any);
+    fetchStub.resolves({ 
+      ok: true, 
+      json: async () => ({ 
+        details: { families: ['vision'] },
+        model_info: { 'projector.0': 'clip', 'tools': true } 
+      }) 
+    } as any);
     const caps = await client.getCapabilities();
     expect(caps.vision).to.be.true;
     expect(caps.tools).to.be.true;

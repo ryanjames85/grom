@@ -148,6 +148,7 @@ export class AgentLoop {
     updateUsageDisplay();
 
     const agentEnabled = config.get<boolean>('agentEnabled', true);
+    await this.deps.mcp.waitForReady(3000); // give MCP servers a moment to handshake
     const mcpTools = this.deps.mcp.getAllTools();
     const allTools = (agentEnabled && mode === 'build') ? [...BUILTIN_TOOLS, ...mcpTools] : mcpTools;
     const isCompose = text.trimStart().startsWith('/compose');
@@ -210,7 +211,7 @@ export class AgentLoop {
             ];
             continue;
           }
-          if (!proseStreamed && fullText.trim()) {
+          if (fullText.trim()) {
             this.deps.postMessage({ type: 'chunk', text: fullText });
           }
           if (isCompose) {
@@ -264,8 +265,16 @@ export class AgentLoop {
           rawResult = `Error: ${e.message}`;
         }
 
-        toolCallMade = true;
         this.deps.appendTaskLog(session.id, parsed.tool, parsed.args, rawResult);
+        toolCallMade = true;
+
+        // Update permanent history so follow-up turns have context of what was done
+        session.history.push({ role: 'assistant', content: fullText });
+        session.history.push({ role: 'user', content: `Tool \`${parsed.tool}\` returned:\n\`\`\`\n${rawResult}\n\`\`\`` });
+        session.tokens.output += fullText.length / 4;
+        session.tokens.input += rawResult.length / 4;
+        saveState();
+        updateUsageDisplay();
 
         toolMessages = [...toolMessages,
           { role: 'assistant', content: fullText },
@@ -298,25 +307,20 @@ export class AgentLoop {
     jsonMode = false
   ): Promise<{ fullText: string; proseStreamed: boolean }> {
     let inThink = false;
-    let thinkBuffer = '';
     let proseStreamed = false;
+    let accumulatedText = '';
 
     const fullText = await this._client!.streamChatWithCallback(messages, (chunk) => {
-      if (jsonMode) return; // mid-task: suppress all streaming, just accumulate
+      accumulatedText += chunk;
+      if (jsonMode) return; // mid-task: suppress all streaming
 
       // Stream thinking tokens live so the user can see the model is working
-      if (!inThink && chunk.includes('<think>')) inThink = true;
+      if (!inThink && accumulatedText.includes('<think>')) inThink = true;
       if (inThink) {
-        thinkBuffer += chunk;
-        if (chunk.includes('</think>')) {
-          inThink = false;
-          this.deps.postMessage({ type: 'chunk', text: thinkBuffer });
-          proseStreamed = true;
-          thinkBuffer = '';
-        }
-        return;
+        this.deps.postMessage({ type: 'chunk', text: accumulatedText });
+        proseStreamed = true;
+        if (accumulatedText.includes('</think>')) inThink = false;
       }
-      // Non-thinking content is buffered — posted all at once after tool-call check
     }, this._abortController?.signal, jsonMode);
 
     return { fullText, proseStreamed };

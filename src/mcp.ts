@@ -183,6 +183,8 @@ class StdioMcpServer implements McpServer {
  */
 export class McpManager {
   private _servers: McpServer[] = [];
+  private _ready = false;
+  private _initPromise: Promise<void> | null = null;
 
   /**
    * Disposes any running servers, then reads grom.mcpServers from VS Code settings
@@ -190,6 +192,12 @@ export class McpManager {
    * don't prevent other servers from starting.
    */
   async initialize(): Promise<void> {
+    this._ready = false;
+    this._initPromise = this._doInitialize();
+    return this._initPromise;
+  }
+
+  private async _doInitialize(): Promise<void> {
     this._servers.forEach(s => s.dispose());
     this._servers = [];
 
@@ -212,7 +220,19 @@ export class McpManager {
         vscode.window.showWarningMessage(`Grom: MCP server "${name}" failed to connect — ${r.reason?.message}`);
       }
     }
+    this._ready = true;
   }
+
+  async waitForReady(timeoutMs = 5000): Promise<void> {
+    if (this._ready) return;
+    if (!this._initPromise) return;
+    await Promise.race([
+      this._initPromise,
+      new Promise(r => setTimeout(r, timeoutMs))
+    ]);
+  }
+
+  isReady(): boolean { return this._ready; }
 
   /** Returns all tools from all running servers, namespaced as "serverName__toolName". */
   getAllTools(): McpTool[] {

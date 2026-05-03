@@ -14,8 +14,6 @@ No cloud. No account. No telemetry. No dark patterns. No upsell.
 
 Just you, your code, and Grom.
 
-> Built by one person in Ireland. Shipped with care.
-
 ---
 
 ## Why Grom?
@@ -81,7 +79,7 @@ Use `@` in any message to attach context:
 
 | Mention | What it includes |
 | --- | --- |
-| `@filename` | Any workspace file (fuzzy search) |
+| `@filename` | Any workspace file — open tabs shown first |
 | `@problems` | All current VS Code errors and warnings |
 | `@git` | Your current uncommitted diff (`git diff HEAD`) |
 | `@terminal` | Recent output from the integrated terminal |

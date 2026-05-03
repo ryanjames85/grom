@@ -1,4 +1,4 @@
-﻿/**
+/**
  * provider.ts
  *
  * WebviewViewProvider that drives the Grom chat panel â€” the central hub of the extension.
@@ -129,7 +129,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         this._checkConnection();
         this._updateTheme();
         this._loadAllSessions();
-        if (e.affectsConfiguration('grom.mcpServers')) this._mcp.initialize();
+        if (e.affectsConfiguration('grom.mcpServers')) {
+          this._mcp.initialize().then(() => this._checkConnection());
+        }
       }
     });
 
@@ -160,6 +162,19 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Grom');
           terminal.show(true);
           terminal.sendText(data.code);
+          break;
+        }
+        case 'openFile': {
+          const folders = vscode.workspace.workspaceFolders;
+          if (!folders?.length) break;
+          const normalised = (data.path as string).replace(/\\/g, '/').replace(/^\/+/, '');
+          const uri = vscode.Uri.joinPath(folders[0].uri, normalised);
+          try {
+            const doc = await vscode.workspace.openTextDocument(uri);
+            await vscode.window.showTextDocument(doc, { preview: false });
+          } catch (e) {
+            vscode.window.showErrorMessage(`Could not open ${data.path}. Make sure it exists in the workspace.`);
+          }
           break;
         }
         case 'newSession': this._createNewSession(); break;
@@ -274,8 +289,30 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           vscode.commands.executeCommand('workbench.action.openSettings', '@ext:local-llm-dev.grom');
           break;
         case 'getFiles': {
-          const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**', 50);
-          webviewView.webview.postMessage({ type: 'fileList', files: files.map(f => ({ name: f.fsPath.split(/[\\\/]/).pop(), path: f.fsPath })) });
+          // Collect open tabs first — these are highest priority
+          const openPaths = new Set<string>();
+          const openFiles: { name: string; path: string; group: string }[] = [];
+          for (const tg of vscode.window.tabGroups.all) {
+            for (const tab of tg.tabs) {
+              const input = tab.input as any;
+              if (input?.uri) {
+                const p = input.uri.fsPath;
+                if (!openPaths.has(p)) {
+                  openPaths.add(p);
+                  openFiles.push({ name: p.split(/[\\\/]/).pop()!, path: p, group: 'open' });
+                }
+              }
+            }
+          }
+          // Workspace files excluding already-open ones
+          const wsFiles = await vscode.workspace.findFiles('**/*', '**/node_modules/**', 80);
+          const allFiles = [
+            ...openFiles,
+            ...wsFiles
+              .filter(f => !openPaths.has(f.fsPath))
+              .map(f => ({ name: f.fsPath.split(/[\\\/]/).pop()!, path: f.fsPath, group: 'file' }))
+          ];
+          webviewView.webview.postMessage({ type: 'fileList', files: allFiles });
           break;
         }
         case 'changeModel':
@@ -605,6 +642,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
+      await this._mcp.waitForReady(2000); // Wait briefly for MCP servers on first connect
       const { key, authType, providerFormat } = await this._resolveProviderKey(url, useOllama);
       const client = new LocalLLMClient(url, model, useOllama, key, authType, providerFormat);
       const controller = new AbortController();
@@ -621,10 +659,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       if (activeModel !== model) {
         await vscode.workspace.getConfiguration('grom').update('model', activeModel, vscode.ConfigurationTarget.Global);
       }
-      const agentEnabled = vscode.workspace.getConfiguration('grom').get<boolean>('agentEnabled', true);
       const mcpToolCount = this._mcp.getAllTools().length;
-      // Tools icon: show if model supports it OR Grom's own agent/MCP tools are active
-      if (agentEnabled || mcpToolCount > 0) caps.tools = true;
+      // Tools icon: show if model supports it natively OR if MCP tools are available via Grom
+      if (mcpToolCount > 0) caps.tools = true;
       const rawProviders = vscode.workspace.getConfiguration('grom').get<any[]>('customProviders') || [];
       const customProviders = await Promise.all(rawProviders.map(async (cp: any) => ({
         name: cp.name, url: cp.url, useOllamaFormat: cp.useOllamaFormat, authType: cp.authType || 'bearer',

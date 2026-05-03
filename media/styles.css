@@ -80,8 +80,9 @@ textarea { width: 100%; background: transparent; color: inherit; border: none; o
 .toolbar-left { display: flex; gap: 2px; align-items: center; }
 .toolbar-right { display: flex; gap: 12px; align-items: center; }
 .tool-icon { font-size: 16px; cursor: pointer; opacity: 0.6; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 4px; flex-shrink: 0; }
-.cap-icon { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0; transition: transform 0.15s; cursor: default; }
+.cap-icon { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0; transition: all 0.2s; cursor: default; }
 .cap-icon:hover { transform: scale(1.2); }
+.cap-icon.inactive { opacity: 0.2; filter: grayscale(1); }
 .cap-icon svg { stroke-width: 2.5; }
 .cap-vision { background: rgba(232, 168, 56, 0.25); border: 1px solid rgba(232, 168, 56, 0.5); }
 .cap-vision svg { stroke: #E8A838; }
@@ -125,6 +126,7 @@ textarea { width: 100%; background: transparent; color: inherit; border: none; o
 #file-picker { max-height: 240px; overflow-y: auto; }
 .menu-item { padding: 10px 15px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
 .menu-item:hover { background: var(--vscode-list-hoverBackground); }
+.file-open-badge { font-size: 9px; opacity: 0.45; margin-left: auto; padding: 1px 5px; border-radius: 3px; background: var(--vscode-button-secondaryBackground); white-space: nowrap; }
 
 pre { background: #1e1e1e !important; padding: 10px; border-radius: 8px; border: 1px solid #333; margin: 10px 0; overflow-x: auto; }
 .code-header { display: flex; justify-content: flex-end; gap: 5px; margin-bottom: -30px; padding: 5px; z-index: 5; position: relative; }
@@ -339,3 +341,11 @@ body.grom-thinking .antenna { animation: antenna-bob 0.9s ease-in-out infinite; 
 .grom-select-option:hover { background: var(--vscode-list-hoverBackground); }
 .grom-select-option.selected { color: var(--accent); font-weight: 500; }
 .grom-select-opt-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+#indexing-indicator { display: flex; align-items: center; gap: 6px; font-size: 10px; opacity: 0.8; color: var(--accent); margin-left: 4px; padding: 2px 6px; background: rgba(232, 168, 56, 0.05); border-radius: 4px; white-space: nowrap; }
+.indexing-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: indexing-pulse 1.5s infinite ease-in-out; }
+@keyframes indexing-pulse { 0%, 100% { transform: scale(0.85); opacity: 0.4; } 50% { transform: scale(1.15); opacity: 1; } }
+
+.file-link { color: var(--accent); cursor: pointer; border-bottom: 1px dashed rgba(232, 168, 56, 0.3); transition: all 0.2s; }
+.file-link:hover { border-bottom-color: var(--accent); opacity: 1; filter: brightness(1.2); }
+.file-link::before { content: '📄'; font-size: 0.9em; margin-right: 4px; opacity: 0.7; }

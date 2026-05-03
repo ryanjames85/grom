@@ -4,6 +4,32 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.2] — 2026-05-03
+
+### New
+
+- **Smart @ mention picker** — open editor tabs are surfaced first in the file picker with an "open" badge; workspace files follow; results update as you type
+- **Indexing indicator** — a pulsing dot in the header appears while the RAG index is being built; disappears automatically when indexing completes
+- **Task log deep links** — file paths in the task log are rendered as clickable links that open the file in the editor
+
+### Fixed
+
+- **Agent tool result history** — the assistant message and the tool result are now pushed to `session.history` after each tool call so multi-step agent runs keep full context across iterations
+- **MCP server handshake** — agent loop now calls `mcp.waitForReady()` before enumerating tools; prevents a race where the tool list was empty on the first message after VS Code load
+- **Thinking token streaming** — accumulated text is streamed live as `<think>…</think>` content; prose check no longer fires on non-thinking responses
+- **Path traversal hardening** — `safePath` in `builtin-tools.ts` now also blocks Windows absolute paths (e.g. `C:\…`), not just `../` traversal
+- **`search_files` exclude** — `node_modules` and other blocked dirs are now passed as a glob exclude to ripgrep, reducing noise; a fuzzy fallback kicks in automatically when the regex search finds no matches
+
+### Internal
+
+- **`mcp.waitForReady(ms)` / `mcp.isReady()`** — new `McpManager` methods; `waitForReady` races the initialisation promise against a configurable timeout so callers never block indefinitely
+- **`updateCapIcons()`** — capability icon update extracted to its own function, removing a duplicated inline block
+- **Agent-loop tests** — 6 new tests covering: simple chat, tool call dispatch, destructive-tool approval, tool denial, prose-suppression nudge, and plan-mode tool suppression
+- **Builtin-tools tests** — 9 new tests covering: read_file (success, path traversal, absolute path, truncation), write_file, list_directory, delete_file, search_files, and run_terminal (allow + deny paths)
+- **184 tests total** (up from 178)
+
+---
+
 ## [0.3.1] — 2026-05-01
 
 ### Fixed

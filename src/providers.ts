@@ -56,13 +56,23 @@ export class OllamaProvider implements ILLMProvider {
 
   async getCapabilities(model: string, signal?: AbortSignal): Promise<ModelCapabilities> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: model }), signal });
+      let res = await fetch(`${this.baseUrl}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: model }), signal });
+      if (!res.ok && !model.includes(':')) {
+        // Try with :latest if untagged name fails
+        res = await fetch(`${this.baseUrl}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `${model}:latest` }), signal });
+      }
       if (!res.ok) return { vision: false, reasoning: false, tools: false };
-      const info = JSON.stringify(await res.json()).toLowerCase();
+      const rawInfo = await res.json();
+      const infoStr = JSON.stringify(rawInfo).toLowerCase();
+      const details = rawInfo.details || {};
+      const families = (details.families || []).map((f: string) => f.toLowerCase());
+      
       return {
-        vision: info.includes('vision') || info.includes('multimodal'),
-        reasoning: info.includes('think') || info.includes('reasoning') || model.toLowerCase().includes('r1'),
-        tools: info.includes('tools') || info.includes('functions') || info.includes('call')
+        // Vision models in Ollama almost always have a 'projector' component or are in the 'mllm' family
+        vision: infoStr.includes('projector') || families.some((f: string) => f.includes('mllm') || f.includes('vision') || f.includes('clip')),
+        reasoning: infoStr.includes('think') || infoStr.includes('reasoning') || model.toLowerCase().includes('r1'),
+        // Tools: look for explicit tool support or common architecture keywords
+        tools: infoStr.includes('"tools"') || infoStr.includes('"functions"') || infoStr.includes('parameter')
       };
     } catch { return { vision: false, reasoning: false, tools: false }; }
   }

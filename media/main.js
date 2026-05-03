@@ -85,6 +85,15 @@ function updateGromLogo() {
     }
 }
 
+function updateCapIcons() {
+    const toolIcon = document.querySelector('.cap-tools');
+    if (toolIcon) {
+        const hasMcp = (document.getElementById('mcp-tool-count')?.textContent || '').includes('tools');
+        const isActive = (currentMode === 'build') || hasMcp;
+        toolIcon.classList.toggle('inactive', !isActive);
+    }
+}
+
 window.toggleMode = () => {
     currentMode = currentMode === 'plan' ? 'build' : 'plan';
     document.body.classList.remove('mode-plan', 'mode-build');
@@ -94,6 +103,7 @@ window.toggleMode = () => {
     document.getElementById('build-btn').classList.toggle('active', currentMode === 'build');
     vscode.postMessage({ type: 'updateMode', mode: currentMode });
     updateGromLogo();
+    updateCapIcons();
 };
 
 window.toggleHistory = () => { const overlay = document.getElementById('history-overlay'); overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex'; };
@@ -121,6 +131,7 @@ function renderTaskLog(entries) {
       <div class="task-log-snippet">${e.snippet}</div>
     </div>`;
   }).join('');
+  applyDeepLinks(list);
 }
 
 function appendTaskLogEntry(entry) {
@@ -133,7 +144,39 @@ function appendTaskLogEntry(entry) {
   div.innerHTML = `<div class="task-log-header"><span>${icon} <code>${entry.tool}</code></span><span class="task-log-time">${t}</span></div>
     ${entry.argsSummary ? `<div class="task-log-args">${entry.argsSummary}</div>` : ''}
     <div class="task-log-snippet">${entry.snippet}</div>`;
+  applyDeepLinks(div);
   if (list) list.prepend(div);
+}
+
+function linkifyPaths(text) {
+  const pathRegex = /(?:\s|^)([\w\-][\w\-\/]*\.\w{1,8})(?:\s|$|[.,!?;])/g;
+  return text.replace(pathRegex, (match, path) => {
+    if (path.includes('/') || /\.(ts|js|py|md|json|html|css|go|rs|c|cpp|h|sh|tsx|jsx)$/i.test(path)) {
+      return match.replace(path, `<span class="file-link" data-path="${path}">${path}</span>`);
+    }
+    return match;
+  });
+}
+
+function applyDeepLinks(container) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+  const nodes = [];
+  let node;
+  while(node = walker.nextNode()) {
+    if (!['CODE', 'PRE', 'BUTTON', 'A'].includes(node.parentElement.tagName) && !node.parentElement.closest('code')) {
+      nodes.push(node);
+    }
+  }
+  nodes.forEach(node => {
+    const text = node.nodeValue;
+    if (!text.trim()) return;
+    const linked = linkifyPaths(text);
+    if (linked !== text) {
+      const span = document.createElement('span');
+      span.innerHTML = linked;
+      node.replaceWith(span);
+    }
+  });
 }
 function renderApprovalCard(m) {
   // Remove existing badge for this turn, replace with the card
@@ -197,6 +240,7 @@ function renderApprovalCard(m) {
   } else {
     chatContainer.appendChild(card);
   }
+  applyDeepLinks(card);
   chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
@@ -471,6 +515,7 @@ function updateAiDisplay(container, text) {
     };
     existingHeader.appendChild(saveBtn);
   });
+  applyDeepLinks(container);
 }
 
 sendBtn.onclick = () => {
@@ -847,6 +892,7 @@ window.addEventListener('message', e => {
           if (m.caps?.tools) capsBar.innerHTML += `<div class="cap-icon cap-tools" title="Tool use — can call functions"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3B8FCC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></div>`;
       }
       if (m.model) { const ms = document.getElementById('model-select'); ms.setOptions((m.models || []).map(mdl => ({ value: mdl, label: mdl }))); ms.value = m.model; ms.onchange = (ev) => vscode.postMessage({ type: 'changeModel', model: ev.target.value }); }
+      updateCapIcons();
       break;
     case 'usageUpdate': {
       const circle = document.getElementById('usage-fill'), circ = 56.5;
@@ -883,6 +929,7 @@ window.addEventListener('message', e => {
           `<div style="padding:2px 0;"><code style="opacity:0.9;">${t.name}</code> — <span style="opacity:0.6;">${t.description || ''}</span></div>`
         ).join('');
       }
+      updateCapIcons();
       break;
     }
     case 'taskLogEntry': appendTaskLogEntry(m.entry); break;
@@ -937,6 +984,19 @@ window.addEventListener('message', e => {
       break;
     }
     case 'triggerAction': prompt.value = m.text; sendBtn.onclick(); break;
+    case 'indexingProgress': {
+      const indicator = document.getElementById('indexing-indicator');
+      const text = document.getElementById('indexing-text');
+      if (indicator) {
+        if (m.progress < 100) {
+          indicator.style.display = 'flex';
+          if (text) text.textContent = `Indexing (${m.progress}%)...`;
+        } else {
+          indicator.style.display = 'none';
+        }
+      }
+      break;
+    }
     case 'fileList': _allFiles = m.files || []; showFilePicker(''); break;
   }
 });
@@ -959,15 +1019,20 @@ function showFilePicker(query) {
   if (!atMatch) { filePicker.style.display = 'none'; return; }
   const q = atMatch[1].toLowerCase();
   const specials = CONTEXT_PROVIDERS.filter(p => p.name.startsWith(q) || q === '');
-  const fileMatches = _allFiles.filter(f => f.name.toLowerCase().includes(q)).slice(0, 8);
-  if (!specials.length && !fileMatches.length) { filePicker.style.display = 'none'; return; }
+  const filtered = _allFiles.filter(f => !q || f.name.toLowerCase().includes(q));
+  const openMatches = filtered.filter(f => f.group === 'open').slice(0, 4);
+  const wsMatches = filtered.filter(f => f.group !== 'open').slice(0, 5);
+  if (!specials.length && !openMatches.length && !wsMatches.length) { filePicker.style.display = 'none'; return; }
   const specialHtml = specials.map(p =>
     `<div class="menu-item" onclick="window.pickFile('@${p.name}')"><span class="menu-cmd" style="color:var(--accent);">@${p.name}</span><span style="opacity:0.5;font-size:10px;margin-left:6px;">${p.desc}</span></div>`
   ).join('');
-  const fileHtml = fileMatches.map(f =>
-    `<div class="menu-item" data-path="${f.name}" onclick="window.pickFile('${f.name}')"><span class="menu-cmd">${f.name}</span></div>`
+  const openHtml = openMatches.map(f =>
+    `<div class="menu-item" onclick="window.pickFile('${_escHtml(f.name)}')"><span class="menu-cmd">${_escHtml(f.name)}</span><span class="file-open-badge">open</span></div>`
   ).join('');
-  filePicker.innerHTML = specialHtml + fileHtml;
+  const wsHtml = wsMatches.map(f =>
+    `<div class="menu-item" onclick="window.pickFile('${_escHtml(f.name)}')"><span class="menu-cmd">${_escHtml(f.name)}</span></div>`
+  ).join('');
+  filePicker.innerHTML = specialHtml + openHtml + wsHtml;
   filePicker.style.display = 'flex';
 }
 
@@ -997,5 +1062,13 @@ function scheduleRetry() {
 }
 // Periodic idle check — updates status dot even when no message is sent
 setInterval(() => vscode.postMessage({ type: 'retryConnection' }), 15000);
+
+document.addEventListener('click', e => {
+  const link = e.target.closest('[data-path]');
+  if (link && !e.target.closest('.session-item') && !e.target.closest('.grom-select')) {
+    e.preventDefault();
+    vscode.postMessage({ type: 'openFile', path: link.dataset.path });
+  }
+});
 
 vscode.postMessage({ type: 'ready' }); resetIdle(true); setTimeout(() => prompt.focus(), 100);
