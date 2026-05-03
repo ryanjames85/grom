@@ -3,9 +3,9 @@
   "displayName": "Grom",
   "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
   "version": "0.3.2",
-  "publisher": "local-llm-dev",
+  "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "PolyForm-Shield-1.0.0",
   "categories": [
     "AI",
     "Chat",
