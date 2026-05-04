@@ -25,6 +25,18 @@ import { DocsIndex, DocSource } from './docs-index';
 import { inlineEdit } from './inlineedit';
 import { InlineDiffSession, undoLastComposer } from './editor';
 import { appendTerminalOutput } from './terminal-buffer';
+import { dispose as disposeLogger } from './logger';
+
+function extractNotebookText(content: string): string {
+  try {
+    const nb = JSON.parse(content);
+    if (!Array.isArray(nb.cells)) return content;
+    return nb.cells.map((cell: any, i: number) => {
+      const src = Array.isArray(cell.source) ? cell.source.join('') : (cell.source || '');
+      return `# Cell ${i + 1} [${cell.cell_type || 'code'}]\n${src}`;
+    }).filter((s: string) => s.trim()).join('\n\n');
+  } catch { return content; }
+}
 
 export function activate(context: vscode.ExtensionContext) {
   const completionProvider = new GromInlineCompletionProvider();
@@ -66,7 +78,9 @@ export function activate(context: vscode.ExtensionContext) {
         const stat = await vscode.workspace.fs.stat(uri);
         if (stat.size > MAX_FILE_KB * 1024) continue;
         const bytes = await vscode.workspace.fs.readFile(uri);
-        files.push({ path: vscode.workspace.asRelativePath(uri), content: Buffer.from(bytes).toString('utf8') });
+        let content = Buffer.from(bytes).toString('utf8');
+        if (ext === '.ipynb') content = extractNotebookText(content);
+        files.push({ path: vscode.workspace.asRelativePath(uri), content });
       } catch { /* skip unreadable files */ }
     }
 
@@ -247,4 +261,6 @@ export function activate(context: vscode.ExtensionContext) {
     { pattern: '**' },
     completionProvider
   ));
+
+  context.subscriptions.push({ dispose: disposeLogger });
 }

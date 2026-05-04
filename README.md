@@ -2,6 +2,8 @@
 
 ![Grom](resources/icon.png)
 
+**[Documentation](https://ryanjames85.github.io/grom)** · **[Marketplace](https://marketplace.visualstudio.com/items?itemName=RyanConnolly.grom)** · **[GitHub](https://github.com/ryanjames85/grom)**
+
 ## BYOLLM
 
 **Bring Your Own LLM. Your model. Your machine. Your rules.**
@@ -70,6 +72,7 @@ Grom works with local servers out of the box — no account, no key. Cloud provi
 | **Anthropic** | Claude Sonnet, Claude Opus |
 | **Groq** | Llama 3, Mixtral — fast inference |
 | **Mistral** | Mistral Large, Small, Codestral |
+| **Gemini** | Gemini 2.5 Pro, Flash — via Google AI API |
 
 **Custom providers** — add any OpenAI-compatible endpoint or Anthropic-compatible proxy via `grom.customProviders`. Gemini, OpenRouter, Together AI, and most other cloud APIs work out of the box. See [Adding a Custom Provider](#adding-a-custom-provider) below.
 
@@ -259,9 +262,6 @@ API keys are **never stored in settings files**. Grom prompts for a key the firs
 
 ```json
 [
-  { "name": "Gemini",     "url": "https://generativelanguage.googleapis.com/v1beta/openai" },
-  { "name": "Groq",       "url": "https://api.groq.com/openai" },
-  { "name": "Mistral",    "url": "https://api.mistral.ai" },
   { "name": "OpenRouter", "url": "https://openrouter.ai/api" },
   { "name": "Together",   "url": "https://api.together.xyz" },
   { "name": "Local (no key)", "url": "http://127.0.0.1:8080", "authType": "none" },
@@ -301,7 +301,7 @@ Set the exact context window size for your model via `grom.modelPricing` for an 
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE) — free to use, free to modify, free to share. Not for commercial use.
+[PolyForm Shield 1.0.0](LICENSE) — free to use for any purpose, including commercially. You may not redistribute it as a competing product.
 
 ---
 

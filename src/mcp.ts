@@ -18,6 +18,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 export { McpTool, ParsedToolCall, parseToolCall, buildToolSystemPrompt } from './mcp-parser';
 import type { McpTool } from './mcp-parser';
+import { log, logError } from './logger';
 
 export interface McpServer {
   name: string;
@@ -56,18 +57,18 @@ class StdioMcpServer implements McpServer {
         this._buf = this._buf.slice(nl + 1);
         if (!line) continue;
         try { this._onMessage(JSON.parse(line)); } catch (e) {
-          console.warn(`[MCP:${name}] invalid JSON from server:`, line.slice(0, 200));
+          log(`[MCP:${name}] invalid JSON from server: ${line.slice(0, 200)}`);
         }
       }
     });
 
     this._proc.stderr?.on('data', (d: Buffer) => {
-      console.warn(`[MCP:${name}] stderr:`, d.toString('utf8').slice(0, 500));
+      log(`[MCP:${name}] stderr: ${d.toString('utf8').slice(0, 500)}`);
     });
 
     this._proc.on('exit', (code) => {
       this._dead = true;
-      console.warn(`[MCP:${name}] process exited (code ${code})`);
+      log(`[MCP:${name}] process exited (code ${code})`);
       this._pending.forEach(p => {
         clearTimeout(p.timer);
         p.reject(new Error(`MCP server "${name}" exited unexpectedly`));
@@ -150,7 +151,7 @@ class StdioMcpServer implements McpServer {
       inputSchema: t.inputSchema || { type: 'object', properties: {} }
     }));
 
-    console.log(`[Grom] MCP "${this.name}" ready — ${this.tools.length} tools, protocol ${initResult?.protocolVersion ?? 'unknown'}`);
+    log(`[MCP:${this.name}] ready — ${this.tools.length} tools, protocol ${initResult?.protocolVersion ?? 'unknown'}`);
   }
 
   /** Calls a tool by name and returns its output as a string, truncated to MAX_RESULT_CHARS. */
@@ -216,7 +217,7 @@ export class McpManager {
         this._servers.push(r.value);
       } else {
         const name = configs[i]?.name || configs[i]?.command;
-        console.error(`[Grom] MCP server "${name}" failed:`, r.reason?.message);
+        logError(`[MCP] server "${name}" failed to connect`, r.reason);
         vscode.window.showWarningMessage(`Grom: MCP server "${name}" failed to connect — ${r.reason?.message}`);
       }
     }

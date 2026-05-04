@@ -29,6 +29,7 @@ import { DocsIndex } from './docs-index';
 import { McpManager } from './mcp';
 import { AgentLoop } from './agent-loop';
 import { estimateTokens, estimateHistoryTokens, getNonSystemMessages } from './utils';
+import { log, logError } from './logger';
 
 export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
@@ -73,6 +74,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     if (url.includes('anthropic.com')) return { key: await this._context.secrets.get('grom.key.anthropic'), authType: 'x-api-key', providerFormat: 'anthropic' };
     if (url.includes('groq.com')) return { key: await this._context.secrets.get('grom.key.groq'), authType: 'bearer', providerFormat: 'openai' };
     if (url.includes('mistral.ai')) return { key: await this._context.secrets.get('grom.key.mistral'), authType: 'bearer', providerFormat: 'openai' };
+    if (url.includes('googleapis.com')) return { key: await this._context.secrets.get('grom.key.gemini'), authType: 'bearer', providerFormat: 'openai' };
     return { key: undefined, authType: 'none', providerFormat: 'openai' };
   }
 
@@ -296,7 +298,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'openSettings':
-          vscode.commands.executeCommand('workbench.action.openSettings', '@ext:local-llm-dev.grom');
+          vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${this._context.extension.id}`);
           break;
         case 'getFiles': {
           // Collect open tabs first — these are highest priority
@@ -386,6 +388,13 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
                 const entered = await vscode.window.showInputBox({ prompt: 'Enter your Mistral API key', password: true, ignoreFocusOut: true, placeHolder: 'sk-...' });
                 if (entered?.trim()) await this._context.secrets.store('grom.key.mistral', entered.trim());
               }
+            } else if (data.providerId === 'gemini') {
+              newUrl = 'https://generativelanguage.googleapis.com/v1beta/openai';
+              const existing = await this._context.secrets.get('grom.key.gemini');
+              if (!existing) {
+                const entered = await vscode.window.showInputBox({ prompt: 'Enter your Google AI API key', password: true, ignoreFocusOut: true, placeHolder: 'AIza...' });
+                if (entered?.trim()) await this._context.secrets.store('grom.key.gemini', entered.trim());
+              }
             }
           }
           await cfg.update('useOllamaFormat', isOllama, vscode.ConfigurationTarget.Global);
@@ -445,6 +454,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const robotAnimations = config.get<boolean>('robotAnimations') !== false;
     const customLogo = config.get<string>('customLogo', '');
     const customGreeting = config.get<string>('customGreeting', '') || "Hey. I'm Grom. Ready when you are.";
+    const fontSize = config.get<string>('fontSize', 'medium');
     // Custom .grom/ prompts appear after built-in presets, deduplicated by text
     const seenTexts = new Set(configPresets.map((p: any) => p.text));
     const mergedPresets = [...configPresets, ...customPrompts.filter(p => !seenTexts.has(p.text))];
@@ -459,6 +469,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       customGreeting,
       presets: mergedPresets,
       robotAnimations,
+      fontSize,
       taskLog: current.taskLog || []
     });
     this._updateUsageDisplay();
@@ -665,6 +676,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Invalid URL', color: 'var(--vscode-errorForeground)', url: rawUrl, useOllama });
       return;
     }
+    log(`[connection] checking ${url} model=${model}`);
     try {
       await this._mcp.waitForReady(2000); // Wait briefly for MCP servers on first connect
       const { key, authType, providerFormat } = await this._resolveProviderKey(url, useOllama);
@@ -686,6 +698,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       const mcpToolCount = this._mcp.getAllTools().length;
       // Tools icon: show if model supports it natively OR if MCP tools are available via Grom
       if (mcpToolCount > 0) caps.tools = true;
+      log(`[connection] connected — model=${activeModel} models=[${models.join(', ')}] caps=${JSON.stringify(caps)} mcpTools=${mcpToolCount}`);
       const rawProviders = vscode.workspace.getConfiguration('grom').get<any[]>('customProviders') || [];
       const customProviders = await Promise.all(rawProviders.map(async (cp: any) => ({
         name: cp.name, url: cp.url, useOllamaFormat: cp.useOllamaFormat, authType: cp.authType || 'bearer',
@@ -694,6 +707,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model: activeModel, models, caps, useOllama, customProviders });
     } catch (err: any) {
       const isNetworkError = err.message?.includes('fetch failed') || err.name === 'AbortError' || err.message?.includes('ECONNREFUSED');
+      logError(`[connection] failed (${isNetworkError ? 'network' : 'error'})`, err);
       this._view?.webview.postMessage({ type: 'statusUpdate', status: isNetworkError ? 'Disconnected' : 'Error', color: 'var(--vscode-errorForeground)', url, useOllama });
     }
   }

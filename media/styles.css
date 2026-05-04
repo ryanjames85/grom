@@ -366,3 +366,7 @@ body.grom-thinking .antenna { animation: antenna-bob 0.9s ease-in-out infinite; 
 .file-link { color: var(--accent); cursor: pointer; border-bottom: 1px dashed rgba(232, 168, 56, 0.3); transition: all 0.2s; }
 .file-link:hover { border-bottom-color: var(--accent); opacity: 1; filter: brightness(1.2); }
 .file-link::before { content: '📄'; font-size: 0.9em; margin-right: 4px; opacity: 0.7; }
+
+/* Font size */
+body.font-small .msg-body, body.font-small #prompt { font-size: 11px; }
+body.font-large .msg-body, body.font-large #prompt { font-size: 15px; }

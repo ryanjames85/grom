@@ -4,6 +4,26 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.4] — 2026-05-05
+
+### New
+
+- **Jupyter notebook support** — `.ipynb` files are indexed by RAG and readable by the agent; cell source is extracted and presented as readable code
+- **Font size setting** — `grom.fontSize` (`small` / `medium` / `large`) controls the chat panel font size; applies immediately without reload
+- **Documentation site** — [ryanjames85.github.io/grom](https://ryanjames85.github.io/grom); covers features, providers, @ context, and quick start
+- **Gemini built-in provider** — select Gemini from the provider dropdown; prompts for Google AI API key on first use; supports Gemini 2.5 Pro, Flash, and other models via the OpenAI-compatible endpoint
+- **Debug logging** — `grom.debugLogging` setting writes timestamped diagnostics to the Grom Output channel (View → Output → Grom); useful for reporting issues in GitHub Discussions
+
+### Fixed
+
+- **Open Grom Settings** button in the settings panel now correctly filters to Grom's settings in both development and marketplace installs
+
+### Changed
+
+- README links updated; license description corrected to PolyForm Shield
+
+---
+
 ## [0.3.3] — 2026-05-04
 
 ### New

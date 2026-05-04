@@ -131,7 +131,18 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
       if ('error' in p) return `Error: ${p.error}`;
       try {
         const bytes = await vscode.workspace.fs.readFile(p.uri);
-        const text = Buffer.from(bytes).toString('utf8');
+        let text = Buffer.from(bytes).toString('utf8');
+        if ((args.path as string).endsWith('.ipynb')) {
+          try {
+            const nb = JSON.parse(text);
+            if (Array.isArray(nb.cells)) {
+              text = nb.cells.map((c: any, i: number) => {
+                const src = Array.isArray(c.source) ? c.source.join('') : (c.source || '');
+                return `# Cell ${i + 1} [${c.cell_type || 'code'}]\n${src}`;
+              }).filter((s: string) => s.trim()).join('\n\n');
+            }
+          } catch { /* return raw if parse fails */ }
+        }
         // Cap output to avoid flooding the model's context window
         return text.length > 20000 ? text.slice(0, 20000) + `\n...(truncated, ${text.length} total bytes)` : text;
       } catch (e: any) { return `Error reading ${args.path}: ${e.message}`; }

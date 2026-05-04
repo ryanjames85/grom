@@ -356,11 +356,11 @@ function _updateKeyBtn(val, customProviders) {
     btn.dataset.providerName = cp?.name || '';
     btn.title = cp?.hasKey ? `Update API key for ${cp.name}` : `Set API key for ${cp.name}`;
     btn.style.opacity = cp?.hasKey ? '0.5' : '1';
-  } else if (val === 'openai' || val === 'opencode' || val === 'anthropic' || val === 'groq' || val === 'mistral') {
+  } else if (val === 'openai' || val === 'opencode' || val === 'anthropic' || val === 'groq' || val === 'mistral' || val === 'gemini') {
     btn.style.display = '';
     btn.dataset.providerId = val;
     delete btn.dataset.providerName;
-    const labels = { openai: 'OpenAI', opencode: 'OpenCode', anthropic: 'Anthropic', groq: 'Groq', mistral: 'Mistral' };
+    const labels = { openai: 'OpenAI', opencode: 'OpenCode', anthropic: 'Anthropic', groq: 'Groq', mistral: 'Mistral', gemini: 'Gemini' };
     btn.title = `Set API key for ${labels[val]}`;
     btn.style.opacity = '0.5';
   } else {
@@ -755,6 +755,8 @@ window.addEventListener('message', e => {
       _currentSessionId = m.currentSessionId;
       robotAnimations = m.robotAnimations !== false;
       currentMode = m.mode || 'plan';
+      document.body.classList.remove('font-small', 'font-medium', 'font-large');
+      document.body.classList.add('font-' + (m.fontSize || 'medium'));
 
       document.body.classList.remove('mode-plan', 'mode-build');
       document.body.classList.add('mode-' + currentMode);
@@ -898,6 +900,7 @@ window.addEventListener('message', e => {
         { value: 'anthropic',label: 'Anthropic' },
         { value: 'groq',     label: 'Groq' },
         { value: 'mistral',  label: 'Mistral' },
+        { value: 'gemini',   label: 'Gemini' },
         ...(m.customProviders || []).map((cp, i) => ({ value: `custom:${i}`, label: cp.name }))
       ];
       ps.setOptions(providerOpts);
@@ -920,6 +923,7 @@ window.addEventListener('message', e => {
       else if (m.url?.includes('anthropic.com')) ps.value = 'anthropic';
       else if (m.url?.includes('groq.com')) ps.value = 'groq';
       else if (m.url?.includes('mistral.ai')) ps.value = 'mistral';
+      else if (m.url?.includes('googleapis.com')) ps.value = 'gemini';
       else if (m.customProviders?.length) {
         const idx = m.customProviders.findIndex(cp => m.url?.startsWith(cp.url));
         if (idx >= 0) ps.value = `custom:${idx}`;

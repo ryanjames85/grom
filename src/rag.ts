@@ -50,7 +50,7 @@ const BM25_K1 = 1.5; // Term saturation: controls diminishing returns for repeat
 const BM25_B  = 0.75; // Length normalisation: penalises longer chunks relative to average
 
 /** File extensions eligible for indexing. */
-export const INDEXED_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.cs', '.cpp', '.c', '.rb', '.php', '.swift', '.kt', '.md', '.json', '.yaml', '.yml', '.toml', '.env.example']);
+export const INDEXED_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.cs', '.cpp', '.c', '.rb', '.php', '.swift', '.kt', '.md', '.json', '.yaml', '.yml', '.toml', '.env.example', '.ipynb']);
 /** Directories skipped during file discovery in extension.ts. Exported so extension.ts can use the same list. */
 export const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next', '__pycache__', 'vendor']);
 /** Files larger than this are skipped to avoid slow indexing and context flooding. */

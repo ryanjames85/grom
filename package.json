@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -40,6 +40,7 @@
     "type": "git",
     "url": "https://github.com/ryanjames85/grom"
   },
+  "homepage": "https://ryanjames85.github.io/grom",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -265,7 +266,7 @@
             ]
           },
           "default": [],
-          "markdownDescription": "Custom LLM providers. **OpenAI and Anthropic are already built-in** — use this for other cloud providers or self-hosted servers at non-default ports.\n\nAPI keys are stored securely in the OS keychain. Grom will prompt for a key the first time you select a provider that needs one.\n\n**Fields** (`name` and `url` are required, everything else is optional):\n- `providerFormat` — `openai` (default, works for almost everything) or `anthropic` for a self-hosted Claude-compatible proxy\n- `authType` — `bearer` (default), `x-api-key`, or `none` for keyless local servers\n- `useOllamaFormat` — `true` only for servers that use Ollama's `/api/chat` format instead of `/v1/chat/completions`\n\n**Examples:**\n```json\n[\n  { \"name\": \"Gemini\",     \"url\": \"https://generativelanguage.googleapis.com/v1beta/openai\" },\n  { \"name\": \"Groq\",       \"url\": \"https://api.groq.com/openai\" },\n  { \"name\": \"Mistral\",    \"url\": \"https://api.mistral.ai\" },\n  { \"name\": \"OpenRouter\", \"url\": \"https://openrouter.ai/api\" },\n  { \"name\": \"Together\",   \"url\": \"https://api.together.xyz\" },\n  { \"name\": \"Local (no key)\", \"url\": \"http://127.0.0.1:8080\", \"authType\": \"none\" },\n  { \"name\": \"Claude proxy\",   \"url\": \"https://my-proxy.example.com\", \"providerFormat\": \"anthropic\" }\n]\n```\n\nAll cloud providers above require an API key from their respective websites."
+          "markdownDescription": "Custom LLM providers. **Ollama, LM Studio, OpenAI, Anthropic, Groq, Mistral, and Gemini are already built-in** — use this for other cloud providers or self-hosted servers at non-default ports.\n\nAPI keys are stored securely in the OS keychain. Grom will prompt for a key the first time you select a provider that needs one.\n\n**Fields** (`name` and `url` are required, everything else is optional):\n- `providerFormat` — `openai` (default, works for almost everything) or `anthropic` for a self-hosted Claude-compatible proxy\n- `authType` — `bearer` (default), `x-api-key`, or `none` for keyless local servers\n- `useOllamaFormat` — `true` only for servers that use Ollama's `/api/chat` format instead of `/v1/chat/completions`\n\n**Examples:**\n```json\n[\n  { \"name\": \"OpenRouter\", \"url\": \"https://openrouter.ai/api\" },\n  { \"name\": \"Together\",   \"url\": \"https://api.together.xyz\" },\n  { \"name\": \"Local (no key)\", \"url\": \"http://127.0.0.1:8080\", \"authType\": \"none\" },\n  { \"name\": \"Claude proxy\",   \"url\": \"https://my-proxy.example.com\", \"providerFormat\": \"anthropic\" }\n]\n```\n\nAll cloud providers above require an API key from their respective websites."
         },
         "grom.model": {
           "type": "string",
@@ -377,6 +378,17 @@
           },
           "default": [],
           "markdownDescription": "External documentation sites for Grom to index. Use `@docs` or `@docs:name` in chat to search them.\n\nExample:\n```json\n[\n  { \"name\": \"react\", \"url\": \"https://react.dev/reference/react\" },\n  { \"name\": \"mdn\", \"url\": \"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference\" },\n  { \"name\": \"vscode\", \"url\": \"https://code.visualstudio.com/api/references/vscode-api\" }\n]\n```\n\nGrom crawls up to 40 pages per source, respecting same-origin links."
+        },
+        "grom.fontSize": {
+          "type": "string",
+          "enum": ["small", "medium", "large"],
+          "default": "medium",
+          "description": "Font size for the Grom chat panel. Small: 11px, Medium: 13px (default), Large: 15px."
+        },
+        "grom.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug logging to the Grom output channel (View → Output → Grom). Useful for diagnosing connection and MCP issues. Share logs in GitHub Discussions when reporting problems."
         },
         "grom.customGreeting": {
           "type": "string",
