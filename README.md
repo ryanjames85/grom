@@ -68,8 +68,10 @@ Grom works with local servers out of the box — no account, no key. Cloud provi
 | **Open Code** | Local |
 | **OpenAI** | GPT-4o, o1, o3-mini |
 | **Anthropic** | Claude Sonnet, Claude Opus |
+| **Groq** | Llama 3, Mixtral — fast inference |
+| **Mistral** | Mistral Large, Small, Codestral |
 
-**Custom providers** — add any OpenAI-compatible endpoint or Anthropic-compatible proxy via `grom.customProviders`. Gemini, Groq, Mistral, OpenRouter, Together AI, and most other cloud APIs work out of the box. See [Adding a Custom Provider](#adding-a-custom-provider) below.
+**Custom providers** — add any OpenAI-compatible endpoint or Anthropic-compatible proxy via `grom.customProviders`. Gemini, OpenRouter, Together AI, and most other cloud APIs work out of the box. See [Adding a Custom Provider](#adding-a-custom-provider) below.
 
 Switch providers and models without leaving the panel. Grom detects model capabilities automatically — vision, tool use, and reasoning models each show their own icon.
 
@@ -79,6 +81,7 @@ Use `@` in any message to attach context:
 
 | Mention | What it includes |
 | --- | --- |
+| `@selection` | Currently selected text in the active editor |
 | `@filename` | Any workspace file — open tabs shown first |
 | `@problems` | All current VS Code errors and warnings |
 | `@git` | Your current uncommitted diff (`git diff HEAD`) |

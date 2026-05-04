@@ -1,3 +1,17 @@
+<!--
+  webview.html
+
+  Shell HTML for the Grom chat panel webview. Loaded by provider.ts via _getHtmlForWebview(),
+  which injects the Content Security Policy, resource URIs, and inlined SVG assets at load time.
+
+  Responsibilities:
+    - Defines the panel structure: header, chat container, input area, overlays
+    - References styles.css and main.js (and the marked/highlight libs copied at build time)
+    - Placeholder tokens ({{CSP}}, {{MEDIA_URI}}, {{IDLE_SVG}}, etc.) are replaced by provider.ts
+
+  NOTE: Hand-written, no build step. Changes here take effect immediately after
+  running `npm run copy-media` (or `npm run build`).
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>

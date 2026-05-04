@@ -149,6 +149,20 @@ export async function resolveMentions(text: string, usedFiles: Set<string>, docs
       continue;
     }
 
+    // @selection — currently selected text in the active editor
+    if (name === 'selection') {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && !editor.selection.isEmpty) {
+        const selected = editor.document.getText(editor.selection);
+        const lang = editor.document.languageId;
+        const filename = editor.document.fileName.split(/[\\\/]/).pop() || '';
+        content += `[Selection from ${filename}]\n\`\`\`${lang}\n${selected.slice(0, 8000)}\n\`\`\`\n\n`;
+      } else {
+        content += `[Selection]\nNo text selected in the active editor.\n\n`;
+      }
+      continue;
+    }
+
     // @terminal — recent terminal output
     if (name === 'terminal') {
       const out = getRecentTerminalOutput().trim();

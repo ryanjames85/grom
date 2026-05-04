@@ -71,6 +71,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     if (url.includes('openai.com')) return { key: await this._context.secrets.get('grom.key.openai'), authType: 'bearer', providerFormat: 'openai' };
     if (url.includes('opencode.ai')) return { key: await this._context.secrets.get('grom.key.opencode'), authType: 'bearer', providerFormat: 'openai' };
     if (url.includes('anthropic.com')) return { key: await this._context.secrets.get('grom.key.anthropic'), authType: 'x-api-key', providerFormat: 'anthropic' };
+    if (url.includes('groq.com')) return { key: await this._context.secrets.get('grom.key.groq'), authType: 'bearer', providerFormat: 'openai' };
+    if (url.includes('mistral.ai')) return { key: await this._context.secrets.get('grom.key.mistral'), authType: 'bearer', providerFormat: 'openai' };
     return { key: undefined, authType: 'none', providerFormat: 'openai' };
   }
 
@@ -151,6 +153,14 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           this._updateTheme();
           this._loadAllSessions();
           this._updateActiveContext();
+          const isDev = this._context.extensionMode === vscode.ExtensionMode.Development;
+          if (isDev || !this._context.globalState.get('grom.welcomed')) {
+            if (!isDev) void this._context.globalState.update('grom.welcomed', true);
+            const iconUri = webviewView.webview.asWebviewUri(
+              vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'idle-grom-logo.svg')
+            ).toString();
+            setTimeout(() => this._view?.webview.postMessage({ type: 'welcome', iconUri }), 150);
+          }
           break;
         case 'send': await this._handleChat(data.text, data.images, data.mode); break;
         case 'abort': this._agentLoop.abort(); break;
@@ -361,6 +371,20 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
               if (!existing) {
                 const entered = await vscode.window.showInputBox({ prompt: 'Enter your Anthropic API key', password: true, ignoreFocusOut: true, placeHolder: 'sk-ant-...' });
                 if (entered?.trim()) await this._context.secrets.store('grom.key.anthropic', entered.trim());
+              }
+            } else if (data.providerId === 'groq') {
+              newUrl = 'https://api.groq.com/openai';
+              const existing = await this._context.secrets.get('grom.key.groq');
+              if (!existing) {
+                const entered = await vscode.window.showInputBox({ prompt: 'Enter your Groq API key', password: true, ignoreFocusOut: true, placeHolder: 'gsk_...' });
+                if (entered?.trim()) await this._context.secrets.store('grom.key.groq', entered.trim());
+              }
+            } else if (data.providerId === 'mistral') {
+              newUrl = 'https://api.mistral.ai';
+              const existing = await this._context.secrets.get('grom.key.mistral');
+              if (!existing) {
+                const entered = await vscode.window.showInputBox({ prompt: 'Enter your Mistral API key', password: true, ignoreFocusOut: true, placeHolder: 'sk-...' });
+                if (entered?.trim()) await this._context.secrets.store('grom.key.mistral', entered.trim());
               }
             }
           }

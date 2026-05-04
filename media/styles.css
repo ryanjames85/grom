@@ -1,3 +1,20 @@
+/**
+ * styles.css
+ *
+ * All styles for the Grom chat panel webview.
+ *
+ * Structure:
+ *   - CSS variables (VS Code theme tokens mapped to Grom vars)
+ *   - Per-theme overrides (Cyberpunk, Classic, High Contrast)
+ *   - Layout: header, toolbar, chat container, input area
+ *   - Components: messages, session list, task log, dropdowns, approval cards,
+ *                 tool call badges, file picker, slash menu, robot animations
+ *   - Responsive breakpoints (≤280px, ≤240px narrow panel support)
+ *
+ * NOTE: Hand-written with no preprocessor. VS Code theme variables are used throughout
+ * so the panel adapts automatically to light, dark, and high-contrast themes.
+ */
+
 :root {
   --bg: var(--vscode-sideBar-background);
   --item-bg: var(--vscode-editor-background);

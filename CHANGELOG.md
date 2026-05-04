@@ -4,6 +4,17 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.3] — 2026-05-04
+
+### New
+
+- **`@selection`** — attach the currently selected text in the active editor as context; shows first in the `@` picker with a description; includes language tag for syntax-aware responses
+- **Groq built-in provider** — select Groq from the provider dropdown; prompts for API key on first use (stored in OS keychain); supports all Groq-hosted models via their OpenAI-compatible API
+- **Mistral built-in provider** — same pattern; connects to `api.mistral.ai` including Mistral Large, Mistral Small, and Codestral
+- **First-run welcome message** — new installs see a welcome card with setup instructions and the Grom icon; only shown once (always shown in development mode for testing)
+
+---
+
 ## [0.3.2] — 2026-05-03
 
 ### New

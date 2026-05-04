@@ -1,3 +1,21 @@
+/**
+ * main.js
+ *
+ * Webview front-end for the Grom chat panel. Runs inside VS Code's sandboxed webview
+ * context — no Node.js, no bundler, plain browser JavaScript.
+ *
+ * Responsibilities:
+ *   - Renders chat messages, session list, task log, and approval cards
+ *   - Streams AI output chunk-by-chunk and renders Markdown via marked.js
+ *   - Manages the provider/model dropdowns (custom grom-select components)
+ *   - Handles @ mention file picker, slash command menu, and prompt presets
+ *   - Posts user actions (send, abort, session switch, provider change, etc.) to the extension host
+ *   - Receives messages from the extension host and updates the UI accordingly
+ *
+ * NOTE: This file is hand-written with no build step. Keep it dependency-free —
+ * only marked.js and highlight.js (copied to media/ at build time) are loaded externally.
+ */
+
 const vscode = acquireVsCodeApi();
 const chatContainer = document.getElementById('chat-container'), prompt = document.getElementById('prompt');
 const sendBtn = document.getElementById('sendBtn'), stopBtn = document.getElementById('stopBtn');
@@ -338,11 +356,11 @@ function _updateKeyBtn(val, customProviders) {
     btn.dataset.providerName = cp?.name || '';
     btn.title = cp?.hasKey ? `Update API key for ${cp.name}` : `Set API key for ${cp.name}`;
     btn.style.opacity = cp?.hasKey ? '0.5' : '1';
-  } else if (val === 'openai' || val === 'opencode' || val === 'anthropic') {
+  } else if (val === 'openai' || val === 'opencode' || val === 'anthropic' || val === 'groq' || val === 'mistral') {
     btn.style.display = '';
     btn.dataset.providerId = val;
     delete btn.dataset.providerName;
-    const labels = { openai: 'OpenAI', opencode: 'OpenCode', anthropic: 'Anthropic' };
+    const labels = { openai: 'OpenAI', opencode: 'OpenCode', anthropic: 'Anthropic', groq: 'Groq', mistral: 'Mistral' };
     btn.title = `Set API key for ${labels[val]}`;
     btn.style.opacity = '0.5';
   } else {
@@ -705,6 +723,25 @@ window.addEventListener('message', e => {
     case 'systemPromptSaved':
       document.getElementById('sysprompt-overlay').style.display = 'none';
       break;
+    case 'welcome': {
+      const welcomeDiv = renderMsg('ai', `To get started, pick a provider from the dropdown above:\n\n- **Ollama** or **LM Studio** — run them locally, then select a model from the dropdown\n- **Anthropic**, **OpenAI**, **Groq**, or **Mistral** — click the 🔒 icon next to the provider to add your API key\n- **Custom** — add any OpenAI-compatible endpoint via \`grom.customProviders\` in settings\n\nOnce connected, type a message and press **Enter**.\n\nType \`/help\` to see available commands, or \`@\` to attach files and context.\n\nExplore the icons above to discover all of Grom's features.\n\nClick the ⚙️ settings icon to customise Grom to your workflow.`);
+      if (welcomeDiv) {
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px';
+        if (m.iconUri) {
+          const img = document.createElement('img');
+          img.src = m.iconUri;
+          img.style.cssText = 'width:40px;height:40px;flex-shrink:0';
+          header.appendChild(img);
+        }
+        const title = document.createElement('strong');
+        title.style.cssText = 'font-size:1.1em';
+        title.textContent = 'Welcome to Grom!';
+        header.appendChild(title);
+        welcomeDiv.querySelector('.msg-body').prepend(header);
+      }
+      break;
+    }
     case 'compacting':
     case 'compacted': {
       const notice = document.createElement('div');
@@ -859,6 +896,8 @@ window.addEventListener('message', e => {
         { value: 'opencode', label: 'Open Code' },
         { value: 'openai',   label: 'OpenAI' },
         { value: 'anthropic',label: 'Anthropic' },
+        { value: 'groq',     label: 'Groq' },
+        { value: 'mistral',  label: 'Mistral' },
         ...(m.customProviders || []).map((cp, i) => ({ value: `custom:${i}`, label: cp.name }))
       ];
       ps.setOptions(providerOpts);
@@ -879,6 +918,8 @@ window.addEventListener('message', e => {
       else if (m.url?.includes('opencode')) ps.value = 'opencode';
       else if (m.url?.includes('openai.com')) ps.value = 'openai';
       else if (m.url?.includes('anthropic.com')) ps.value = 'anthropic';
+      else if (m.url?.includes('groq.com')) ps.value = 'groq';
+      else if (m.url?.includes('mistral.ai')) ps.value = 'mistral';
       else if (m.customProviders?.length) {
         const idx = m.customProviders.findIndex(cp => m.url?.startsWith(cp.url));
         if (idx >= 0) ps.value = `custom:${idx}`;
@@ -1007,6 +1048,7 @@ filePicker.id = 'file-picker'; filePicker.className = 'floating-menu'; filePicke
 document.getElementById('input-container').appendChild(filePicker);
 
 const CONTEXT_PROVIDERS = [
+  { name: 'selection', desc: 'Currently selected text in the editor' },
   { name: 'problems', desc: 'VS Code errors & warnings' },
   { name: 'git', desc: 'Current git diff' },
   { name: 'terminal', desc: 'Recent terminal output' },
