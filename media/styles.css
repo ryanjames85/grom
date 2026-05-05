@@ -56,7 +56,8 @@ body { font-family: var(--vscode-font-family); font-size: 13px; margin: 0; backg
 .control-select:hover { border-color: var(--accent); }
 #model-select { flex: 1; max-width: none; }
 
-.icon-btn { cursor: pointer; opacity: 0.6; transition: all 0.2s; font-size: 14px; background: none; border: none; color: inherit; padding: 4px; display: flex; align-items: center; border-radius: 4px; }
+.icon-btn { cursor: pointer; opacity: 0.6; transition: all 0.2s; font-size: 14px; background: none; border: none; color: inherit; padding: 4px; display: flex; align-items: center; border-radius: 4px; position: relative; }
+#memory-btn.has-memory::after { content: ''; position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; }
 .icon-btn:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .icon-btn:active { transform: scale(0.82); opacity: 1; }
 .icon-btn.clicked { animation: icon-pop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
@@ -261,7 +262,8 @@ body.grom-thinking .antenna { animation: antenna-bob 0.9s ease-in-out infinite; 
 .overlay-title { font-weight: bold; }
 .overlay-hint { padding: 10px 12px; font-size: 11px; opacity: 0.6; line-height: 1.6; }
 .overlay-editor { flex: 1; resize: none; background: var(--item-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; margin: 0 10px; padding: 10px; font-size: 12px; font-family: inherit; line-height: 1.6; width: calc(100% - 20px); box-sizing: border-box; overflow-y: auto; overflow-x: hidden; white-space: pre-wrap; word-wrap: break-word; }
-.overlay-footer { display: flex; gap: 8px; padding: 10px; justify-content: flex-end; }
+.overlay-footer { display: flex; gap: 8px; padding: 10px; justify-content: flex-end; align-items: center; }
+.memory-counter { font-size: 10px; opacity: 0.45; margin-right: auto; }
 .btn-primary { padding: 6px 14px; font-size: 12px; background: var(--accent); color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .btn-cancel { padding: 6px 12px; font-size: 12px; background: none; border: none; color: inherit; border-radius: 6px; cursor: pointer; opacity: 0.6; transition: opacity 0.2s; }
 .btn-cancel:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }

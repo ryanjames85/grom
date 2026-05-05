@@ -21,7 +21,7 @@ const chatContainer = document.getElementById('chat-container'), prompt = docume
 const sendBtn = document.getElementById('sendBtn'), stopBtn = document.getElementById('stopBtn');
 const slashMenu = document.getElementById('slash-menu'), plusMenu = document.getElementById('plus-menu');
 const modeToggle = document.getElementById('mode-toggle');
-let currentAiDiv = null, currentAiText = "", pendingImages = [], currentMode = 'plan', uploadedContext = [], robotAnimations = true, _lastAutoFiles = [], _currentSessionId = null;
+let currentAiDiv = null, currentAiText = "", pendingImages = [], currentMode = 'plan', uploadedContext = [], robotAnimations = true, _lastAutoFiles = [], _currentSessionId = null, _currentCaps = null, _memoryOriginal = '', _memorySaveTimer = null;
 let _requestId = 0; // incremented on each send; used to discard stale Ready/chunk messages
 let _cancelActiveRename = null; // call this before any session list re-render
 let _userScrolledUp = false;
@@ -404,8 +404,27 @@ window.searchChat = (query) => {
   });
   document.getElementById('search-count').textContent = q ? `${count} result${count !== 1 ? 's' : ''}` : '';
 };
-window.closeMemory = () => { document.getElementById('memory-overlay').style.display = 'none'; };
-window.saveMemory = () => { vscode.postMessage({ type: 'saveMemory', memory: document.getElementById('memory-editor').value }); };
+window.doneMemory = () => {
+  const memory = document.getElementById('memory-editor').value;
+  vscode.postMessage({ type: 'saveMemory', memory });
+  document.getElementById('memory-overlay').style.display = 'none';
+};
+window.cancelMemory = () => {
+  document.getElementById('memory-editor').value = _memoryOriginal;
+  vscode.postMessage({ type: 'saveMemory', memory: _memoryOriginal });
+  document.getElementById('memory-overlay').style.display = 'none';
+};
+window.onMemoryInput = () => {
+  const text = document.getElementById('memory-editor').value;
+  const tokens = Math.ceil(text.length / 4);
+  document.getElementById('memory-counter').textContent = text.length ? `~${tokens} tokens` : '';
+  clearTimeout(_memorySaveTimer);
+  _memorySaveTimer = setTimeout(() => vscode.postMessage({ type: 'saveMemory', memory: text }), 800);
+};
+function _setMemoryDot(hasMemory) {
+  const btn = document.getElementById('memory-btn');
+  if (btn) btn.classList.toggle('has-memory', !!hasMemory);
+}
 window.closeSysPrompt = () => { document.getElementById('sysprompt-overlay').style.display = 'none'; };
 window.saveSysPrompt = () => { vscode.postMessage({ type: 'setSystemPrompt', prompt: document.getElementById('sysprompt-editor').value }); };
 window.retryConnection = () => vscode.postMessage({ type: 'retryConnection' });
@@ -538,6 +557,13 @@ function updateAiDisplay(container, text) {
 
 sendBtn.onclick = () => {
   const val = prompt.value.trim(); if (!val && !pendingImages.length && !uploadedContext.length) return;
+  if (pendingImages.length > 0 && _currentCaps && !_currentCaps.vision) {
+    const warn = document.createElement('div');
+    warn.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--vscode-inputValidation-warningBackground,#5a4a00);color:var(--text);padding:6px 14px;border-radius:6px;font-size:12px;z-index:999;pointer-events:none;opacity:1;transition:opacity 0.4s';
+    warn.textContent = 'This model may not support images';
+    document.body.appendChild(warn);
+    setTimeout(() => { warn.style.opacity = '0'; setTimeout(() => warn.remove(), 400); }, 2000);
+  }
   // Intercept /compact before sending to the model
   if (val.toLowerCase() === '/compact') { prompt.value = ''; window.compactSession(); return; }
   renderMsg('user', val, [...pendingImages]);
@@ -708,12 +734,14 @@ window.addEventListener('message', e => {
   switch (m.type) {
     case 'filesUsed': _lastAutoFiles = m.files || []; updateContextChips(_lastAutoFiles); break;
     case 'showMemory':
-      document.getElementById('memory-editor').value = m.memory || '';
+      _memoryOriginal = m.memory || '';
+      document.getElementById('memory-editor').value = _memoryOriginal;
       document.getElementById('memory-overlay').style.display = 'flex';
       document.getElementById('memory-editor').focus();
+      window.onMemoryInput();
       break;
     case 'memorySaved':
-      document.getElementById('memory-overlay').style.display = 'none';
+      _setMemoryDot(m.hasMemory);
       break;
     case 'showSystemPrompt':
       document.getElementById('sysprompt-editor').value = m.prompt || '';
@@ -755,6 +783,7 @@ window.addEventListener('message', e => {
       _currentSessionId = m.currentSessionId;
       robotAnimations = m.robotAnimations !== false;
       currentMode = m.mode || 'plan';
+      _setMemoryDot(m.hasMemory);
       document.body.classList.remove('font-small', 'font-medium', 'font-large');
       document.body.classList.add('font-' + (m.fontSize || 'medium'));
 
@@ -872,6 +901,7 @@ window.addEventListener('message', e => {
       }
     } break;
     case 'statusUpdate':
+      _currentCaps = m.caps || null;
       document.getElementById('conn-status').textContent = m.status;
       const dot = document.getElementById('status-dot'); dot.className = 'status-dot';
       if (m.status === 'Connected') {

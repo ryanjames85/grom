@@ -72,11 +72,11 @@ Grom works with local servers out of the box — no account, no key. Cloud provi
 | **Anthropic** | Claude Sonnet, Claude Opus |
 | **Groq** | Llama 3, Mixtral — fast inference |
 | **Mistral** | Mistral Large, Small, Codestral |
-| **Gemini** | Gemini 2.5 Pro, Flash — via Google AI API |
+| **Gemini** | Gemini 2.5 Pro, Flash — Google AI API |
 
 **Custom providers** — add any OpenAI-compatible endpoint or Anthropic-compatible proxy via `grom.customProviders`. Gemini, OpenRouter, Together AI, and most other cloud APIs work out of the box. See [Adding a Custom Provider](#adding-a-custom-provider) below.
 
-Switch providers and models without leaving the panel. Grom detects model capabilities automatically — vision, tool use, and reasoning models each show their own icon.
+Switch providers and models without leaving the panel. Each session remembers its own model — switching sessions restores it automatically. Grom detects model capabilities automatically — vision, tool use, and reasoning models each show their own icon. Vision models (llava, qwen2-vl, etc.) can receive images via the `+` button or paste.
 
 ### Knows What You're Working On
 
@@ -243,6 +243,8 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.theme` | UI theme: Grom, Cyberpunk, Classic, High Contrast | `Grom` |
 | `grom.agentEnabled` | Enable the agentic loop | `true` |
 | `grom.agentMaxIterations` | Max tool-call rounds per task | `20` |
+| `grom.fontSize` | Chat panel font size: `small`, `medium`, `large` | `medium` |
+| `grom.debugLogging` | Write diagnostics to the Grom Output channel | `false` |
 
 ### Per-Language Model Routing
 

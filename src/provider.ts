@@ -31,6 +31,20 @@ import { AgentLoop } from './agent-loop';
 import { estimateTokens, estimateHistoryTokens, getNonSystemMessages } from './utils';
 import { log, logError } from './logger';
 
+const MAX_GREETING_LEN = 200;
+const BLOCKED_TERMS = [
+  'nigger','nigga','faggot','fag','chink','spic','kike','cunt','tranny',
+  'retard','rape','kill yourself','kys','go die','fuck you','fuck off',
+  'whore','slut','bitch'
+];
+
+function _sanitizeGreeting(text: string): string {
+  if (!text || text.length > MAX_GREETING_LEN) return '';
+  const lower = text.toLowerCase();
+  if (BLOCKED_TERMS.some(t => lower.includes(t))) return '';
+  return text;
+}
+
 export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _sessionManager: SessionManager;
@@ -211,7 +225,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             memSession.history[0] = { ...memSession.history[0], content: base + memSection };
             this._saveState();
           }
-          webviewView.webview.postMessage({ type: 'memorySaved' });
+          webviewView.webview.postMessage({ type: 'memorySaved', hasMemory: !!(data.memory || '').trim() });
           break;
         }
         case 'setSystemPrompt': {
@@ -329,6 +343,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'changeModel':
           await vscode.workspace.getConfiguration('grom').update('model', data.model, vscode.ConfigurationTarget.Global);
+          this._sessionManager.getCurrentSession().model = data.model;
+          this._saveState();
           await this._checkConnection();
           break;
         case 'changeProvider': {
@@ -453,7 +469,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const customPrompts = await getCustomPrompts();
     const robotAnimations = config.get<boolean>('robotAnimations') !== false;
     const customLogo = config.get<string>('customLogo', '');
-    const customGreeting = config.get<string>('customGreeting', '') || "Hey. I'm Grom. Ready when you are.";
+    const rawGreeting = (config.get<string>('customGreeting', '') || '').trim();
+    const customGreeting = _sanitizeGreeting(rawGreeting) || "Hey. I'm Grom. Ready when you are.";
     const fontSize = config.get<string>('fontSize', 'medium');
     // Custom .grom/ prompts appear after built-in presets, deduplicated by text
     const seenTexts = new Set(configPresets.map((p: any) => p.text));
@@ -470,7 +487,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       presets: mergedPresets,
       robotAnimations,
       fontSize,
-      taskLog: current.taskLog || []
+      taskLog: current.taskLog || [],
+      hasMemory: !!(this._context.globalState.get<string>('gromMemory', '') || '').trim()
     });
     this._updateUsageDisplay();
   }
@@ -523,10 +541,16 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     this._loadAllSessions();
   }
 
-  private _switchSession(id: string) {
+  private async _switchSession(id: string) {
     if (this._sessionManager.switchSession(id)) {
+      const session = this._sessionManager.getCurrentSession();
       this._saveState();
-      this._loadAllSessions();
+      if (session.model) {
+        // Config watcher fires _checkConnection + _loadAllSessions when model changes
+        await vscode.workspace.getConfiguration('grom').update('model', session.model, vscode.ConfigurationTarget.Global);
+      } else {
+        this._loadAllSessions();
+      }
     }
   }
 

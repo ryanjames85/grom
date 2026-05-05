@@ -4,6 +4,20 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.5] — 2026-05-05
+
+### New
+
+- **Per-session model** — each chat session remembers which model it was using; switching sessions restores the correct model automatically
+- **Ollama vision** — images are now correctly passed to Ollama vision models (llava, qwen2-vl, etc.) using Ollama's native image format; non-vision models show a brief warning
+- **Memory panel polish** — brain icon shows an amber dot when memory is set; live token counter in the footer; auto-saves after 800ms so edits are never lost; Cancel reverts to the previous content
+
+### Fixed
+
+- Custom greeting (`grom.customGreeting`) is now validated — blocked terms and strings over 200 characters fall back to the default greeting silently
+
+---
+
 ## [0.3.4] — 2026-05-05
 
 ### New

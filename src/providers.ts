@@ -78,10 +78,14 @@ export class OllamaProvider implements ILLMProvider {
   }
 
   async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean): Promise<string> {
+    const ollamaMessages = messages.map(msg => ({
+      role: msg.role, content: msg.content,
+      ...(msg.images?.length ? { images: msg.images } : {})
+    }));
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true, ...(jsonMode ? { format: 'json' } : {}) }),
+      body: JSON.stringify({ model, messages: ollamaMessages, stream: true, ...(jsonMode ? { format: 'json' } : {}) }),
       signal
     });
     if (!res.ok) throw new Error(parseHttpError(await res.text()));
@@ -104,7 +108,11 @@ export class OllamaProvider implements ILLMProvider {
   }
 
   async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
-    const res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages, stream: false }), signal });
+    const ollamaMessages = messages.map(msg => ({
+      role: msg.role, content: msg.content,
+      ...(msg.images?.length ? { images: msg.images } : {})
+    }));
+    const res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: ollamaMessages, stream: false }), signal });
     if (!res.ok) throw new Error(parseHttpError(await res.text()));
     const data: any = await res.json();
     return data.message?.content || '';

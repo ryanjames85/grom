@@ -32,6 +32,7 @@ export interface ChatSession {
   mode: 'plan' | 'build';
   systemPrompt?: string;
   taskLog?: TaskLogEntry[];
+  model?: string;
 }
 
 export class SessionManager {
