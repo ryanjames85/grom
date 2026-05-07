@@ -425,6 +425,10 @@ function _setMemoryDot(hasMemory) {
   const btn = document.getElementById('memory-btn');
   if (btn) btn.classList.toggle('has-memory', !!hasMemory);
 }
+function _setSysPromptDot(hasPrompt) {
+  const btn = document.getElementById('sysprompt-btn');
+  if (btn) btn.classList.toggle('has-prompt', !!hasPrompt);
+}
 window.closeSysPrompt = () => { document.getElementById('sysprompt-overlay').style.display = 'none'; };
 window.saveSysPrompt = () => { vscode.postMessage({ type: 'setSystemPrompt', prompt: document.getElementById('sysprompt-editor').value }); };
 window.retryConnection = () => vscode.postMessage({ type: 'retryConnection' });
@@ -749,6 +753,7 @@ window.addEventListener('message', e => {
       document.getElementById('sysprompt-editor').focus();
       break;
     case 'systemPromptSaved':
+      _setSysPromptDot(m.hasSystemPrompt);
       document.getElementById('sysprompt-overlay').style.display = 'none';
       break;
     case 'welcome': {
@@ -784,6 +789,7 @@ window.addEventListener('message', e => {
       robotAnimations = m.robotAnimations !== false;
       currentMode = m.mode || 'plan';
       _setMemoryDot(m.hasMemory);
+      _setSysPromptDot(m.hasSystemPrompt);
       document.body.classList.remove('font-small', 'font-medium', 'font-large');
       document.body.classList.add('font-' + (m.fontSize || 'medium'));
 
@@ -831,7 +837,7 @@ window.addEventListener('message', e => {
       const defaultLogoContent = m.customLogo
           ? (m.customLogo.startsWith('http') || m.customLogo.startsWith('data:') ? `<img src="${m.customLogo}" alt="Grom">` : m.customLogo)
           : (window.GROM_IDLE_SVG || '');
-      _gromLogoState = 'default';
+      _gromLogoState = null;
       chatContainer.innerHTML = `<div class="empty-state" id="empty-state"><div class="empty-logo" id="main-logo" style="position:relative;">${defaultLogoContent}</div><div class="empty-text typing" id="main-greeting"></div></div>`;
       const greetEl = document.getElementById('main-greeting');
       let i = 0; greetEl.textContent = '';
@@ -885,6 +891,20 @@ window.addEventListener('message', e => {
         badge.className = 'tool-call-badge';
         badge.innerHTML = `<span class="tool-call-spinner"></span><span>Using tool <code>${m.tool}</code>…</span>`;
         body.appendChild(badge);
+        if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+      break;
+    }
+    case 'agentWritesDone': {
+      if (currentAiDiv && m.files?.length) {
+        const body = currentAiDiv.querySelector('.msg-body');
+        const existing = body.querySelector('.agent-revert-btn');
+        if (existing) existing.remove();
+        const btn = document.createElement('button');
+        btn.className = 'agent-revert-btn';
+        btn.textContent = `↩ Undo agent writes (${m.files.length} file${m.files.length > 1 ? 's' : ''})`;
+        btn.onclick = () => vscode.postMessage({ type: 'revertAgentChanges' });
+        body.appendChild(btn);
         if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
       }
       break;

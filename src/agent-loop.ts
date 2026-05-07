@@ -48,11 +48,15 @@ export interface AgentLoopDeps {
 export class AgentLoop {
   private _client?: LocalLLMClient;
   private _abortController?: AbortController;
+  private _backups = new Map<string, string | null>();
 
   constructor(private readonly deps: AgentLoopDeps) {}
 
   /** Aborts any in-progress stream. */
   abort() { this._abortController?.abort(); }
+
+  /** Returns the file snapshots taken before agent writes this turn (path → original content, null = new file). */
+  getBackups(): Map<string, string | null> { return this._backups; }
 
   /**
    * Resolves context, builds the message list, then runs the agentic loop for a single user turn.
@@ -66,6 +70,8 @@ export class AgentLoop {
     saveState: () => void,
     updateUsageDisplay: () => void
   ): Promise<void> {
+    this._backups.clear();
+
     // Web search and slash commands take priority over normal message processing
     const webSearchResult = await resolveWebSearch(rawText);
     const text = webSearchResult ?? await resolveSlashCommand(rawText);
@@ -259,7 +265,7 @@ export class AgentLoop {
         let rawResult: string;
         try {
           rawResult = isBuiltinTool(parsed.tool)
-            ? await executeBuiltinTool(parsed.tool, parsed.args)
+            ? await executeBuiltinTool(parsed.tool, parsed.args, this._backups)
             : await this.deps.mcp.callTool(parsed.tool, parsed.args);
         } catch (e: any) {
           rawResult = `Error: ${e.message}`;

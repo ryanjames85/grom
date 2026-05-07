@@ -21,14 +21,14 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { LocalLLMClient, ChatMessage, AuthType, ProviderFormat } from './client';
-import { SessionManager, ChatSession, TaskLogEntry } from './session';
+import { SessionManager, ChatSession } from './session';
 import { getCustomPrompts } from './context';
 import { insertCode, applyCode, diffCode, acceptDiff, diffAgentWrite } from './editor';
 import { RagIndex } from './rag';
 import { DocsIndex } from './docs-index';
 import { McpManager } from './mcp';
 import { AgentLoop } from './agent-loop';
-import { estimateTokens, estimateHistoryTokens, getNonSystemMessages } from './utils';
+import { estimateTokens, estimateHistoryTokens } from './utils';
 import { log, logError } from './logger';
 
 const MAX_GREETING_LEN = 200;
@@ -173,7 +173,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           if (isDev || !this._context.globalState.get('grom.welcomed')) {
             if (!isDev) void this._context.globalState.update('grom.welcomed', true);
             const iconUri = webviewView.webview.asWebviewUri(
-              vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'idle-grom-logo.svg')
+              vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'grom-plan.svg')
             ).toString();
             setTimeout(() => this._view?.webview.postMessage({ type: 'welcome', iconUri }), 150);
           }
@@ -232,12 +232,38 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           const current = this._sessionManager.getCurrentSession();
           this._sessionManager.setSystemPrompt(current.id, data.prompt);
           this._saveState();
-          webviewView.webview.postMessage({ type: 'systemPromptSaved' });
+          webviewView.webview.postMessage({ type: 'systemPromptSaved', hasSystemPrompt: !!(data.prompt || '').trim() });
           break;
         }
         case 'getSystemPrompt': {
           const current = this._sessionManager.getCurrentSession();
           webviewView.webview.postMessage({ type: 'showSystemPrompt', prompt: current.systemPrompt || '' });
+          break;
+        }
+        case 'revertAgentChanges': {
+          const backups = this._agentLoop.getBackups();
+          if (!backups.size) break;
+          const folders = vscode.workspace.workspaceFolders;
+          const root = folders?.[0]?.uri;
+          if (!root) break;
+          const items = [...backups.entries()].map(([rel, orig]) => ({
+            label: rel,
+            description: orig === null ? 'new file — will be deleted' : 'will be restored to previous content',
+            rel, orig
+          }));
+          const picked = await vscode.window.showQuickPick(items, {
+            canPickMany: true, placeHolder: 'Select files to revert', title: 'Undo agent writes'
+          });
+          if (!picked?.length) break;
+          for (const { rel, orig } of picked) {
+            const uri = vscode.Uri.joinPath(root, rel);
+            if (orig === null) {
+              await vscode.workspace.fs.delete(uri, { useTrash: true });
+            } else {
+              await vscode.workspace.fs.writeFile(uri, Buffer.from(orig, 'utf8'));
+            }
+          }
+          vscode.window.showInformationMessage(`Grom: reverted ${picked.length} file${picked.length > 1 ? 's' : ''}.`);
           break;
         }
         case 'updateMode': this._updateMode(data.mode); break;
@@ -488,7 +514,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       robotAnimations,
       fontSize,
       taskLog: current.taskLog || [],
-      hasMemory: !!(this._context.globalState.get<string>('gromMemory', '') || '').trim()
+      hasMemory: !!(this._context.globalState.get<string>('gromMemory', '') || '').trim(),
+      hasSystemPrompt: !!(current.systemPrompt || '').trim()
     });
     this._updateUsageDisplay();
   }
@@ -769,6 +796,10 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         () => this._saveState(),
         () => this._updateUsageDisplay()
       );
+      const backups = this._agentLoop.getBackups();
+      if (backups.size > 0) {
+        this._view?.webview.postMessage({ type: 'agentWritesDone', files: [...backups.keys()] });
+      }
     } finally {
       this._isStreaming = false;
       this._checkConnection();
@@ -799,8 +830,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const mediaUri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', file)).toString();
     const resourceUri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'resources', file)).toString();
     const stripSvgDecl = (s: string) => s.replace(/<\?xml[^>]*\?>/g, '').replace(/<!DOCTYPE[^>]*>/g, '').trim();
-    const idleSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'idle-grom-logo.svg'), 'utf8'));
-    const buildSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'building-grom-logo.svg'), 'utf8'));
+    const idleSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-plan.svg'), 'utf8'));
+    const buildSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-build.svg'), 'utf8'));
     const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data: blob:; connect-src http://127.0.0.1:* http://localhost:* https: ws://127.0.0.1:* ws://localhost:*;`;
     const htmlPath = path.join(this._context.extensionUri.fsPath, 'media', 'webview.html');
     return fs.readFileSync(htmlPath, 'utf8')
@@ -812,10 +843,10 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       .replace('{{MAIN_JS}}', mediaUri('main.js'))
       .replace('{{LOGO_INLINE_SVG}}', idleSvgRaw)
       .replace('{{LOGO_BUILD_SVG}}', buildSvgRaw)
-      .replace(/\{\{LOGO_DEFAULT\}\}/g, resourceUri('idle-grom-logo.svg'))
-      .replace('{{LOGO_BUILDING}}', resourceUri('building-grom-logo.svg'))
-      .replace('{{LOGO_DISCONNECTED}}', resourceUri('not connected-grom-logo.svg'))
-      .replace('{{LOGO_ERROR}}', resourceUri('error-grom-logo.svg'));
+      .replace(/\{\{LOGO_DEFAULT\}\}/g, resourceUri('grom-plan.svg'))
+      .replace('{{LOGO_BUILDING}}', resourceUri('grom-build.svg'))
+      .replace('{{LOGO_DISCONNECTED}}', resourceUri('grom-disconnect.svg'))
+      .replace('{{LOGO_ERROR}}', resourceUri('grom-error.svg'));
   }
 }
 

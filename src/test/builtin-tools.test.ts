@@ -112,6 +112,25 @@ describe('Builtin Tools', () => {
       expect(result).to.include('Written src/new.ts');
       expect(vscode.workspace.fs.createDirectory.calledOnce).to.be.true;
     });
+
+    it('snapshots existing content into backups map before overwriting', async () => {
+      vscode.workspace.fs.readFile.resolves(Buffer.from('original content'));
+      vscode.workspace.fs.writeFile.resolves();
+      vscode.workspace.fs.createDirectory.resolves();
+      const backups = new Map();
+      await executeBuiltinTool('write_file', { path: 'src/existing.ts', content: 'new content' }, backups);
+      expect(backups.get('src/existing.ts')).to.equal('original content');
+    });
+
+    it('stores null in backups map for new files that did not exist', async () => {
+      vscode.workspace.fs.readFile.rejects(new Error('not found'));
+      vscode.workspace.fs.writeFile.resolves();
+      vscode.workspace.fs.createDirectory.resolves();
+      const backups = new Map();
+      await executeBuiltinTool('write_file', { path: 'src/brand-new.ts', content: 'hello' }, backups);
+      expect(backups.has('src/brand-new.ts')).to.be.true;
+      expect(backups.get('src/brand-new.ts')).to.be.null;
+    });
   });
 
   describe('list_directory', () => {

@@ -39,7 +39,7 @@ function extractNotebookText(content: string): string {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  const completionProvider = new GromInlineCompletionProvider();
+  const completionProvider = new GromInlineCompletionProvider(context);
   context.subscriptions.push(createStatusBar(context));
 
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(e => {

@@ -106,8 +106,10 @@ export function isBuiltinTool(name: string): boolean {
  * Executes a built-in tool by name with the given args.
  * All file paths are validated through safePath() to prevent directory traversal.
  * Returns a string result that is fed back to the model as the tool's output.
+ * When backups is provided, write_file snapshots the original content before overwriting
+ * (null = file did not exist) so the caller can offer an undo.
  */
-export async function executeBuiltinTool(name: string, args: Record<string, any>): Promise<string> {
+export async function executeBuiltinTool(name: string, args: Record<string, any>, backups?: Map<string, string | null>): Promise<string> {
   const folders = vscode.workspace.workspaceFolders;
   const root = folders?.[0]?.uri;
 
@@ -152,6 +154,14 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
       const p = safePath(args.path);
       if ('error' in p) return `Error: ${p.error}`;
       try {
+        if (backups && !backups.has(p.rel)) {
+          try {
+            const existing = await vscode.workspace.fs.readFile(p.uri);
+            backups.set(p.rel, Buffer.from(existing).toString('utf8'));
+          } catch {
+            backups.set(p.rel, null); // file did not exist — undo = delete
+          }
+        }
         const parentUri = vscode.Uri.joinPath(p.uri, '..');
         await vscode.workspace.fs.createDirectory(parentUri);
         await vscode.workspace.fs.writeFile(p.uri, Buffer.from(args.content as string, 'utf8'));

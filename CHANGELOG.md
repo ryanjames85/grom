@@ -4,6 +4,26 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.6] — 2026-05-08
+
+### New
+
+- **System prompt dot** — a blue dot appears on the session system prompt button (chat bubble icon) whenever a custom prompt is active; the dot clears automatically when the prompt is removed
+- **Agent undo** — after an agentic run completes, an **Undo agent changes** button appears on the final message; clicking it opens a multi-select picker so you can choose exactly which files to revert; files that didn't exist before the run are deleted, existing files are restored to their pre-run content
+- **Autocomplete debounce persistence** — the adaptive debounce value (tuned automatically based on your accept rate) now survives restarts; restored from extension state so the tuning doesn't reset every session; status bar tooltip shows current accept rate and debounce interval
+
+### Fixed
+
+- **Mini-Grom logo on new session** — the small robot icon in the panel header now correctly shows the Planning (gold) logo when opening a new session; previously it showed the Build (blue) logo due to a state-cache short-circuit
+- **Disconnect logo** — replaced the old "not connected" SVG with a cleaner `grom-disconnect.svg`
+
+### Changed
+
+- Logo alignment refined — PLAN and BUILD logos now use per-mode CSS positioning so the Grom face stays the same visual size when switching modes
+- README Grom state table updated — antenna states are described in plain language ("Antenna physically bouncing up and down" instead of "Antenna bobbing")
+
+---
+
 ## [0.3.5] — 2026-05-05
 
 ### New

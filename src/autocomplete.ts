@@ -29,6 +29,7 @@ let _debounceMs = DEBOUNCE_DEFAULT;
 let _shown = 0;
 let _accepted = 0;
 const TUNE_EVERY = 30;
+let _autocompleteContext: vscode.ExtensionContext | undefined;
 
 function _recordShown() {
   _shown++;
@@ -40,8 +41,17 @@ function _tuneDebounce() {
   const rate = _accepted / _shown;
   if (rate < 0.1) _debounceMs = Math.min(_debounceMs + 150, DEBOUNCE_MAX);
   else if (rate > 0.4) _debounceMs = Math.max(_debounceMs - 75, DEBOUNCE_MIN);
+  _autocompleteContext?.globalState.update('grom.autocomplete.debounceMs', _debounceMs);
   // Reset window
   _shown = 0; _accepted = 0;
+  _updateTooltip();
+}
+function _updateTooltip() {
+  if (!_statusBar) return;
+  const enabled = vscode.workspace.getConfiguration('grom').get<boolean>('autocomplete', true);
+  if (!enabled) return;
+  const rate = _shown > 0 ? Math.round((_accepted / _shown) * 100) : '—';
+  _statusBar.tooltip = `Grom autocomplete — accept rate: ${rate}%  ·  debounce: ${_debounceMs}ms`;
 }
 
 // Track recently edited files for context
@@ -106,6 +116,13 @@ export class GromInlineCompletionProvider implements vscode.InlineCompletionItem
   private _lastRequestId = 0;
   private _partialBuffer = '';
   private _partialPosition?: vscode.Position;
+
+  constructor(context?: vscode.ExtensionContext) {
+    if (context) {
+      _autocompleteContext = context;
+      _debounceMs = context.globalState.get<number>('grom.autocomplete.debounceMs', DEBOUNCE_DEFAULT);
+    }
+  }
 
   async provideInlineCompletionItems(
     document: vscode.TextDocument,

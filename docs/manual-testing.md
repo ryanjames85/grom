@@ -1,6 +1,6 @@
 # Grom — Manual Testing Runbook
 
-All scenarios below must be tested by hand. Run `npm test` first to confirm all 120 unit tests pass before starting.
+All scenarios below must be tested by hand. Run `npm test` first to confirm all 184 unit tests pass before starting.
 
 ---
 
@@ -9,7 +9,7 @@ All scenarios below must be tested by hand. Run `npm test` first to confirm all 
 1. Build and install the extension:
    ```
    npm run package
-   code --install-extension grom-0.1.0.vsix
+   code --install-extension grom-0.3.6.vsix
    ```
 2. Open a workspace folder in VS Code (the extension requires an open folder).
 3. Start LM Studio (or Ollama) and load a model. Confirm the server is reachable at `http://localhost:1234` (or your configured URL).
@@ -202,6 +202,42 @@ This covers a previously fixed bug where the agent kept calling tools after fini
 | Create two sessions with conversation history | Both visible in the session list |
 | Close and reopen VS Code (full restart, not just Reload Window) | Both sessions and their histories are restored |
 | Active session is the one that was active before closing | Correct session selected on reload |
+
+---
+
+## 13. System Prompt Dot Indicator
+
+| Step | Expected |
+|------|----------|
+| Open a session with no system prompt set | Chat bubble icon in header has no blue dot |
+| Click the chat bubble icon, enter a system prompt, and save | Blue dot appears on the chat bubble icon immediately |
+| Clear the system prompt and save | Blue dot disappears |
+| Reload VS Code with a session that has a prompt set | Blue dot is visible on load without sending a message |
+| Switch to a session with no prompt | Blue dot is absent; switch back to the session with a prompt — dot reappears |
+
+---
+
+## 14. Agent Undo (Diff-Aware Revert)
+
+| Step | Expected |
+|------|----------|
+| In BUILD mode, ask the agent to create two new files | Both files are created after approval |
+| After the agent finishes, the final message has an **Undo agent changes** button | Button is visible at the bottom of the last AI message |
+| Click **Undo agent changes** | A multi-select picker opens listing the files written during the run |
+| Deselect one file and confirm | Only the selected file is reverted; the deselected file remains |
+| Ask the agent to modify an existing file | Agent run completes; revert button appears |
+| Click **Undo agent changes** and confirm all | File is restored to its pre-run content |
+| Start a new message after a run | Revert button is gone from the previous run's message (cleared at start of next run) |
+
+---
+
+## 15. Autocomplete Debounce Persistence
+
+| Step | Expected |
+|------|----------|
+| Enable autocomplete (`✦ Grom` in status bar) | Status bar shows `✦ Grom` |
+| Accept several completions to tune the debounce | Hover the status bar item — tooltip shows accept rate and debounce ms |
+| Reload VS Code | Hover status bar — debounce value is restored from the previous session, not reset to default |
 
 ---
 

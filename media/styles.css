@@ -58,6 +58,7 @@ body { font-family: var(--vscode-font-family); font-size: 13px; margin: 0; backg
 
 .icon-btn { cursor: pointer; opacity: 0.6; transition: all 0.2s; font-size: 14px; background: none; border: none; color: inherit; padding: 4px; display: flex; align-items: center; border-radius: 4px; position: relative; }
 #memory-btn.has-memory::after { content: ''; position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; }
+#sysprompt-btn.has-prompt::after { content: ''; position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; background: #4fc3f7; border-radius: 50%; }
 .icon-btn:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .icon-btn:active { transform: scale(0.82); opacity: 1; }
 .icon-btn.clicked { animation: icon-pop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
@@ -69,8 +70,10 @@ body { font-family: var(--vscode-font-family); font-size: 13px; margin: 0; backg
 #scroll-to-bottom { position: fixed; bottom: 120px; right: 12px; z-index: 100; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--accent); background: var(--bg); color: var(--accent); cursor: pointer; display: none; align-items: center; justify-content: center; opacity: 0.9; box-shadow: 0 2px 8px rgba(0,0,0,0.4); transition: opacity 0.15s, transform 0.15s; padding: 0; }
 #scroll-to-bottom:hover { opacity: 1; transform: translateY(-1px); }
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; opacity: 0.5; text-align: center; gap: 15px; }
-.empty-logo { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; color: var(--accent); position: relative; }
+.empty-logo { width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; color: var(--accent); position: relative; }
 .empty-logo img { width: 70px; height: 70px; display: block; object-fit: contain; }
+body.mode-plan .empty-logo svg { position: absolute; top: 0px; left: 0px; width: 73px; height: 70px; }
+body.mode-build .empty-logo svg, body.grom-thinking .empty-logo svg { position: absolute; top: 0px; left: -1px; bottom: 0px; right: 1px; width: 75px; height: 78px; }
 .empty-text { font-size: 14px; max-width: 200px; line-height: 1.4; min-height: 2.8em; }
 .empty-text::after { content: '|'; animation: caret-blink 0.8s step-end infinite; opacity: 0; }
 .empty-text.typing::after { opacity: 1; }
@@ -156,6 +159,8 @@ pre { background: #1e1e1e !important; padding: 10px; border-radius: 8px; border:
 .tool-call-badge { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--vscode-descriptionForeground); margin: 6px 0; padding: 5px 10px; background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,0.08)); border-left: 2px solid var(--accent); border-radius: 4px; }
 .tool-call-badge code { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; color: var(--accent); }
 .tool-call-denied { border-left-color: #f87171; color: #f87171; }
+.agent-revert-btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 12px; font-size: 11px; background: none; border: 1px solid var(--vscode-button-border, var(--border)); color: var(--vscode-descriptionForeground); border-radius: 4px; cursor: pointer; opacity: 0.75; transition: opacity 0.15s; }
+.agent-revert-btn:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 
 /* Agent approval card */
 .approval-card { margin: 8px 0; border: 1px solid var(--border); border-left: 3px solid #E8A838; border-radius: 6px; background: var(--item-bg); overflow: hidden; font-size: 12px; }

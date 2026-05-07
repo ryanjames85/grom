@@ -36,10 +36,10 @@ His antenna tells you what's happening before you read a word:
 
 | State | What it means |
 | --- | --- |
-| Antenna bent | PLAN mode — thinking broadly |
-| Antenna straight | BUILD mode — focused, ready to ship |
-| Antenna bobbing | Waiting for a response |
-| Antenna drooping, faded | Your server isn't running |
+| Gold, antenna bent | PLAN mode — thinking broadly |
+| Blue, antenna straight | BUILD mode — focused, ready to ship |
+| Antenna physically bouncing up and down | Model is generating a response |
+| Faded, antenna drooping | Your server isn't running or isn't connected |
 | Glitching | Server returned an error |
 | Eyes closed, thought bubble | Idle — wake him up by typing |
 
