@@ -76,6 +76,16 @@ export class AgentLoop {
     const webSearchResult = await resolveWebSearch(rawText);
     const text = webSearchResult ?? await resolveSlashCommand(rawText);
 
+    // Direct responses (sentinel \x00 prefix) bypass the model entirely
+    if (text.startsWith('\x00')) {
+      session.history.push({ role: 'user', content: rawText, images });
+      saveState();
+      updateUsageDisplay();
+      this.deps.postMessage({ type: 'chunk', text: text.slice(1) });
+      this.deps.postMessage({ type: 'status', text: 'Ready' });
+      return;
+    }
+
     this._abortController?.abort();
     this._abortController = new AbortController();
 
@@ -106,7 +116,7 @@ export class AgentLoop {
     }
     this.deps.postMessage({ type: 'filesUsed', files: [...usedFiles].map(name => ({ name, tokens: 0 })) });
 
-    const planInstructions = 'You are in PLAN mode. Your job is to understand, scope, and plan the user\'s request — not to execute it. Respond with analysis, architecture, and step-by-step plans. Do NOT write files, execute commands, or call any tools. When the plan is ready or the user asks to implement it, tell them to switch to BUILD mode using the toggle at the top of the chat.';
+    const planInstructions = 'You are in PLAN mode. Be conversational and helpful — not every message needs a formal plan. Match your tone to the message: brief for casual questions, thorough for design and architecture. When the user wants to design, scope, or think through a feature, help them break it down. Do NOT write files, execute commands, or call any tools. When the user is ready to implement, suggest they switch to BUILD mode.';
     const buildInstructions = 'You are in BUILD mode. Use tools to read files, write code, and execute tasks. Prefer action over explanation. IMPORTANT: before modifying or appending to an existing file, always call read_file first to get its current content — never assume you know what is already in the file.';
     const modeInstructions = mode === 'build' ? buildInstructions : planInstructions;
 

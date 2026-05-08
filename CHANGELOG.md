@@ -4,6 +4,20 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.8] — 2026-05-08
+
+### New
+
+- **Prompt history** — up/down arrow cycles through previously sent messages when the input is empty; any edit exits history mode immediately; focus change resets position so each session starts fresh. Hover the input for the hint.
+- **`/commit` auto-diff** — typing `/commit` now automatically runs `git diff HEAD` and `git ls-files --others` to include both modified and new untracked files; the model receives the actual diff with no extra `@git` mention needed. If there are no changes, replies instantly without calling the model.
+- **Token cost tooltip** — hovering the context-window radial shows estimated cost (e.g. `1,234 / 32,000 tokens (4%) • $0.0012`) when the active model has pricing configured in `grom.modelPricing`. Silent for free/local models.
+
+### Fixed
+
+- **PLAN mode over-engineering** — removed the instruction that forced every message into a plan-format response; PLAN mode now matches tone to the message (brief for casual questions, thorough for architecture) and only suggests BUILD mode when the user is ready to implement.
+
+---
+
 ## [0.3.7] — 2026-05-08
 
 ### New

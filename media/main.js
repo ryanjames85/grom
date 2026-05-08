@@ -124,6 +124,7 @@ window.toggleMode = () => {
     updateCapIcons();
 };
 
+let _inputHistory = [], _historyIdx = -1;
 let _agentEnabled = false;
 function _setAgentEnabled(enabled) {
     _agentEnabled = enabled;
@@ -584,6 +585,8 @@ sendBtn.onclick = () => {
   renderMsg('user', val, [...pendingImages]);
   let fullText = val; if (uploadedContext.length > 0) { fullText += "\n\nADDITIONAL UPLOADED CONTEXT:\n" + uploadedContext.map(u => `[File: ${u.name}]\n${u.content}`).join('\n\n'); }
   vscode.postMessage({ type: 'send', text: fullText, images: [...pendingImages], mode: currentMode });
+  if (val && (_inputHistory.length === 0 || _inputHistory[_inputHistory.length - 1] !== val)) { _inputHistory.push(val); if (_inputHistory.length > 50) _inputHistory.shift(); }
+  _historyIdx = -1;
   prompt.value = ''; currentAiText = ""; currentAiDiv = renderMsg('ai', '');
   currentAiDiv.querySelector('.msg-body').innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
   _requestId++;
@@ -604,8 +607,25 @@ stopBtn.onclick = () => {
     if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = '*Cancelled.*';
   }
 };
-prompt.oninput = () => { resetIdle(true); prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px'; if (prompt.value === '/') window.toggleSlashMenu(true); else window.toggleSlashMenu(false); };
-prompt.onkeydown = (e) => { resetIdle(true); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.onclick(); } };
+prompt.oninput = () => { resetIdle(true); _historyIdx = -1; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px'; if (prompt.value === '/') window.toggleSlashMenu(true); else window.toggleSlashMenu(false); };
+prompt.addEventListener('blur', () => { _historyIdx = -1; });
+prompt.onkeydown = (e) => {
+  resetIdle(true);
+  if (e.key === 'ArrowUp' && !e.shiftKey && (prompt.value === '' || _historyIdx >= 0)) {
+    if (_historyIdx === -1 && _inputHistory.length > 0) { _historyIdx = _inputHistory.length - 1; }
+    else if (_historyIdx > 0) { _historyIdx--; }
+    if (_historyIdx >= 0) { e.preventDefault(); prompt.value = _inputHistory[_historyIdx]; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px'; }
+    return;
+  }
+  if (e.key === 'ArrowDown' && !e.shiftKey && _historyIdx >= 0) {
+    e.preventDefault();
+    if (_historyIdx < _inputHistory.length - 1) { _historyIdx++; prompt.value = _inputHistory[_historyIdx]; }
+    else { _historyIdx = -1; prompt.value = ''; }
+    prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px';
+    return;
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.onclick(); }
+};
 
 prompt.addEventListener('paste', (e) => {
   const items = e.clipboardData?.items;
@@ -1017,7 +1037,9 @@ window.addEventListener('message', e => {
       const circle = document.getElementById('usage-fill'), circ = 56.5;
       circle.style.strokeDashoffset = circ - (m.contextPercent / 100) * circ;
       const total = (m.inputTokens || 0) + (m.outputTokens || 0);
-      document.getElementById('usage-display').title = `${total.toLocaleString()} / ${(m.contextWindow || 0).toLocaleString()} tokens (${m.contextPercent || 0}%)`;
+      const totalCost = (m.inputCost || 0) + (m.outputCost || 0);
+      const costStr = totalCost > 0 ? ` • $${totalCost.toFixed(4)}` : '';
+      document.getElementById('usage-display').title = `${total.toLocaleString()} / ${(m.contextWindow || 0).toLocaleString()} tokens (${m.contextPercent || 0}%)${costStr}`;
       break;
     }
     case 'setTheme':

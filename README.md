@@ -150,10 +150,12 @@ Open it with the brain icon in the header.
 ### Conversations
 
 - Multiple chat sessions, persistent across restarts
+- **Prompt history** — up/down arrow in the input cycles your previously sent messages
 - `/compact` trims long histories — a divider marks exactly where the cut was made
 - Export any conversation as `.md`, import it back to continue
 - Search through any conversation with live highlighting
 - Per-session system prompt override via the chat bubble icon
+- **Context window indicator** — the radial circle in the footer shows token usage; hover for exact counts and estimated cost (when pricing is configured in `grom.modelPricing`)
 
 ### Custom Prompt Files
 
@@ -173,7 +175,7 @@ Type `/` to open the command menu:
 | `/tests` | Write unit tests |
 | `/docs` | Write documentation |
 | `/review` | Full code review |
-| `/commit` | Generate a git commit message |
+| `/commit` | Draft a commit message from your actual `git diff` — no `@git` needed |
 | `/compose` | Multi-file edit mode |
 | `/search <query>` | Web search via DuckDuckGo |
 | `/<name>` | Any `.grom/<name>.md` file in your workspace |

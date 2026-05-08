@@ -27,6 +27,22 @@ export async function resolveSlashCommand(text: string): Promise<string> {
   const fileContent = editor ? `\n\n\`\`\`\n${editor.document.getText().slice(0, 8000)}\n\`\`\`` : '';
   const allFiles = await vscode.workspace.findFiles('**/*', '**/node_modules/**', 50);
   const fileList = allFiles.map(f => vscode.workspace.asRelativePath(f)).join('\n');
+
+  let gitDiff = '';
+  if (text.trim().toLowerCase().startsWith('/commit')) {
+    try {
+      const { execSync } = require('child_process') as typeof import('child_process');
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (root) {
+        const stat = execSync('git diff HEAD --stat', { cwd: root, timeout: 5000 }).toString().trim();
+        const diff = execSync('git diff HEAD', { cwd: root, timeout: 5000 }).toString().slice(0, 8000);
+        const untrackedRaw = execSync('git ls-files --others --exclude-standard', { cwd: root, timeout: 5000 }).toString().trim();
+        const untracked = untrackedRaw ? `New untracked files:\n${untrackedRaw}` : '';
+        gitDiff = [stat, untracked, diff].filter(Boolean).join('\n\n');
+      }
+    } catch { /* no git or no changes */ }
+  }
+
   const commands: Record<string, string> = {
     '/explain': `Explain this code clearly. Describe what it does, how it works, and any important patterns:${fileContent}`,
     '/refactor': `Refactor this code for clarity, maintainability, and best practices. Explain the changes you made:${fileContent}`,
@@ -34,7 +50,9 @@ export async function resolveSlashCommand(text: string): Promise<string> {
     '/tests': `Write comprehensive unit tests for this code. Cover edge cases, happy paths, and error conditions:${fileContent}`,
     '/docs': `Write clear documentation for this code. Include descriptions, parameters, return values, and usage examples:${fileContent}`,
     '/review': `Review this code for bugs, security issues, performance problems, and style. Be thorough and specific:${fileContent}`,
-    '/commit': `Based on the code changes shown, write a concise git commit message following conventional commits format:${fileContent}`,
+    '/commit': gitDiff
+      ? `Write a concise git commit message in conventional commits format for these changes:\n\n${gitDiff}`
+      : '\x00No uncommitted changes to commit.',
     '/compose': `You are about to make changes across multiple files. The workspace contains these files:\n${fileList}\n\nDescribe what changes you want to make, and I will output the full updated content for each affected file.\n\nFor each file you modify, use this exact format:\n### path/to/file.ext\n\`\`\`lang\n<full file content>\n\`\`\`\n\nOnly include files that actually need to change.${fileContent}`,
   };
 

@@ -239,6 +239,21 @@ describe('AgentLoop', () => {
     expect(clientStub.streamChatWithCallback.callCount).to.equal(3);
   });
 
+  it('returns a direct response for sentinel-prefixed slash commands without calling the model', async () => {
+    contextModule.resolveSlashCommand.resolves('\x00No uncommitted changes to commit.');
+
+    const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+    const saveState = sinon.stub();
+    await loop.run('/commit', undefined, 'plan', session, saveState, () => {});
+
+    expect(deps.postMessage.calledWith(sinon.match({ type: 'chunk', text: 'No uncommitted changes to commit.' }))).to.be.true;
+    expect(deps.postMessage.calledWith(sinon.match({ type: 'status', text: 'Ready' }))).to.be.true;
+    expect(clientStub.streamChatWithCallback.called).to.be.false;
+    expect(session.history).to.have.lengthOf(1);
+    expect(session.history[0].content).to.equal('/commit');
+    expect(saveState.called).to.be.true;
+  });
+
   it('suppresses built-in tools in Plan mode even if model is tool-capable', async () => {
     const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
     
