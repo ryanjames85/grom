@@ -32,6 +32,8 @@ If Ollama is running, Grom works. That's the whole deal.
 
 Grom is the little robot who lives in your sidebar. He watches your cursor, thinks while you type, and goes to sleep when you're idle. He's not a feature — he's the soul of the tool.
 
+When Grom goes idle he does two useful things quietly in the background: for Ollama users, he sends a keep-alive ping so your model stays loaded in VRAM and is ready instantly when you return. And if the file you have open has errors, he shows the count in his thought bubble — a gentle nudge without interrupting your flow.
+
 His antenna tells you what's happening before you read a word:
 
 | | State | What it means |
@@ -41,7 +43,7 @@ His antenna tells you what's happening before you read a word:
 | ![Generating](resources/grom-build.png) | Antenna bouncing *(animated)* | Model is generating a response |
 | ![Disconnected](resources/grom-disconnect.png) | Grey, unplugged | Your server isn't running or isn't connected |
 | ![Error](resources/grom-error.png) | Glitching | Server returned an error |
-| ![Idle](resources/grom-idle.png) | Eyes closed, thought bubble *(animated)* | Idle — wake him up by typing |
+| ![Idle](resources/grom-idle.png) | Eyes closed, thought bubble *(animated)* | Idle — keeps model in VRAM; shows error count if active file has issues |
 
 ---
 
