@@ -12,10 +12,12 @@ All notable changes to Grom are documented here.
 
 ### Fixed
 
-- **Polling during generation** — the connection status check no longer fires while the model is generating; interval bumped from 15s to 60s. Prevents single-threaded local servers (LM Studio) from being interrupted mid-response.
-- **Capability detection** — name-based tool and vision detection tightened; broad family names (gemma, llama, mistral, phi) no longer auto-flag a model as tool-capable. Server-reported capabilities take precedence; name-based detection is reserved for model families with a consistent track record.
-- **Instant capability icons on reconnect** — detected capabilities are now cached in extension state per provider+model; subsequent connects show icons immediately with no extra request. First-time detection runs in the background so the Connected status appears without waiting for capability probing.
+- **MCP tools respect the toggle** — when Tools is off, MCP tools are now also excluded from the agent loop; previously only built-in tools were gated and MCP tools were still injected.
+- **Gemma 4 capability detection** — `gemma-4` / `gemma4` added to the vision and tools name-based lists; all Gemma 4 variants are multimodal and support function calling but LM Studio reports no explicit capability fields, so name-based is the only detection path.
+- **LM Studio tool detection** — `tool_calls` (LM Studio's field name) is now recognised alongside `tool_use` and `function_calling`; previously LM Studio models with explicit capability entries were not flagged as tool-capable.
 - **Single request for OpenAI-compat** — `getCapabilities()` now reuses the `/v1/models` response already fetched by `getModels()` instead of making a second identical network call; eliminates a redundant round-trip on every connect for LM Studio, OpenAI, Groq, Gemini, and all custom providers.
+- **Session migration** — upgrading from v0.3.6: only sessions with conversation history are migrated to `agentEnabled = true`; empty sessions get the new default-off behaviour instead of appearing with Tools already on.
+- **Polling during generation** — the connection status check no longer fires while the model is generating; interval bumped from 15 s to 60 s. Prevents single-threaded local servers (LM Studio) from being interrupted mid-response.
 
 ---
 
