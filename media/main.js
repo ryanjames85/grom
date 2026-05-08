@@ -822,6 +822,7 @@ window.addEventListener('message', e => {
       _setMemoryDot(m.hasMemory);
       _setSysPromptDot(m.hasSystemPrompt);
       _setAgentEnabled(m.agentEnabled ?? false);
+      if (m.promptHistory?.length) { _inputHistory = m.promptHistory; _historyIdx = -1; }
       document.body.classList.remove('font-small', 'font-medium', 'font-large');
       document.body.classList.add('font-' + (m.fontSize || 'medium'));
 

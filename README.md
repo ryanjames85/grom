@@ -34,14 +34,14 @@ Grom is the little robot who lives in your sidebar. He watches your cursor, thin
 
 His antenna tells you what's happening before you read a word:
 
-| State | What it means |
-| --- | --- |
-| Gold, antenna bent | PLAN mode — thinking broadly |
-| Blue, antenna straight | BUILD mode — focused, ready to ship |
-| Antenna physically bouncing up and down | Model is generating a response |
-| Faded, antenna drooping | Your server isn't running or isn't connected |
-| Glitching | Server returned an error |
-| Eyes closed, thought bubble | Idle — wake him up by typing |
+| | State | What it means |
+| :---: | --- | --- |
+| <img src="resources/grom-plan.svg" height="32" alt="PLAN"> | Gold, antenna bent | PLAN mode — thinking broadly |
+| <img src="resources/grom-build.svg" height="32" alt="BUILD"> | Blue, antenna straight | BUILD mode — focused, ready to ship |
+| <img src="resources/grom-build.svg" height="32" alt="Generating"> | Antenna bouncing *(animated)* | Model is generating a response |
+| <img src="resources/grom-disconnect.svg" height="32" alt="Disconnected"> | Grey, unplugged | Your server isn't running or isn't connected |
+| <img src="resources/grom-error.svg" height="32" alt="Error"> | Glitching | Server returned an error |
+| <img src="resources/grom-idle.svg" height="32" alt="Idle"> | Eyes closed, thought bubble *(animated)* | Idle — wake him up by typing |
 
 ---
 

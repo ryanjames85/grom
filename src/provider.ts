@@ -185,7 +185,16 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             setTimeout(() => this._view?.webview.postMessage({ type: 'welcome', iconUri }), 150);
           }
           break;
-        case 'send': await this._handleChat(data.text, data.images, data.mode); break;
+        case 'send': {
+          const ph = this._context.globalState.get<string[]>('promptHistory', []);
+          if (data.text && (ph.length === 0 || ph[ph.length - 1] !== data.text)) {
+            ph.push(data.text);
+            if (ph.length > 50) ph.shift();
+            void this._context.globalState.update('promptHistory', ph);
+          }
+          await this._handleChat(data.text, data.images, data.mode);
+          break;
+        }
         case 'abort': this._agentLoop.abort(); break;
         case 'insertCode': insertCode(data.code); break;
         case 'applyCode': await applyCode(data.code); break;
@@ -529,7 +538,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       taskLog: current.taskLog || [],
       hasMemory: !!(this._context.globalState.get<string>('gromMemory', '') || '').trim(),
       hasSystemPrompt: !!(current.systemPrompt || '').trim(),
-      agentEnabled: current.agentEnabled ?? false
+      agentEnabled: current.agentEnabled ?? false,
+      promptHistory: this._context.globalState.get<string[]>('promptHistory', [])
     });
     this._updateUsageDisplay();
   }
