@@ -291,6 +291,32 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'updateHistory': await this._updateSessionHistory(data.text); break;
         case 'retryConnection': this._checkConnection(); break;
+        case 'idleStart': {
+          const cfg = vscode.workspace.getConfiguration('grom');
+          const useOllama = cfg.get<boolean>('useOllamaFormat') ?? true;
+          if (useOllama) {
+            const url = (cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434').replace(/\/$/, '');
+            const model = cfg.get<string>('model') || 'qwen2.5-coder';
+            fetch(`${url}/api/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model, messages: [], keep_alive: '10m' })
+            }).catch(() => {});
+          }
+          const editor = vscode.window.activeTextEditor;
+          if (editor) {
+            const errors = vscode.languages.getDiagnostics(editor.document.uri)
+              .filter(d => d.severity === vscode.DiagnosticSeverity.Error);
+            if (errors.length > 0) {
+              const fname = editor.document.fileName.split(/[/\\]/).pop() ?? '';
+              this._view?.webview.postMessage({
+                type: 'idleHint',
+                text: `${errors.length} error${errors.length > 1 ? 's' : ''} in ${fname}`
+              });
+            }
+          }
+          break;
+        }
         case 'testConnection': {
           const cfg = vscode.workspace.getConfiguration('grom');
           const url = cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434';

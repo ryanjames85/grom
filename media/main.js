@@ -681,6 +681,7 @@ function resetIdle(forceWake = false) {
 
 function showThoughts() {
     if (!robotAnimations) return;
+    vscode.postMessage({ type: 'idleStart' });
     const logo = document.getElementById('main-logo'); if (!logo || thoughtInterval) return;
     let bubble = document.getElementById('thought-bubble');
     if (!bubble) { bubble = document.createElement('div'); bubble.id = 'thought-bubble'; bubble.className = 'thought-bubble'; logo.appendChild(bubble); }
@@ -953,6 +954,11 @@ window.addEventListener('message', e => {
         if (dots) { dots.remove(); if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = ''; }
       }
     } break;
+    case 'idleHint': {
+      const bubble = document.getElementById('thought-bubble');
+      if (bubble && bubble.classList.contains('active')) bubble.textContent = m.text;
+      break;
+    }
     case 'statusUpdate':
       _currentCaps = m.caps || null;
       document.getElementById('conn-status').textContent = m.status;

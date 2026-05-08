@@ -4,6 +4,14 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.4.0] — 2026-05-08
+
+### New
+
+- **Functional idle** — when Grom goes idle (15 s of inactivity), two things happen automatically: for Ollama users, a keep-alive request extends the model's VRAM TTL by 10 minutes so it doesn't get unloaded between prompts; and if the active file has VS Code errors, the count appears in the thought bubble (e.g. `3 errors in main.ts`) as a gentle nudge to fix them.
+
+---
+
 ## [0.3.8] — 2026-05-08
 
 ### New
