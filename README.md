@@ -36,12 +36,12 @@ His antenna tells you what's happening before you read a word:
 
 | | State | What it means |
 | :---: | --- | --- |
-| <img src="resources/grom-plan.svg" height="32" alt="PLAN"> | Gold, antenna bent | PLAN mode — thinking broadly |
-| <img src="resources/grom-build.svg" height="32" alt="BUILD"> | Blue, antenna straight | BUILD mode — focused, ready to ship |
-| <img src="resources/grom-build.svg" height="32" alt="Generating"> | Antenna bouncing *(animated)* | Model is generating a response |
-| <img src="resources/grom-disconnect.svg" height="32" alt="Disconnected"> | Grey, unplugged | Your server isn't running or isn't connected |
-| <img src="resources/grom-error.svg" height="32" alt="Error"> | Glitching | Server returned an error |
-| <img src="resources/grom-idle.svg" height="32" alt="Idle"> | Eyes closed, thought bubble *(animated)* | Idle — wake him up by typing |
+| <img src="resources/grom-plan.png" height="32" alt="PLAN"> | Gold, antenna bent | PLAN mode — thinking broadly |
+| <img src="resources/grom-build.png" height="32" alt="BUILD"> | Blue, antenna straight | BUILD mode — focused, ready to ship |
+| <img src="resources/grom-build.png" height="32" alt="Generating"> | Antenna bouncing *(animated)* | Model is generating a response |
+| <img src="resources/grom-disconnect.png" height="32" alt="Disconnected"> | Grey, unplugged | Your server isn't running or isn't connected |
+| <img src="resources/grom-error.png" height="32" alt="Error"> | Glitching | Server returned an error |
+| <img src="resources/grom-idle.png" height="32" alt="Idle"> | Eyes closed, thought bubble *(animated)* | Idle — wake him up by typing |
 
 ---
 
