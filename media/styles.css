@@ -113,6 +113,9 @@ textarea { width: 100%; background: transparent; color: inherit; border: none; o
 .cap-reasoning svg { stroke: #c084fc; }
 .send-btn { background: var(--accent); color: white; width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.1s; }
 
+.agent-btn { display: flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; padding: 2px 8px; height: 24px; border-radius: 20px; border: 1px solid transparent; cursor: pointer; transition: all 0.15s; color: var(--text-muted); background: var(--vscode-button-secondaryBackground); }
+.agent-btn.active { color: #fff; border-color: var(--accent); background: var(--accent); }
+body.mode-plan .agent-btn { opacity: 0.35; pointer-events: none; }
 .mode-toggle { display: flex; background: var(--vscode-button-secondaryBackground); border-radius: 20px; padding: 2px; position: relative; cursor: pointer; width: 100px; height: 24px; align-items: center; justify-content: space-between; font-size: 10px; font-weight: bold; box-sizing: border-box; }
 .mode-btn { flex: 1; text-align: center; z-index: 2; transition: color 0.2s; color: var(--text); opacity: 0.6; height: 100%; display: flex; align-items: center; justify-content: center; }
 .mode-btn.active { opacity: 1; color: white; }

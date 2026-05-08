@@ -123,6 +123,7 @@ describe('AgentLoop', () => {
       history: [],
       tokens: { input: 0, output: 0 },
       mode: 'build',
+      agentEnabled: true,
     };
 
     const toolCallJson = '{"tool": "read_file", "args": {"path": "test.ts"}}';
@@ -151,6 +152,7 @@ describe('AgentLoop', () => {
       history: [],
       tokens: { input: 0, output: 0 },
       mode: 'build',
+      agentEnabled: true,
     };
 
     const toolCallJson = '{"tool": "write_file", "args": {"path": "test.ts", "content": "hi"}}';
@@ -179,6 +181,7 @@ describe('AgentLoop', () => {
       history: [],
       tokens: { input: 0, output: 0 },
       mode: 'build',
+      agentEnabled: true,
     };
 
     const toolCallJson = '{"tool": "write_file", "args": {"path": "test.ts", "content": "hi"}}';
@@ -209,6 +212,7 @@ describe('AgentLoop', () => {
       history: [],
       tokens: { input: 0, output: 0 },
       mode: 'build',
+      agentEnabled: true,
     };
 
     const toolCallJson = '{"tool": "read_file", "args": {"path": "test.ts"}}';

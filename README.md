@@ -51,6 +51,8 @@ His antenna tells you what's happening before you read a word:
 
 **BUILD mode** — focused blue. Grom is direct and implementation-ready. Write code, fix bugs, ship things.
 
+**⚡ Tools** — a toggle in the toolbar, only available in BUILD mode. Off by default so plain chat stays fast. When off the button is muted; when on it fills solid with the accent colour — no ambiguity. Turn it on when you want Grom to read and write files, run terminal commands, and call MCP tools. Each session remembers its own Tools state.
+
 The UI colour shifts with the mode. So does Grom's personality.
 
 ---
@@ -115,7 +117,7 @@ Every code block in compose format gets a **💾 Save** button — opens a diff 
 
 ### Agentic Loop
 
-Grom doesn't just reply once — it works through tasks step by step, calling tools based on what the last one returned.
+Enable **⚡ Tools** in the toolbar (BUILD mode only) and Grom doesn't just reply once — it works through tasks step by step, calling tools based on what the last one returned.
 
 | Tool | What it does |
 | --- | --- |
@@ -241,7 +243,8 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.customProviders` | Custom provider endpoints; keys stored securely in OS keychain | `[]` |
 | `grom.robotAnimations` | Enable Grom's animations | `true` |
 | `grom.theme` | UI theme: Grom, Cyberpunk, Classic, High Contrast | `Grom` |
-| `grom.agentEnabled` | Enable the agentic loop | `true` |
+| `grom.agentEnabled` | Master switch — disables tools globally when off | `true` |
+| `grom.toolsEnabledByDefault` | Start every new session with ⚡ Tools already on | `false` |
 | `grom.agentMaxIterations` | Max tool-call rounds per task | `20` |
 | `grom.fontSize` | Chat panel font size: `small`, `medium`, `large` | `medium` |
 | `grom.debugLogging` | Write diagnostics to the Grom Output channel | `false` |

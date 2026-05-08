@@ -124,6 +124,17 @@ window.toggleMode = () => {
     updateCapIcons();
 };
 
+let _agentEnabled = false;
+function _setAgentEnabled(enabled) {
+    _agentEnabled = enabled;
+    const btn = document.getElementById('agent-btn');
+    if (btn) btn.classList.toggle('active', enabled);
+}
+window.toggleAgent = () => {
+    _setAgentEnabled(!_agentEnabled);
+    vscode.postMessage({ type: 'toggleAgent', enabled: _agentEnabled });
+};
+
 window.toggleHistory = () => { const overlay = document.getElementById('history-overlay'); overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex'; };
 
 window.switchHistoryTab = (tab) => {
@@ -757,7 +768,7 @@ window.addEventListener('message', e => {
       document.getElementById('sysprompt-overlay').style.display = 'none';
       break;
     case 'welcome': {
-      const welcomeDiv = renderMsg('ai', `To get started, pick a provider from the dropdown above:\n\n- **Ollama** or **LM Studio** — run them locally, then select a model from the dropdown\n- **Anthropic**, **OpenAI**, **Groq**, or **Mistral** — click the 🔒 icon next to the provider to add your API key\n- **Custom** — add any OpenAI-compatible endpoint via \`grom.customProviders\` in settings\n\nOnce connected, type a message and press **Enter**.\n\nType \`/help\` to see available commands, or \`@\` to attach files and context.\n\nExplore the icons above to discover all of Grom's features.\n\nClick the ⚙️ settings icon to customise Grom to your workflow.`);
+      const welcomeDiv = renderMsg('ai', `To get started, pick a provider from the dropdown above:\n\n- **Ollama** or **LM Studio** — run them locally, then select a model from the dropdown\n- **Anthropic**, **OpenAI**, **Groq**, or **Mistral** — click the 🔒 icon next to the provider to add your API key\n- **Custom** — add any OpenAI-compatible endpoint via \`grom.customProviders\` in settings\n\nOnce connected, type a message and press **Enter**.\n\nType \`/help\` to see available commands, or \`@\` to attach files and context.\n\n**Two modes:** PLAN (gold) for thinking and designing, BUILD (blue) for writing code and shipping.\n\n**⚡ Tools** — visible in BUILD mode. Off by default for fast, clean chat. Turn it on when you want Grom to read and write files, run terminal commands, or use MCP tools. Each session remembers its own setting.\n\nClick the ⚙️ settings icon to customise Grom to your workflow.`);
       if (welcomeDiv) {
         const header = document.createElement('div');
         header.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px';
@@ -790,6 +801,7 @@ window.addEventListener('message', e => {
       currentMode = m.mode || 'plan';
       _setMemoryDot(m.hasMemory);
       _setSysPromptDot(m.hasSystemPrompt);
+      _setAgentEnabled(m.agentEnabled ?? false);
       document.body.classList.remove('font-small', 'font-medium', 'font-large');
       document.body.classList.add('font-' + (m.fontSize || 'medium'));
 
@@ -989,6 +1001,18 @@ window.addEventListener('message', e => {
       if (m.model) { const ms = document.getElementById('model-select'); ms.setOptions((m.models || []).map(mdl => ({ value: mdl, label: mdl }))); ms.value = m.model; ms.onchange = (ev) => vscode.postMessage({ type: 'changeModel', model: ev.target.value }); }
       updateCapIcons();
       break;
+    case 'capsUpdate': {
+      _currentCaps = m.caps || null;
+      const capsBar = document.getElementById('model-caps');
+      if (capsBar) {
+        capsBar.innerHTML = '';
+        if (m.caps?.reasoning) capsBar.innerHTML += `<div class="cap-icon cap-reasoning" title="Reasoning model — supports extended thinking"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.54z"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.54z"></path></svg></div>`;
+        if (m.caps?.vision) capsBar.innerHTML += `<div class="cap-icon cap-vision" title="Vision model — can process images"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E8A838" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></div>`;
+        if (m.caps?.tools) capsBar.innerHTML += `<div class="cap-icon cap-tools" title="Tool use — can call functions"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3B8FCC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></div>`;
+      }
+      updateCapIcons();
+      break;
+    }
     case 'usageUpdate': {
       const circle = document.getElementById('usage-fill'), circ = 56.5;
       circle.style.strokeDashoffset = circ - (m.contextPercent / 100) * circ;
@@ -1156,8 +1180,8 @@ function scheduleRetry() {
     clearTimeout(_retryTimer);
     _retryTimer = setTimeout(() => vscode.postMessage({ type: 'retryConnection' }), 5000);
 }
-// Periodic idle check — updates status dot even when no message is sent
-setInterval(() => vscode.postMessage({ type: 'retryConnection' }), 15000);
+// Periodic idle check — skip during generation so single-threaded servers (LM Studio) aren't polled while busy
+setInterval(() => { if (!document.body.classList.contains('grom-thinking')) vscode.postMessage({ type: 'retryConnection' }); }, 60000);
 
 document.addEventListener('click', e => {
   const link = e.target.closest('[data-path]');

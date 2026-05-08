@@ -4,6 +4,21 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.3.7] — 2026-05-08
+
+### New
+
+- **⚡ Tools toggle** — agent tools are now off by default; a new Tools button in the BUILD mode toolbar enables file read/write, terminal, and MCP tools per session. Keeps plain chat fast — no tool schema is sent to the model unless you explicitly turn it on. Greyed out in PLAN mode. Each session remembers its own state. The button fills solid with the accent colour when on so the active state is unambiguous.
+
+### Fixed
+
+- **Polling during generation** — the connection status check no longer fires while the model is generating; interval bumped from 15s to 60s. Prevents single-threaded local servers (LM Studio) from being interrupted mid-response.
+- **Capability detection** — name-based tool and vision detection tightened; broad family names (gemma, llama, mistral, phi) no longer auto-flag a model as tool-capable. Server-reported capabilities take precedence; name-based detection is reserved for model families with a consistent track record.
+- **Instant capability icons on reconnect** — detected capabilities are now cached in extension state per provider+model; subsequent connects show icons immediately with no extra request. First-time detection runs in the background so the Connected status appears without waiting for capability probing.
+- **Single request for OpenAI-compat** — `getCapabilities()` now reuses the `/v1/models` response already fetched by `getModels()` instead of making a second identical network call; eliminates a redundant round-trip on every connect for LM Studio, OpenAI, Groq, Gemini, and all custom providers.
+
+---
+
 ## [0.3.6] — 2026-05-08
 
 ### New

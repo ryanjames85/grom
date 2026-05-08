@@ -194,6 +194,7 @@
           <input type="file" id="img-upload" hidden onchange="handleFileUpload(this)">
         </div>
         <div class="toolbar-right">
+          <button id="agent-btn" class="agent-btn" onclick="window.toggleAgent()" title="Tools — allow Grom to read and write files, run terminal commands, and call MCP tools. Only active in BUILD mode.">⚡ Tools</button>
           <div id="mode-toggle" class="mode-toggle" onclick="window.toggleMode()"><div class="mode-slider"></div><div id="plan-btn" class="mode-btn active">PLAN</div><div id="build-btn" class="mode-btn">BUILD</div></div>
           <div class="send-btn" id="sendBtn" title="Send (Enter)">↑</div>
           <div class="send-btn" id="stopBtn">■</div>

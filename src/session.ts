@@ -30,6 +30,7 @@ export interface ChatSession {
   tokens: { input: number, output: number };
   lastModified: number;
   mode: 'plan' | 'build';
+  agentEnabled?: boolean;
   systemPrompt?: string;
   taskLog?: TaskLogEntry[];
   model?: string;
@@ -67,9 +68,9 @@ export class SessionManager {
   }
 
   /** Creates a new empty session, switches to it, and returns its ID. */
-  createNewSession() {
+  createNewSession(agentEnabled = false) {
     const id = Date.now().toString();
-    this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan' };
+    this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled };
     this.currentSessionId = id;
     return id;
   }
@@ -88,11 +89,11 @@ export class SessionManager {
    * so there is always at least one session in the list. Switches to the most recently
    * modified remaining session if the deleted session was active.
    */
-  deleteSession(id: string) {
+  deleteSession(id: string, agentEnabled = false) {
     const remaining = Object.keys(this.sessions).filter(k => k !== id);
     if (remaining.length === 0) {
       // Last session — clear it rather than leaving nothing
-      this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan' };
+      this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled };
       return;
     }
     delete this.sessions[id];
@@ -131,6 +132,13 @@ export class SessionManager {
   updateMode(sessionId: string, mode: 'plan' | 'build') {
     if (this.sessions[sessionId]) {
       this.sessions[sessionId].mode = mode;
+    }
+  }
+
+  /** Toggles the per-session agent flag — controls whether tool schemas are injected in BUILD mode. */
+  setAgentEnabled(sessionId: string, enabled: boolean) {
+    if (this.sessions[sessionId]) {
+      this.sessions[sessionId].agentEnabled = enabled;
     }
   }
 

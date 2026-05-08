@@ -57,8 +57,15 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     this._mcp = new McpManager();
     this._mcp.initialize();
     const initialSessions = this._context.workspaceState.get<Record<string, ChatSession>>('sessions', {
-      'default': { id: 'default', title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan' }
+      'default': { id: 'default', title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled: false }
     });
+    // Migration: sessions persisted before v0.3.7 have no agentEnabled field.
+    // Only sessions with actual history had tools active; empty sessions get the new default-off.
+    for (const session of Object.values(initialSessions)) {
+      if (session.agentEnabled === undefined) {
+        session.agentEnabled = (session.history?.length ?? 0) > 0;
+      }
+    }
     const lastSessionId = this._context.workspaceState.get<string>('lastSessionId', 'default');
     this._sessionManager = new SessionManager(initialSessions, lastSessionId);
     this._agentLoop = new AgentLoop({
@@ -267,6 +274,12 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'updateMode': this._updateMode(data.mode); break;
+        case 'toggleAgent': {
+          const session = this._sessionManager.getCurrentSession();
+          this._sessionManager.setAgentEnabled(session.id, data.enabled);
+          this._saveState();
+          break;
+        }
         case 'updateHistory': await this._updateSessionHistory(data.text); break;
         case 'retryConnection': this._checkConnection(); break;
         case 'testConnection': {
@@ -515,7 +528,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       fontSize,
       taskLog: current.taskLog || [],
       hasMemory: !!(this._context.globalState.get<string>('gromMemory', '') || '').trim(),
-      hasSystemPrompt: !!(current.systemPrompt || '').trim()
+      hasSystemPrompt: !!(current.systemPrompt || '').trim(),
+      agentEnabled: current.agentEnabled ?? false
     });
     this._updateUsageDisplay();
   }
@@ -563,7 +577,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _createNewSession() {
-    this._sessionManager.createNewSession();
+    const toolsDefault = vscode.workspace.getConfiguration('grom').get<boolean>('toolsEnabledByDefault', false);
+    this._sessionManager.createNewSession(toolsDefault);
     this._saveState();
     this._loadAllSessions();
   }
@@ -582,7 +597,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _deleteSession(id: string) {
-    this._sessionManager.deleteSession(id);
+    const toolsDefault = vscode.workspace.getConfiguration('grom').get<boolean>('toolsEnabledByDefault', false);
+    this._sessionManager.deleteSession(id, toolsDefault);
     this._saveState();
     this._loadAllSessions();
   }
@@ -735,26 +751,29 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       const models = await client.getAvailableModels(controller.signal);
-      // If the stored model isn't served by this provider, snap to the first available one.
-      // This happens on first connect when settings still hold the previous provider's model name.
-      const activeModel = models.length > 0 && !models.includes(model) ? models[0] : model;
-      const capsClient = activeModel !== model
-        ? new LocalLLMClient(url, activeModel, useOllama, key, authType, providerFormat)
-        : client;
-      const caps = await capsClient.getCapabilities(controller.signal);
       clearTimeout(timeout);
+
+      // If the stored model isn't served by this provider, snap to the first available one.
+      const activeModel = models.length > 0 && !models.includes(model) ? models[0] : model;
       if (activeModel !== model) {
         await vscode.workspace.getConfiguration('grom').update('model', activeModel, vscode.ConfigurationTarget.Global);
       }
+
       const mcpToolCount = this._mcp.getAllTools().length;
-      // Tools icon: show if model supports it natively OR if MCP tools are available via Grom
-      if (mcpToolCount > 0) caps.tools = true;
-      log(`[connection] connected — model=${activeModel} models=[${models.join(', ')}] caps=${JSON.stringify(caps)} mcpTools=${mcpToolCount}`);
       const rawProviders = vscode.workspace.getConfiguration('grom').get<any[]>('customProviders') || [];
       const customProviders = await Promise.all(rawProviders.map(async (cp: any) => ({
         name: cp.name, url: cp.url, useOllamaFormat: cp.useOllamaFormat, authType: cp.authType || 'bearer',
         hasKey: !!(await this._context.secrets.get(`grom.key.custom.${cp.name}`))
       })));
+
+      // For OpenAI-compat providers, getCapabilities() reuses the /v1/models response
+      // already fetched by getAvailableModels() — no extra network request.
+      const capsClient = activeModel !== model
+        ? new LocalLLMClient(url, activeModel, useOllama, key, authType, providerFormat)
+        : client;
+      const caps = await capsClient.getCapabilities();
+      if (mcpToolCount > 0) caps.tools = true;
+      log(`[connection] connected — model=${activeModel} models=[${models.join(', ')}] caps=${JSON.stringify(caps)} mcpTools=${mcpToolCount}`);
       this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model: activeModel, models, caps, useOllama, customProviders });
     } catch (err: any) {
       const isNetworkError = err.message?.includes('fetch failed') || err.name === 'AbortError' || err.message?.includes('ECONNREFUSED');

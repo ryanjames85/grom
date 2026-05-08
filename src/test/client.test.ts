@@ -75,6 +75,298 @@ describe('LocalLLMClient', () => {
     expect(caps.reasoning).to.be.true;
   });
 
+  // --- OpenAI-compat capability detection ---
+
+  describe('OpenAI-compat getCapabilities', () => {
+    const minimalModelEntry = (id: string, extra: Record<string, any> = {}) => ({
+      ok: true,
+      json: async () => ({ data: [{ id, ...extra }] })
+    } as any);
+
+    // Name-based detection (server returns no capabilities block)
+
+    it('detects vision for llava by name', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'llava:13b', false);
+      fetchStub.resolves(minimalModelEntry('llava:13b'));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('detects vision for gemma-4 by name', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gemma-4-4b', false);
+      fetchStub.resolves(minimalModelEntry('gemma-4-4b'));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('detects vision for namespaced gemma-4 model (google/gemma-4-e4b)', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'google/gemma-4-e4b', false);
+      fetchStub.resolves(minimalModelEntry('google/gemma-4-e4b'));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('detects tools for gemma-4 by name', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gemma-4-4b', false);
+      fetchStub.resolves(minimalModelEntry('gemma-4-4b'));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('detects tools for qwen2.5 by name', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen2.5-coder:7b', false);
+      fetchStub.resolves(minimalModelEntry('qwen2.5-coder:7b'));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('detects tools for qwen3 by name', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen3:8b', false);
+      fetchStub.resolves(minimalModelEntry('qwen3:8b'));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('does NOT flag plain llama3 as vision or tools when server gives no caps', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'llama3.1:8b', false);
+      fetchStub.resolves(minimalModelEntry('llama3.1:8b'));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.false;
+      expect(caps.tools).to.be.false;
+    });
+
+    // Server-reported capabilities take precedence
+
+    it('uses server-reported vision=true when capabilities block present', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub.resolves(minimalModelEntry('some-model', { capabilities: { vision: true } }));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('uses server-reported tool_calls field (LM Studio naming)', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub.resolves(minimalModelEntry('some-model', { capabilities: { tool_calls: true } }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('uses server-reported tool_use field', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub.resolves(minimalModelEntry('some-model', { capabilities: { tool_use: true } }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('uses server-reported function_calling field', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub.resolves(minimalModelEntry('some-model', { capabilities: { function_calling: true } }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('overrides name-based tools=true with server-reported tools=false when caps block exists', async () => {
+      // Server explicitly says no tools — trust it over the name
+      const client = new LocalLLMClient('http://localhost:1234', 'mistral-nemo', false);
+      fetchStub.resolves(minimalModelEntry('mistral-nemo', { capabilities: { tools: false } }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.false;
+    });
+
+    it('falls back to name-based tools when server returns no capabilities block', async () => {
+      // No capabilities key at all → hasExplicitCaps=false → name-based
+      const client = new LocalLLMClient('http://localhost:1234', 'command-r', false);
+      fetchStub.resolves(minimalModelEntry('command-r'));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('detects vision via multimodal keyword in entry JSON', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub.resolves(minimalModelEntry('some-model', { type: 'multimodal' }));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('returns nameBased when model entry not found in list', async () => {
+      // Model in settings is not in the /v1/models response
+      const client = new LocalLLMClient('http://localhost:1234', 'missing-model', false);
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [{ id: 'other-model' }] }) } as any);
+      const caps = await client.getCapabilities();
+      // missing-model has no name-based match → all false
+      expect(caps).to.deep.equal({ vision: false, reasoning: false, tools: false });
+    });
+
+    it('returns nameBased when /v1/models returns non-ok', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-vision-model', false);
+      fetchStub.resolves({ ok: false, statusText: 'Unauthorized' } as any);
+      const caps = await client.getCapabilities();
+      // 'some-vision-model' → shortName includes 'vision' → nameBased.vision=true
+      expect(caps.vision).to.be.true;
+    });
+
+    it('returns safe defaults when fetch throws entirely', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub.rejects(new Error('ECONNREFUSED'));
+      const caps = await client.getCapabilities();
+      expect(caps).to.deep.equal({ vision: false, reasoning: false, tools: false });
+    });
+
+    // _lastModelsRaw optimisation: no second /v1/models fetch after getModels()
+
+    it('reuses /v1/models response from getModels — only one fetch for both calls', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gemma-4-4b', false);
+      const modelsResponse = { data: [{ id: 'gemma-4-4b', capabilities: { vision: true, tool_calls: true } }] };
+      fetchStub.resolves({ ok: true, json: async () => modelsResponse } as any);
+      await client.getAvailableModels();
+      const caps = await client.getCapabilities();
+      // Only one fetch should have fired (getModels sets _lastModelsRaw, getCapabilities consumes it)
+      expect(fetchStub.callCount).to.equal(1);
+      expect(caps.vision).to.be.true;
+      expect(caps.tools).to.be.true;
+    });
+
+    it('makes a second fetch when getCapabilities called without prior getModels', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gemma-4-4b', false);
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [{ id: 'gemma-4-4b' }] }) } as any);
+      await client.getCapabilities();
+      expect(fetchStub.callCount).to.equal(1);
+    });
+
+    it('clears _lastModelsRaw after first getCapabilities call so second call re-fetches', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gemma-4-4b', false);
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [{ id: 'gemma-4-4b' }] }) } as any);
+      await client.getAvailableModels();         // 1 fetch, sets cache
+      await client.getCapabilities();            // consumes cache (still 1 fetch)
+      await client.getCapabilities();            // cache cleared, fetches again (now 2)
+      expect(fetchStub.callCount).to.equal(2);
+    });
+
+    // Namespaced model IDs (e.g. google/gemma-4-e4b)
+
+    it('matches namespaced model by full ID', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'google/gemma-4-e4b', false);
+      fetchStub.resolves({ ok: true, json: async () => ({
+        data: [{ id: 'google/gemma-4-e4b', capabilities: { vision: true } }]
+      }) } as any);
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('matches namespaced model by short name when full ID not in list', async () => {
+      // Server only lists the short name without the namespace
+      const client = new LocalLLMClient('http://localhost:1234', 'google/gemma-4-e4b', false);
+      fetchStub.resolves({ ok: true, json: async () => ({
+        data: [{ id: 'gemma-4-e4b', capabilities: { vision: true } }]
+      }) } as any);
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    // Reasoning detection
+
+    it('detects reasoning for deepseek-r1 model by name', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'deepseek-r1:7b', false);
+      fetchStub.resolves(minimalModelEntry('deepseek-r1:7b'));
+      const caps = await client.getCapabilities();
+      expect(caps.reasoning).to.be.true;
+    });
+
+    it('detects reasoning for qwq model by name', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwq-32b', false);
+      fetchStub.resolves(minimalModelEntry('qwq-32b'));
+      const caps = await client.getCapabilities();
+      expect(caps.reasoning).to.be.true;
+    });
+
+    it('detects reasoning via server-reported reasoning field', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub.resolves(minimalModelEntry('some-model', { capabilities: { reasoning: true } }));
+      const caps = await client.getCapabilities();
+      expect(caps.reasoning).to.be.true;
+    });
+  });
+
+  // --- Ollama-specific capability detection ---
+
+  describe('Ollama getCapabilities', () => {
+    const ollamaShowResponse = (fields: Record<string, any>) => ({
+      ok: true,
+      json: async () => fields
+    } as any);
+
+    it('detects vision via projector component in model_info', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'llava:13b', true);
+      // Real Ollama /api/show for vision models includes projector keys in model_info
+      fetchStub.resolves(ollamaShowResponse({ model_info: { 'projector.type': 'mlp', 'projector.0.weight': '...' } }));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('detects vision via mllm family tag', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'vision-model', true);
+      fetchStub.resolves(ollamaShowResponse({ details: { families: ['mllm', 'qwen2'] } }));
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+    });
+
+    it('detects tools via "tools" key in response JSON', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder:7b', true);
+      fetchStub.resolves(ollamaShowResponse({ capabilities: ['tools', 'vision'] }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('detects tools via parameter_size field (contains "parameter")', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder:7b', true);
+      fetchStub.resolves(ollamaShowResponse({ details: { parameter_size: '7B', family: 'qwen2' } }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('retries with :latest suffix when first /api/show fails for untagged model', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder', true);
+      fetchStub
+        .onFirstCall().resolves({ ok: false } as any)
+        .onSecondCall().resolves(ollamaShowResponse({ details: { parameter_size: '7B' } }));
+      const caps = await client.getCapabilities();
+      expect(fetchStub.callCount).to.equal(2);
+      expect(fetchStub.secondCall.args[1].body).to.include(':latest');
+      expect(caps.tools).to.be.true;
+    });
+
+    it('does NOT retry with :latest when model name already has a tag', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder:7b', true);
+      fetchStub.resolves({ ok: false } as any);
+      await client.getCapabilities();
+      expect(fetchStub.callCount).to.equal(1);
+    });
+
+    it('returns safe defaults when /api/show returns non-ok for both attempts', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'unknown-model', true);
+      fetchStub.resolves({ ok: false } as any);
+      const caps = await client.getCapabilities();
+      expect(caps).to.deep.equal({ vision: false, reasoning: false, tools: false });
+    });
+
+    it('detects reasoning for r1 model by name even when /api/show returns empty', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'deepseek-r1:7b', true);
+      fetchStub.resolves(ollamaShowResponse({}));
+      const caps = await client.getCapabilities();
+      expect(caps.reasoning).to.be.true;
+    });
+
+    it('sends POST to /api/show with model name in body', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'llama3.1:8b', true);
+      fetchStub.resolves(ollamaShowResponse({}));
+      await client.getCapabilities();
+      const [url, opts] = fetchStub.firstCall.args;
+      expect(url).to.include('/api/show');
+      expect(opts.method).to.equal('POST');
+      expect(JSON.parse(opts.body).name).to.equal('llama3.1:8b');
+    });
+  });
+
   // --- getAvailableModels ---
 
   it('returns Ollama model list', async () => {

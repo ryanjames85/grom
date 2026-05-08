@@ -153,10 +153,11 @@ export class AgentLoop {
     saveState();
     updateUsageDisplay();
 
-    const agentEnabled = config.get<boolean>('agentEnabled', true);
+    const globalAgentEnabled = config.get<boolean>('agentEnabled', true);
+    const agentEnabled = globalAgentEnabled && (session.agentEnabled ?? false);
     await this.deps.mcp.waitForReady(3000); // give MCP servers a moment to handshake
     const mcpTools = this.deps.mcp.getAllTools();
-    const allTools = (agentEnabled && mode === 'build') ? [...BUILTIN_TOOLS, ...mcpTools] : mcpTools;
+    const allTools = (agentEnabled && mode === 'build') ? [...BUILTIN_TOOLS, ...mcpTools] : [];
     const isCompose = text.trimStart().startsWith('/compose');
 
     // Simple stream — no tools configured, or plan mode (tools suppressed)

@@ -205,7 +205,24 @@ This covers a previously fixed bug where the agent kept calling tools after fini
 
 ---
 
-## 13. System Prompt Dot Indicator
+## 13. Tools Toggle
+
+| Step | Expected |
+|------|----------|
+| Open a new session in BUILD mode | `⚡ Tools` button is visible in the toolbar and inactive (dim) |
+| Switch to PLAN mode | `⚡ Tools` button is greyed out and cannot be clicked |
+| Switch back to BUILD mode | Button is clickable again |
+| Click `⚡ Tools` | Button highlights in accent colour; agent tools are now active |
+| Send "hi" | Model responds with plain chat — no tool calls |
+| Ask "list the files in this project" | Model calls `list_directory`; approval card appears |
+| Click `⚡ Tools` again to disable | Button returns to dim state |
+| Ask "list the files in this project" again | Model responds conversationally; no tool call |
+| Create a second session | Tools toggle starts off in the new session regardless of the first |
+| Reload VS Code | Each session restores its own Tools state correctly |
+
+---
+
+## 14. System Prompt Dot Indicator
 
 | Step | Expected |
 |------|----------|
@@ -217,7 +234,7 @@ This covers a previously fixed bug where the agent kept calling tools after fini
 
 ---
 
-## 14. Agent Undo (Diff-Aware Revert)
+## 15. Agent Undo (Diff-Aware Revert)
 
 | Step | Expected |
 |------|----------|
@@ -231,7 +248,7 @@ This covers a previously fixed bug where the agent kept calling tools after fini
 
 ---
 
-## 15. Autocomplete Debounce Persistence
+## 16. Autocomplete Debounce Persistence
 
 | Step | Expected |
 |------|----------|

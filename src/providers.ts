@@ -124,6 +124,8 @@ export class OllamaProvider implements ILLMProvider {
 export class OpenAICompatibleProvider implements ILLMProvider {
   private baseUrl: string;
   private authHeader: Record<string, string>;
+  // Cached from last getModels() call — consumed once by getCapabilities() to avoid a second fetch.
+  private _lastModelsRaw: any = null;
 
   constructor(baseUrl: string, apiKey?: string, authType: AuthType = 'bearer') {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -136,6 +138,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     const res = await fetch(`${this.baseUrl}/v1/models`, { headers: this.authHeader, signal });
     if (!res.ok) throw new Error(`Provider error: ${res.statusText}`);
     const data: any = await res.json();
+    this._lastModelsRaw = data;
     return data.data?.map((m: any) => m.id) || [];
   }
 
@@ -143,22 +146,35 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     const m = model.toLowerCase();
     const shortName = m.includes('/') ? m.split('/').pop()! : m;
     const nameBased = {
-      vision: ['vision', 'vl', 'multimodal', 'llava', 'bakllava', 'moondream', 'gemma-4', 'gemma4', 'pixtral', 'qwen-vl', 'internvl', 'cogvlm', 'phi-3-vision', 'phi3-vision', 'qwen3'].some(k => shortName.includes(k)),
+      // Vision: explicit model-name markers only. gemma-4 included because all sizes are multimodal.
+      vision: ['vision', '-vl', 'llava', 'bakllava', 'moondream', 'pixtral', 'qwen-vl', 'internvl', 'cogvlm', 'phi-3-vision', 'phi3-vision', 'gemma-4', 'gemma4'].some(k => shortName.includes(k)),
       reasoning: ['think', 'reason', 'r1', 'qwq', 'deepseek-r', 'marco-o1'].some(k => shortName.includes(k)),
-      tools: ['tool', 'function', 'agent', 'qwen3', 'qwen2.5', 'mistral-nemo', 'command-r', 'firefunction', 'gemma-4', 'gemma4', 'llama-3', 'llama3', 'mistral', 'phi-4', 'phi4'].some(k => shortName.includes(k))
+      // Tools: families/variants reliably trained for function calling.
+      // Server-reported caps take precedence; name-based is a fallback for servers that don't report caps.
+      tools: ['tool', 'function', 'agent', 'qwen3', 'qwen2.5', 'gemma-4', 'gemma4', 'mistral-nemo', 'command-r', 'firefunction'].some(k => shortName.includes(k))
     };
     try {
-      const res = await fetch(`${this.baseUrl}/v1/models`, { headers: this.authHeader, signal });
-      if (!res.ok) return nameBased;
-      const data: any = await res.json();
+      // Reuse data from the preceding getModels() call if available — avoids a second network request.
+      const cached = this._lastModelsRaw;
+      this._lastModelsRaw = null;
+      const data: any = cached || await (async () => {
+        const res = await fetch(`${this.baseUrl}/v1/models`, { headers: this.authHeader, signal });
+        return res.ok ? res.json() : null;
+      })();
+      if (!data) return nameBased;
       const entry = data.data?.find((e: any) => e.id === model || e.id === shortName);
       if (!entry) return nameBased;
       const caps = entry.capabilities || {};
       const info = JSON.stringify(entry).toLowerCase();
+      // Only trust server-reported tool caps when the entry has explicit capability fields.
+      // This prevents servers returning minimal model info from silently disabling tool detection.
+      const hasExplicitCaps = Object.keys(caps).length > 0;
+      // tool_calls is LM Studio's field name; tool_use / function_calling are used by other servers.
+      const serverTools = !!(caps.tools || caps.tool_use || caps.tool_calls || caps.function_calling || info.includes('tool_use') || info.includes('tool_calls') || info.includes('function_call'));
       return {
         vision: !!(caps.vision || caps.image_input || info.includes('vision') || info.includes('vlm') || info.includes('multimodal') || nameBased.vision),
         reasoning: !!(caps.reasoning || info.includes('reasoning') || info.includes('thinking') || nameBased.reasoning),
-        tools: !!(caps.tools || caps.tool_use || caps.function_calling || info.includes('tool_use') || info.includes('function_call') || nameBased.tools)
+        tools: hasExplicitCaps ? serverTools : nameBased.tools
       };
     } catch { return nameBased; }
   }
