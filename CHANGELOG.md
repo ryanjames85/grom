@@ -4,6 +4,15 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.4.1] — 2026-05-10
+
+### Fixed
+
+- **Context chip clutter** — auto-matched files no longer appear as context chips; chips now only show explicitly `@`-mentioned files. Auto-context still runs silently. Source file allowlist replaces the previous artifact denylist, so unknown future build artifact types are blocked automatically.
+- **MCP servers on Windows** — servers using `.bat` or `.cmd` launchers (e.g. `dart`, `flutter`) now spawn correctly. Previously failed with `ENOENT` because `.bat` files require a shell to execute. Fixed by invoking via `cmd.exe /c` on Windows with no `shell: true` (avoids the Node.js arg-escaping deprecation).
+
+---
+
 ## [0.4.0] — 2026-05-08
 
 ### New
