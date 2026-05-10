@@ -104,15 +104,29 @@ export async function resolveWebSearch(text: string): Promise<string | null> {
   }
 }
 
+const SOURCE_EXTENSIONS = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
+  'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift',
+  'dart', 'cs', 'cpp', 'cc', 'c', 'h', 'hpp',
+  'php', 'scala', 'ex', 'exs', 'lua', 'r',
+  'vue', 'svelte', 'html', 'css', 'scss', 'sass',
+  'json', 'yaml', 'yml', 'toml', 'xml', 'sql',
+  'sh', 'bash', 'zsh', 'fish', 'ps1',
+  'md', 'mdx',
+]);
+const EXCLUDE_GLOB = '{**/node_modules/**,**/build/**,**/.dart_tool/**,**/.pub-cache/**,**/.gradle/**,**/dist/**,**/__pycache__/**,**/.next/**,**/.nuxt/**}';
+
 /** Auto-attaches workspace files whose names fuzzy-match words in the user's message.
  *  usedFiles prevents the same file being attached twice across multiple context passes. */
 export async function findRelevantContext(text: string, usedFiles: Set<string>): Promise<string> {
-  const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 3);
+  const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 5);
   let content = "";
   for (const word of words) {
-    const matches = await vscode.workspace.findFiles(`**/*${word}*`, '**/node_modules/**', 2);
+    const matches = await vscode.workspace.findFiles(`**/*${word}*`, EXCLUDE_GLOB, 2);
     for (const uri of matches) {
       const name = uri.fsPath.split(/[\\\/]/).pop() || "";
+      const ext = name.split('.').pop()?.toLowerCase() ?? '';
+      if (!SOURCE_EXTENSIONS.has(ext)) { continue; }
       if (!usedFiles.has(name)) {
         usedFiles.add(name);
         try {

@@ -49,6 +49,61 @@ const { AgentLoop } = require('../agent-loop');
 
 let expect;
 
+describe('findRelevantContext', () => {
+  before(async () => {
+    const chai = await import('chai');
+    expect = chai.expect;
+  });
+
+  beforeEach(() => {
+    vscodeMock.workspace.findFiles.reset();
+    vscodeMock.workspace.findFiles.resolves([]);
+    vscodeMock.workspace.fs.readFile.reset();
+    vscodeMock.workspace.fs.readFile.resolves(Buffer.from('file content'));
+  });
+
+  it('ignores words shorter than 6 characters', async () => {
+    await contextModule.findRelevantContext('fix the bug with item view', new Set());
+    expect(vscodeMock.workspace.findFiles.called).to.be.false;
+  });
+
+  it('searches for words of 6+ characters', async () => {
+    await contextModule.findRelevantContext('refactor the controller', new Set());
+    expect(vscodeMock.workspace.findFiles.called).to.be.true;
+  });
+
+  it('skips files with non-source extensions', async () => {
+    vscodeMock.workspace.findFiles.resolves([
+      { fsPath: '/project/build/foo.obj' },
+      { fsPath: '/project/build/bar.tlog' },
+      { fsPath: '/project/.dart_tool/package.transitive_digest' },
+      { fsPath: '/project/build/app.snapshot' },
+      { fsPath: '/project/somefile.unknown_future_artifact' },
+    ]);
+    const used = new Set();
+    const result = await contextModule.findRelevantContext('refactor controller', used);
+    expect(used.size).to.equal(0);
+    expect(result).to.equal('');
+    expect(vscodeMock.workspace.fs.readFile.called).to.be.false;
+  });
+
+  it('includes source files that match', async () => {
+    vscodeMock.workspace.findFiles.resolves([{ fsPath: '/project/src/shopping_controller.dart' }]);
+    const used = new Set();
+    const result = await contextModule.findRelevantContext('fix the shopping controller', used);
+    expect(used.has('shopping_controller.dart')).to.be.true;
+    expect(result).to.include('shopping_controller.dart');
+  });
+
+  it('deduplicates files across multiple word matches', async () => {
+    vscodeMock.workspace.findFiles.resolves([{ fsPath: '/project/src/shopping_controller.dart' }]);
+    const used = new Set();
+    await contextModule.findRelevantContext('shopping controller refactor', used);
+    expect(used.size).to.equal(1);
+    expect(vscodeMock.workspace.fs.readFile.callCount).to.equal(1);
+  });
+});
+
 describe('AgentLoop', () => {
   let deps;
   let loop;
@@ -252,6 +307,34 @@ describe('AgentLoop', () => {
     expect(session.history).to.have.lengthOf(1);
     expect(session.history[0].content).to.equal('/commit');
     expect(saveState.called).to.be.true;
+  });
+
+  it('filesUsed message only contains explicit @-mentioned files, not auto-context files', async () => {
+    const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+
+    // Auto-context finds a file by word-match
+    contextModule.findRelevantContext.callsFake(async (text, usedFiles) => {
+      usedFiles.add('auto_matched.dart');
+      return '[File: auto_matched.dart]\nsome content\n\n';
+    });
+    // Manual @mention resolves one file
+    contextModule.resolveMentions.callsFake(async (text, usedFiles) => {
+      usedFiles.add('explicitly_mentioned.dart');
+      return '[File: explicitly_mentioned.dart]\nsome content\n\n';
+    });
+
+    clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
+      onChunk('Done.');
+      return 'Done.';
+    });
+
+    await loop.run('fix @explicitly_mentioned.dart', undefined, 'plan', session, () => {}, () => {});
+
+    const filesUsedCall = deps.postMessage.getCalls().find(c => c.args[0]?.type === 'filesUsed');
+    expect(filesUsedCall).to.exist;
+    const names = filesUsedCall.args[0].files.map(f => f.name);
+    expect(names).to.include('explicitly_mentioned.dart');
+    expect(names).to.not.include('auto_matched.dart');
   });
 
   it('suppresses built-in tools in Plan mode even if model is tool-capable', async () => {

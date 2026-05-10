@@ -101,20 +101,23 @@ export class AgentLoop {
     this._client = new LocalLLMClient(apiUrl, model, useOllamaFormat, apiKey || undefined);
 
     // Assemble context from RAG, @ mentions, and the active file
-    const usedFiles = new Set<string>();
-    const autoContext = await findRelevantContext(text, usedFiles);
-    const manualContext = await resolveMentions(text, usedFiles, this.deps.docs);
+    const autoFiles = new Set<string>();
+    const autoContext = await findRelevantContext(text, autoFiles);
+    const manualFiles = new Set<string>();
+    const manualContext = await resolveMentions(text, manualFiles, this.deps.docs);
+    const allUsedFiles = new Set([...autoFiles, ...manualFiles]);
     const editor = vscode.window.activeTextEditor;
     let activeFileContext = '';
     if (editor) {
       const name = editor.document.fileName.split(/[\\\/]/).pop() || '';
-      usedFiles.add(name);
+      allUsedFiles.add(name);
       const content = editor.document.getText();
       const lines = content.split('\n');
       const truncated = lines.length > 300 ? lines.slice(0, 300).join('\n') + '\n[...truncated]' : content;
       activeFileContext = `[Currently open file — use as reference/context: ${name}]\n${truncated}\n`;
     }
-    this.deps.postMessage({ type: 'filesUsed', files: [...usedFiles].map(name => ({ name, tokens: 0 })) });
+    // Only show explicitly @-mentioned files in the UI chips — auto-context is an implementation detail
+    this.deps.postMessage({ type: 'filesUsed', files: [...manualFiles].map(name => ({ name, tokens: 0 })) });
 
     const planInstructions = 'You are in PLAN mode. Be conversational and helpful — not every message needs a formal plan. Match your tone to the message: brief for casual questions, thorough for design and architecture. When the user wants to design, scope, or think through a feature, help them break it down. Do NOT write files, execute commands, or call any tools. When the user is ready to implement, suggest they switch to BUILD mode.';
     const buildInstructions = 'You are in BUILD mode. Use tools to read files, write code, and execute tasks. Prefer action over explanation. IMPORTANT: before modifying or appending to an existing file, always call read_file first to get its current content — never assume you know what is already in the file.';
