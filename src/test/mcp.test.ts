@@ -1,7 +1,58 @@
 // @ts-nocheck
 const { parseToolCall, buildToolSystemPrompt, extractJsonObjects } = require('../mcp-parser');
+const { resolveSpawnArgs } = require('../mcp');
 
 let expect;
+
+describe('resolveSpawnArgs', () => {
+  let expect;
+  let originalPlatform;
+
+  before(async () => {
+    const chai = await import('chai');
+    expect = chai.expect;
+    originalPlatform = process.platform;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+  });
+
+  it('on Windows wraps command via cmd.exe /c', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const [cmd, args] = resolveSpawnArgs('dart', ['mcp-server']);
+    expect(cmd).to.equal('cmd.exe');
+    expect(args).to.deep.equal(['/c', 'dart', 'mcp-server']);
+  });
+
+  it('on Windows passes extra args after the command', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const [cmd, args] = resolveSpawnArgs('npx', ['-y', 'some-mcp-server', '--port', '3000']);
+    expect(cmd).to.equal('cmd.exe');
+    expect(args).to.deep.equal(['/c', 'npx', '-y', 'some-mcp-server', '--port', '3000']);
+  });
+
+  it('on Linux spawns command directly without shell', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    const [cmd, args] = resolveSpawnArgs('dart', ['mcp-server']);
+    expect(cmd).to.equal('dart');
+    expect(args).to.deep.equal(['mcp-server']);
+  });
+
+  it('on macOS spawns command directly without shell', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    const [cmd, args] = resolveSpawnArgs('node', ['server.js']);
+    expect(cmd).to.equal('node');
+    expect(args).to.deep.equal(['server.js']);
+  });
+
+  it('on Windows with no args still wraps correctly', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const [cmd, args] = resolveSpawnArgs('dart', []);
+    expect(cmd).to.equal('cmd.exe');
+    expect(args).to.deep.equal(['/c', 'dart']);
+  });
+});
 
 describe('parseToolCall', () => {
   before(async () => {

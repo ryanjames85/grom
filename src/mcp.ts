@@ -31,6 +31,15 @@ const INIT_TIMEOUT_MS = 15000;
 const CALL_TIMEOUT_MS = 30000;
 const MAX_RESULT_CHARS = 8000;
 
+/** Returns the [cmd, args] pair to use for spawning an MCP server process.
+ *  On Windows, wraps via cmd.exe /c so .bat/.cmd launchers resolve correctly. */
+export function resolveSpawnArgs(command: string, args: string[]): [string, string[]] {
+  if (process.platform === 'win32') {
+    return ['cmd.exe', ['/c', command, ...args]];
+  }
+  return [command, args];
+}
+
 class StdioMcpServer implements McpServer {
   name: string;
   tools: McpTool[] = [];
@@ -42,10 +51,9 @@ class StdioMcpServer implements McpServer {
 
   constructor(name: string, command: string, args: string[], env?: Record<string, string>) {
     this.name = name;
-    this._proc = cp.spawn(command, args, {
-      env: { ...process.env, ...env },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false
+    const [spawnCmd, spawnArgs] = resolveSpawnArgs(command, args);
+    this._proc = cp.spawn(spawnCmd, spawnArgs, {
+      env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], shell: false
     });
 
     this._proc.stdout?.on('data', (chunk: Buffer) => {
