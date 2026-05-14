@@ -993,6 +993,24 @@ window.addEventListener('message', e => {
       if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
       break;
     }
+    case 'gromHint': {
+      if (m.hint === 'context') {
+        const nudge = document.createElement('div'); nudge.className = 'msg ai nudge-msg';
+        if (window.GROM_LOGOS?.default) {
+          const avatar = document.createElement('img'); avatar.src = window.GROM_LOGOS.default;
+          avatar.className = 'nudge-avatar'; nudge.appendChild(avatar);
+        }
+        const body = document.createElement('div'); body.className = 'msg-body nudge-body';
+        body.innerHTML = `Context is <strong>${m.percent}% full</strong>. Consider running <code>/compact</code> to trim history and keep responses accurate.`;
+        const btn = document.createElement('button'); btn.className = 'nudge-btn';
+        btn.textContent = 'Run /compact';
+        btn.onclick = () => { prompt.value = '/compact'; sendBtn.onclick(); nudge.remove(); };
+        body.appendChild(btn); nudge.appendChild(body);
+        chatContainer.appendChild(nudge);
+        if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+      break;
+    }
     case 'statusUpdate':
       _currentCaps = m.caps || null;
       document.getElementById('conn-status').textContent = m.status;

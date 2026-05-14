@@ -4,6 +4,21 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.4.2] — 2026-05-14
+
+### New
+
+- **Context window auto-detection** — Grom now reads the active model's context length directly from the provider on connect; `/api/show` (Ollama, LM Studio, LocalAI) and `/props` (llama.cpp, llamafile) are tried in order. The detected value replaces any manual `modelPricing` context override for the token counter. Cloud providers fall through silently.
+- **Context hint** — when the context window reaches 80 % a Grom hint card appears in chat suggesting `/compact`; includes a one-click *Run /compact* button. Fires once per session and resets after compact or session delete. Controlled by the new `grom.hints` toggle (default on). More hint types will be added in future releases.
+- **`grom.hints` setting** — boolean, default `true`; disabling it suppresses all in-chat Grom hint cards.
+
+### Fixed
+
+- **Gemma-4 large tool calls (issue #5)** — `write_file` calls with large content (~9 000 chars, e.g. a full Dart widget file) were silently dropped. The old Pattern 4b parser converted the Gemma-4 `<|tool_call>` format to JSON using regexes, which corrupted content containing braces, colons, and backslashes. Rewritten to parse key-value pairs directly without any JSON conversion; handles arbitrary content in both `<|"|>…<|"|>` and standard `"…"` delimiters.
+- **Raw tool-call text in chat** — when the model prefixed a tool call with visible `<|tool_call>…` text, that text remained visible in the chat bubble after the tool ran. A `clearToolCallChunk` message now strips the raw token from the bubble before the *Using tool…* badge appears.
+
+---
+
 ## [0.4.1] — 2026-05-10
 
 ### Fixed
@@ -332,3 +347,4 @@ Initial public release.
 | `grom.presets` | _(defaults)_ | Prompt preset buttons |
 | `grom.customGreeting` | _(blank)_ | Override empty-state greeting text |
 | `grom.customLogo` | _(blank)_ | Override chat logo (URL, data URI, or emoji) |
+| `grom.hints` | `true` | Show Grom hint cards in chat (e.g. context-full warning) |

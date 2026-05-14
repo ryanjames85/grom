@@ -20,7 +20,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LocalLLMClient, ChatMessage, AuthType, ProviderFormat } from './client';
+import { LocalLLMClient, ChatMessage, AuthType, ProviderFormat, fetchContextLength } from './client';
 import { SessionManager, ChatSession } from './session';
 import { getCustomPrompts } from './context';
 import { insertCode, applyCode, diffCode, acceptDiff, diffAgentWrite } from './editor';
@@ -52,6 +52,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _agentLoop: AgentLoop;
   private _pendingApprovals = new Map<string, (result: 'allow' | 'allowAll' | 'deny') => void>();
   private _isStreaming = false;
+  private _detectedContextLength: number | null = null;
+  private _contextHintSent = new Set<string>(); // session IDs that have already received a context hint
 
   constructor(private readonly _context: vscode.ExtensionContext, private readonly _rag?: RagIndex, private readonly _docs?: DocsIndex) {
     this._mcp = new McpManager();
@@ -644,6 +646,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _deleteSession(id: string) {
     const toolsDefault = vscode.workspace.getConfiguration('grom').get<boolean>('toolsEnabledByDefault', false);
     this._sessionManager.deleteSession(id, toolsDefault);
+    this._contextHintSent.delete(id);
     this._saveState();
     this._loadAllSessions();
   }
@@ -651,6 +654,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _compactSession() {
     const current = this._sessionManager.getCurrentSession();
     if (this._sessionManager.compactSession(current.id)) {
+      // Allow the context hint to fire again after a compact — history just shrank
+      this._contextHintSent.delete(current.id);
       this._saveState();
       this._updateUsageDisplay();
       // Tell the webview to show a compact notice inline without wiping the chat
@@ -818,6 +823,14 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         : client;
       const caps = await capsClient.getCapabilities();
       if (mcpToolCount > 0) caps.tools = true;
+
+      // Auto-detect context length — cloud providers won't respond and fall through silently
+      const detectedCtx = await fetchContextLength(url, activeModel);
+      if (detectedCtx) {
+        this._detectedContextLength = detectedCtx;
+        log(`[connection] detected context length: ${this._detectedContextLength}`);
+      }
+
       log(`[connection] connected — model=${activeModel} models=[${models.join(', ')}] caps=${JSON.stringify(caps)} mcpTools=${mcpToolCount}`);
       this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model: activeModel, models, caps, useOllama, customProviders });
     } catch (err: any) {
@@ -832,22 +845,34 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const sessions = this._sessionManager.getSessions();
     const s = sessions[this._sessionManager.getCurrentSessionId()];
     if (!s || !this._view) return;
-    const pricing = vscode.workspace.getConfiguration('grom').get<Record<string, any>>('modelPricing') || {};
-    const model = vscode.workspace.getConfiguration('grom').get<string>('model') || 'qwen2.5-coder';
+    const config = vscode.workspace.getConfiguration('grom');
+    const pricing = config.get<Record<string, any>>('modelPricing') || {};
+    const model = config.get<string>('model') || 'qwen2.5-coder';
     const modelKey = Object.keys(pricing).find(k => model.toLowerCase().includes(k.toLowerCase()));
     // 8192 default is more representative of typical local models than 32000
     const p = modelKey ? pricing[modelKey] : { input: 0, output: 0, context: 8192 };
+    // Prefer auto-detected context length over manual config over default
+    const contextLength = this._detectedContextLength ?? p.context ?? 8192;
     // Derive live token count from actual history so the circle fills as the conversation grows
     const liveTokens = estimateHistoryTokens(s.history) + s.tokens.output;
+    const contextPercent = Math.min(100, Math.round((liveTokens / contextLength) * 100));
     this._view.webview.postMessage({
       type: 'usageUpdate',
       inputTokens: s.tokens.input,
       outputTokens: s.tokens.output,
       inputCost: (s.tokens.input / 1000000) * p.input,
       outputCost: (s.tokens.output / 1000000) * p.output,
-      contextPercent: Math.min(100, Math.round((liveTokens / (p.context || 8192)) * 100)),
-      contextWindow: p.context || 8192
+      contextPercent,
+      contextWindow: contextLength
     });
+
+    // Fire a once-per-session hint when context is 80%+ full
+    const hintsEnabled = config.get<boolean>('hints', true);
+    const sessionId = this._sessionManager.getCurrentSessionId();
+    if (hintsEnabled && contextPercent >= 80 && !this._contextHintSent.has(sessionId)) {
+      this._contextHintSent.add(sessionId);
+      this._view.webview.postMessage({ type: 'gromHint', hint: 'context', percent: contextPercent });
+    }
   }
 
   /** Delegates to AgentLoop.run() — context assembly, tool execution, and streaming all happen there. */

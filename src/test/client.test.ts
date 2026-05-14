@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 
 (global as any).vscode = { window: {}, workspace: {} };
 
-import { LocalLLMClient } from '../client';
+import { LocalLLMClient, fetchContextLength } from '../client';
 
 const makeStreamBody = (chunks: string[]) => {
   let callCount = 0;
@@ -739,5 +739,65 @@ describe('LocalLLMClient', () => {
         expect(e.message).to.include('rate limit exceeded');
       }
     });
+  });
+});
+
+describe('fetchContextLength', () => {
+  let fetchStub: sinon.SinonStub;
+
+  beforeEach(() => { fetchStub = sinon.stub(global, 'fetch'); });
+  afterEach(() => { fetchStub.restore(); });
+
+  const showOk = (body: object) => Promise.resolve({ ok: true, json: async () => body } as any);
+  const notOk = () => Promise.resolve({ ok: false } as any);
+  const throws = () => Promise.reject(new Error('ECONNREFUSED'));
+
+  // --- /api/show (Ollama / LM Studio / LocalAI) ---
+
+  it('reads llama.context_length from /api/show model_info', async () => {
+    fetchStub.resolves(showOk({ model_info: { 'llama.context_length': 131072 } }));
+    expect(await fetchContextLength('http://localhost:11434', 'gemma4')).to.equal(131072);
+  });
+
+  it('reads context_length (alternate key) from /api/show model_info', async () => {
+    fetchStub.resolves(showOk({ model_info: { context_length: 32768 } }));
+    expect(await fetchContextLength('http://localhost:11434', 'qwen2')).to.equal(32768);
+  });
+
+  it('reads num_ctx from /api/show parameters', async () => {
+    fetchStub.resolves(showOk({ parameters: { num_ctx: 8192 } }));
+    expect(await fetchContextLength('http://localhost:11434', 'llama3')).to.equal(8192);
+  });
+
+  // --- /props fallback (llama.cpp server / llamafile) ---
+
+  it('falls back to /props when /api/show returns non-ok', async () => {
+    fetchStub.onFirstCall().resolves(notOk());
+    fetchStub.onSecondCall().resolves(showOk({ default_generation_settings: { n_ctx: 4096 } }));
+    expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(4096);
+  });
+
+  it('falls back to /props when /api/show throws', async () => {
+    fetchStub.onFirstCall().rejects(new Error('ECONNREFUSED'));
+    fetchStub.onSecondCall().resolves(showOk({ default_generation_settings: { n_ctx: 16384 } }));
+    expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(16384);
+  });
+
+  it('reads top-level n_ctx from /props', async () => {
+    fetchStub.onFirstCall().resolves(notOk());
+    fetchStub.onSecondCall().resolves(showOk({ n_ctx: 2048 }));
+    expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(2048);
+  });
+
+  // --- both endpoints unavailable ---
+
+  it('returns null when both /api/show and /props fail', async () => {
+    fetchStub.rejects(new Error('ECONNREFUSED'));
+    expect(await fetchContextLength('https://api.openai.com', 'gpt-4o')).to.be.null;
+  });
+
+  it('returns null when both endpoints return non-ok with no usable data', async () => {
+    fetchStub.resolves(notOk());
+    expect(await fetchContextLength('http://localhost:11434', 'model')).to.be.null;
   });
 });

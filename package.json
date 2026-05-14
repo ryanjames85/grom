@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -344,6 +344,11 @@
           "type": "object",
           "default": {},
           "markdownDescription": "Override the autocomplete model for specific languages. Takes priority over `grom.languageModels`. Keys are VS Code language IDs.\n\nExample:\n```json\n{ \"python\": \"qwen2.5-coder:1.5b\", \"go\": \"deepseek-coder:1.3b\" }\n```"
+        },
+        "grom.hints": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show Grom hints in chat.\n\nCurrently includes:\n- **Context full** — a card appears when the context window is ≥ 80% full, suggesting `/compact` to trim history.\n\nMore hint types may be added in future releases."
         },
         "grom.agentEnabled": {
           "type": "boolean",
