@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -420,45 +420,57 @@
               },
               "text": {
                 "type": "string"
+              },
+              "description": {
+                "type": "string"
               }
             }
           },
           "default": [
             {
               "label": "Explain Code",
-              "text": "/explain"
+              "text": "/explain",
+              "description": "Describe what the active file does and how it works"
             },
             {
               "label": "Refactor Code",
-              "text": "/refactor"
+              "text": "/refactor",
+              "description": "Improve clarity, structure and best practices"
             },
             {
               "label": "Fix Bugs",
-              "text": "/fix"
+              "text": "/fix",
+              "description": "Find and fix bugs in the active file"
             },
             {
-              "label": "Write Tests",
-              "text": "/tests"
+              "label": "Tests",
+              "text": "/tests",
+              "description": "Write unit tests covering edge cases and happy paths"
             },
             {
-              "label": "Write Docs",
-              "text": "/docs"
+              "label": "Docs",
+              "text": "/docs",
+              "description": "Write documentation with params, returns and examples"
             },
             {
-              "label": "Code Review",
-              "text": "/review"
+              "label": "Review",
+              "text": "/review",
+              "description": "Review for bugs, security issues and performance"
             },
             {
               "label": "Commit Message",
-              "text": "/commit"
+              "text": "/commit",
+              "description": "Generate a conventional commit message for staged changes"
             },
             {
               "label": "Web Search",
-              "text": "/search "
+              "text": "/search ",
+              "description": "Search the web and summarise results"
             },
             {
               "label": "Optimize Performance",
-              "text": "Analyze this code for performance bottlenecks and suggest optimizations."
+              "text": "Analyze this code for performance bottlenecks and suggest optimizations.",
+              "description": "Find bottlenecks and suggest optimizations"
             }
           ],
           "description": "User-defined prompt presets/snippets."

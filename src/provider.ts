@@ -225,6 +225,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         case 'switchSession': this._switchSession(data.sessionId); break;
         case 'deleteSession': this._deleteSession(data.sessionId); break;
         case 'compactSession': this._compactSession(); break;
+        case 'clearPromptHistory': void this._context.globalState.update('promptHistory', []); break;
         case 'renameSession': this._renameSession(data.title, data.sessionId); break;
         case 'exportChat': this._exportChat(); break;
         case 'importChat': this._importChat(); break;

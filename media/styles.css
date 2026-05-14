@@ -149,7 +149,7 @@ body.mode-plan .agent-btn { opacity: 0.35; pointer-events: none; }
 .floating-menu { position: absolute; bottom: 100px; left: 25px; right: 25px; background: var(--item-bg); border: 1px solid var(--border); border-radius: 10px; display: none; flex-direction: column; box-shadow: 0 10px 25px rgba(0,0,0,0.3); z-index: 50; overflow: hidden; max-height: 240px; overflow-y: auto; }
 #file-picker { max-height: 240px; overflow-y: auto; }
 .menu-item { padding: 10px 15px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
-.menu-item:hover { background: var(--vscode-list-hoverBackground); }
+.menu-item:hover, .menu-item.active { background: var(--vscode-list-hoverBackground); }
 .file-open-badge { font-size: 9px; opacity: 0.45; margin-left: auto; padding: 1px 5px; border-radius: 3px; background: var(--vscode-button-secondaryBackground); white-space: nowrap; }
 
 pre { background: #1e1e1e !important; padding: 10px; border-radius: 8px; border: 1px solid #333; margin: 10px 0; overflow-x: auto; }

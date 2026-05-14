@@ -4,6 +4,23 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.4.3] — 2026-05-14
+
+### New
+
+- **Slash menu filtering** — typing `/` opens the command menu; continuing to type filters the list in real time. Matches on both the display label (`/w` → Write Tests) and the slash command (`/t` → Tests). Arrow keys navigate, Tab or Enter selects, Escape closes.
+- **Preset descriptions** — each default preset now shows a short description of what it does alongside the label. Custom presets support an optional `description` field.
+- **`/clear-history`** — new slash command (and slash menu entry) clears prompt up/down arrow history in-memory and in global state; shows a confirmation in chat.
+
+### Fixed
+
+- **Resend duplicated messages** — clicking Resend now removes the old user bubble and all following messages from the DOM before resubmitting; previously only session history was trimmed, leaving stale bubbles visible. Resend button is now hidden on all but the last user message to prevent mid-conversation resend ambiguity.
+- **Mini Grom logo not updating** — the header logo no longer gets stuck when switching modes or connection states once a conversation is in progress; `updateGromLogo` previously returned early when the empty-state logo element was absent.
+- **`/commit` staged changes** — `/commit` now uses `git diff --cached` when staged changes exist, falling back to `git diff HEAD` when nothing is staged. Previously always used `git diff HEAD` regardless of staging state.
+- **Preset label/command mismatch** — "Write Tests", "Write Docs", "Code Review" renamed to "Tests", "Docs", "Review" so labels match their slash commands.
+
+---
+
 ## [0.4.2] — 2026-05-14
 
 ### New

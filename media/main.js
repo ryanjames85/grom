@@ -584,6 +584,7 @@ sendBtn.onclick = () => {
   }
   // Intercept /compact before sending to the model
   if (val.toLowerCase() === '/compact') { prompt.value = ''; window.compactSession(); return; }
+  if (val.toLowerCase() === '/clear-history') { prompt.value = ''; _inputHistory = []; _historyIdx = -1; vscode.postMessage({ type: 'clearPromptHistory' }); const note = renderMsg('ai', '*Prompt history cleared.*'); return; }
   renderMsg('user', val, [...pendingImages]);
   let fullText = val; if (uploadedContext.length > 0) { fullText += "\n\nADDITIONAL UPLOADED CONTEXT:\n" + uploadedContext.map(u => `[File: ${u.name}]\n${u.content}`).join('\n\n'); }
   vscode.postMessage({ type: 'send', text: fullText, images: [...pendingImages], mode: currentMode });
@@ -609,10 +610,38 @@ stopBtn.onclick = () => {
     if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = '*Cancelled.*';
   }
 };
-prompt.oninput = () => { resetIdle(true); _historyIdx = -1; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px'; if (prompt.value === '/') window.toggleSlashMenu(true); else window.toggleSlashMenu(false); };
+let _slashMenuIdx = -1;
+function _slashVisible() { return slashMenu.style.display === 'flex'; }
+function _slashItems() { return Array.from(slashMenu.querySelectorAll('.menu-item')).filter(i => i.style.display !== 'none'); }
+function _slashHighlight() { _slashItems().forEach((el, i) => el.classList.toggle('active', i === _slashMenuIdx)); }
+prompt.oninput = () => {
+  resetIdle(true); _historyIdx = -1; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px';
+  if (prompt.value.startsWith('/')) {
+    const filter = prompt.value.slice(1).toLowerCase();
+    let any = false;
+    slashMenu.querySelectorAll('.menu-item').forEach(item => {
+      const match = filter === '' || (item.dataset.cmd || '').startsWith(filter) || (item.dataset.cmdAlt || '').startsWith(filter);
+      item.style.display = match ? '' : 'none';
+      if (match) any = true;
+    });
+    window.toggleSlashMenu(any);
+    _slashMenuIdx = any ? 0 : -1;
+    _slashHighlight();
+  } else { window.toggleSlashMenu(false); }
+};
 prompt.addEventListener('blur', () => { _historyIdx = -1; });
 prompt.onkeydown = (e) => {
   resetIdle(true);
+  if (_slashVisible()) {
+    const items = _slashItems();
+    if (e.key === 'ArrowDown') { e.preventDefault(); _slashMenuIdx = Math.min(_slashMenuIdx + 1, items.length - 1); _slashHighlight(); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); _slashMenuIdx = Math.max(_slashMenuIdx - 1, 0); _slashHighlight(); return; }
+    if (e.key === 'Tab' || (e.key === 'Enter' && _slashMenuIdx >= 0)) {
+      const target = items[_slashMenuIdx] ?? items[0];
+      if (target) { e.preventDefault(); target.click(); return; }
+    }
+    if (e.key === 'Escape') { e.preventDefault(); window.toggleSlashMenu(false); return; }
+  }
   if (e.key === 'ArrowUp' && !e.shiftKey && (prompt.value === '' || _historyIdx >= 0)) {
     if (_historyIdx === -1 && _inputHistory.length > 0) { _historyIdx = _inputHistory.length - 1; }
     else if (_historyIdx > 0) { _historyIdx--; }
@@ -651,7 +680,8 @@ prompt.addEventListener('paste', (e) => {
   }
 });
 
-window.toggleSlashMenu = (show) => { slashMenu.style.display = show ? 'flex' : 'none'; if(show) plusMenu.style.display = 'none'; };
+window.toggleSlashMenu = (show) => { slashMenu.style.display = show ? 'flex' : 'none'; if (show) plusMenu.style.display = 'none'; };
+window.openSlashMenu = () => { slashMenu.querySelectorAll('.menu-item').forEach(i => { i.style.display = ''; i.classList.remove('active'); }); _slashMenuIdx = -1; window.toggleSlashMenu(true); };
 window.togglePlusMenu = () => { plusMenu.style.display = plusMenu.style.display === 'flex' ? 'none' : 'flex'; slashMenu.style.display = 'none'; };
 document.addEventListener('mousedown', (e) => {
     resetIdle(true);
@@ -885,16 +915,24 @@ window.addEventListener('message', e => {
           menu.innerHTML = '';
           m.presets.forEach(p => {
             const item = document.createElement('div'); item.className = 'menu-item';
-            const preview = p.text.startsWith('/') ? '' : p.text.slice(0, 30) + (p.text.length > 30 ? '...' : '');
+            const preview = p.description || (p.text.startsWith('/') ? p.text : p.text.slice(0, 30) + (p.text.length > 30 ? '...' : ''));
             item.innerHTML = `<span class="menu-cmd">${escapeHtml(p.label)}</span><span style="opacity:0.5; font-size:10px;">${escapeHtml(preview)}</span>`;
             item.dataset.insertText = p.text;
+            item.dataset.cmd = p.label.toLowerCase();
+            item.dataset.cmdAlt = (p.text.startsWith('/') ? p.text.slice(1) : '').toLowerCase();
             item.addEventListener('click', () => window.insertSlash(item.dataset.insertText));
             menu.appendChild(item);
           });
           const compact = document.createElement('div'); compact.className = 'menu-item';
           compact.innerHTML = `<span class="menu-cmd">Compact</span> <span style="opacity:0.5; font-size:10px;">Truncate history</span>`;
+          compact.dataset.cmd = 'compact';
           compact.addEventListener('click', () => { window.compactSession(); window.toggleSlashMenu(false); });
           menu.appendChild(compact);
+          const clearHist = document.createElement('div'); clearHist.className = 'menu-item';
+          clearHist.innerHTML = `<span class="menu-cmd">Clear-history</span> <span style="opacity:0.5; font-size:10px;">Clear prompt history</span>`;
+          clearHist.dataset.cmd = 'clear-history';
+          clearHist.addEventListener('click', () => { _inputHistory = []; _historyIdx = -1; vscode.postMessage({ type: 'clearPromptHistory' }); window.toggleSlashMenu(false); renderMsg('ai', '*Prompt history cleared.*'); });
+          menu.appendChild(clearHist);
       }
 
       renderTaskLog(m.taskLog || []);

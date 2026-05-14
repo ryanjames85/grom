@@ -34,8 +34,10 @@ export async function resolveSlashCommand(text: string): Promise<string> {
       const { execSync } = require('child_process') as typeof import('child_process');
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       if (root) {
-        const stat = execSync('git diff HEAD --stat', { cwd: root, timeout: 5000 }).toString().trim();
-        const diff = execSync('git diff HEAD', { cwd: root, timeout: 5000 }).toString().slice(0, 8000);
+        const staged = execSync('git diff --cached', { cwd: root, timeout: 5000 }).toString().trim();
+        const useStagedOnly = staged.length > 0;
+        const stat = execSync(useStagedOnly ? 'git diff --cached --stat' : 'git diff HEAD --stat', { cwd: root, timeout: 5000 }).toString().trim();
+        const diff = (useStagedOnly ? staged : execSync('git diff HEAD', { cwd: root, timeout: 5000 }).toString()).slice(0, 8000);
         const untrackedRaw = execSync('git ls-files --others --exclude-standard', { cwd: root, timeout: 5000 }).toString().trim();
         const untracked = untrackedRaw ? `New untracked files:\n${untrackedRaw}` : '';
         gitDiff = [stat, untracked, diff].filter(Boolean).join('\n\n');
