@@ -78,14 +78,20 @@ let _gromLogoIdle = false;
 let _gromLogoState = 'default';
 function updateGromLogo() {
     if (!window.GROM_LOGOS) return;
-    const logo = document.getElementById('main-logo');
-    if (!logo) return;
     const b = document.body;
     let state;
     if (b.classList.contains('grom-disconnected')) state = 'disconnected';
     else if (b.classList.contains('grom-error')) state = 'error';
     else if (b.classList.contains('grom-thinking') || b.classList.contains('mode-build')) state = 'building';
     else state = 'default';
+    const mini = document.getElementById('mini-grom');
+    if (mini) {
+        mini.src = state === 'default' ? GROM_LOGOS.default
+                 : state === 'building' ? GROM_LOGOS.building || GROM_LOGOS.default
+                 : GROM_LOGOS[state] || GROM_LOGOS.default;
+    }
+    const logo = document.getElementById('main-logo');
+    if (!logo) return;
     if (state === _gromLogoState) return;
     _gromLogoState = state;
     if (state === 'default') {
@@ -94,12 +100,6 @@ function updateGromLogo() {
         logo.innerHTML = window.GROM_BUILD_SVG || '';
     } else {
         logo.innerHTML = `<img id="grom-logo-img" src="${GROM_LOGOS[state]}" alt="Grom" width="70" height="70">`;
-    }
-    const mini = document.getElementById('mini-grom');
-    if (mini && window.GROM_LOGOS) {
-        mini.src = state === 'default' ? GROM_LOGOS.default
-                 : state === 'building' ? GROM_LOGOS.building || GROM_LOGOS.default
-                 : GROM_LOGOS[state] || GROM_LOGOS.default;
     }
 }
 
@@ -501,11 +501,13 @@ function renderMsg(role, content, images = []) {
       images.forEach(img => { const imgEl = document.createElement('img'); imgEl.src = 'data:image/jpeg;base64,' + img; imgEl.style.cssText = 'max-width:100%;border-radius:8px;display:block;margin-top:6px'; body.appendChild(imgEl); });
       div.appendChild(body);
       const actions = document.createElement('div'); actions.className = 'msg-actions msg-actions-user';
-      const resendBtn = document.createElement('button'); resendBtn.className = 'action-text-btn';
+      const resendBtn = document.createElement('button'); resendBtn.className = 'action-text-btn resend-btn';
       resendBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-3.51"></path></svg> Resend`;
       resendBtn.onclick = () => { vscode.postMessage({ type: 'resend' }); };
       actions.appendChild(resendBtn);
       div.appendChild(actions);
+      chatContainer.querySelectorAll('.resend-btn').forEach(b => { b.style.display = 'none'; });
+      resendBtn.style.display = '';
   } else {
       updateAiDisplay(body, content); div.appendChild(body);
       const actions = document.createElement('div'); actions.className = 'msg-actions';
@@ -968,6 +970,12 @@ window.addEventListener('message', e => {
       break;
     }
     case 'resendText': {
+      const allMsgs = Array.from(chatContainer.querySelectorAll('.msg.user, .msg.ai, .nudge-msg'));
+      let lastUserIdx = -1;
+      for (let i = allMsgs.length - 1; i >= 0; i--) { if (allMsgs[i].classList.contains('user')) { lastUserIdx = i; break; } }
+      if (lastUserIdx !== -1) { for (let i = lastUserIdx; i < allMsgs.length; i++) allMsgs[i].remove(); }
+      const remainingUsers = chatContainer.querySelectorAll('.msg.user');
+      if (remainingUsers.length) { const btn = remainingUsers[remainingUsers.length - 1].querySelector('.resend-btn'); if (btn) btn.style.display = ''; }
       prompt.value = m.text; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px';
       sendBtn.onclick();
       break;
