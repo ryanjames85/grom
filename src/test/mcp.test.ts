@@ -166,6 +166,27 @@ describe('parseToolCall', () => {
     expect(r.args.content).to.include('laugh');
   });
 
+  it('parses gemma-4 write_file with large multi-line file content (~9000 chars)', () => {
+    const dartContent = `import 'package:flutter/material.dart';\nimport 'package:provider/provider.dart';\n\nclass ViewShoppingListScreen extends StatelessWidget {\n  const ViewShoppingListScreen({Key? key}) : super(key: key);\n\n  @override\n  Widget build(BuildContext context) {\n    final items = Provider.of<ShoppingList>(context).items;\n    return Scaffold(\n      appBar: AppBar(title: const Text('Shopping List')),\n      body: ListView.builder(\n        itemCount: items.length,\n        itemBuilder: (ctx, i) => ListTile(\n          title: Text(items[i].name),\n          subtitle: Text('Qty: \${items[i].quantity}'),\n          trailing: IconButton(\n            icon: const Icon(Icons.delete),\n            onPressed: () => Provider.of<ShoppingList>(context, listen: false).removeItem(i),\n          ),\n        ),\n      ),\n      floatingActionButton: FloatingActionButton(\n        onPressed: () => Navigator.pushNamed(context, '/add'),\n        child: const Icon(Icons.add),\n      ),\n    );\n  }\n}\n`.repeat(30);
+    const toolCall = `<|tool_call>call:write_file{content:<|"|>${dartContent}<|"|>,path:"lib/views/view_shopping_list_screen.dart"}<tool_call|>`;
+    const r = parseToolCall(toolCall);
+    expect(r).to.not.be.null;
+    expect(r!.tool).to.equal('write_file');
+    expect(r!.args.path).to.equal('lib/views/view_shopping_list_screen.dart');
+    expect(r!.args.content).to.equal(dartContent);
+  });
+
+  it('parses gemma-4 write_file with content containing braces, quotes and backslashes', () => {
+    const dartContent = `class Foo {\n  final String name;\n  Foo({required this.name});\n  String greet() => "Hello, \${name}!";\n  void run() {\n    if (name.isNotEmpty) {\n      print('Name: \${name}');\n    }\n  }\n}`;
+    const toolCall = `<|tool_call>call:write_file{content:<|"|>${dartContent}<|"|>,path:"lib/foo.dart"}<tool_call|>`;
+    const r = parseToolCall(toolCall);
+    expect(r).to.not.be.null;
+    expect(r!.tool).to.equal('write_file');
+    expect(r!.args.path).to.equal('lib/foo.dart');
+    expect(r!.args.content).to.include('class Foo');
+    expect(r!.args.content).to.include('{required this.name}');
+  });
+
   it('parses gemma-4 type-annotated value: content:markdown:"..."', () => {
     const r = parseToolCall('<|tool_call>call:write_file{content:markdown:"# Jokes\\nhaha",path:"joke.md"}<tool_call|>');
     expect(r.tool).to.equal('write_file');

@@ -72,24 +72,54 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
 
   // Pattern 4b — gemma-4 / Qwen style: <|tool_call>call:tool_name{...}<tool_call|>
   // These models use unquoted keys AND <|"|>...<|"|> string delimiters for values with special chars.
+  // Parse key-value pairs directly to avoid regex corruption of large string values (e.g. Dart code
+  // with named params like `, listen: false` that would otherwise get treated as JSON keys).
   (text) => {
     const m = text.match(/<\|?tool_call\|?>\s*(?:call:)?([a-zA-Z0-9_]+)\s*(\{[\s\S]*\})\s*(?:<tool_call\|>|$)/i);
     if (!m) return null;
     try {
-      // Step 1: replace <|"|>value<|"|> string delimiters with properly JSON-escaped strings
-      let raw = m[2].replace(/<\|"\|>([\s\S]*?)<\|"\|>/g, (_: string, val: string) =>
-        '"' + val.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"'
-      );
-      // Step 2: strip type annotations before string values e.g. content:markdown:"..." → content:"..."
-      raw = raw.replace(/:\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:(\s*")/g, ':$1');
-      // Step 3: quote unquoted keys
-      raw = raw.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
-      // Step 4: escape any raw newlines/tabs inside string values so JSON.parse doesn't choke
-      raw = raw.replace(/"((?:[^"\\]|\\.)*)"/g, (_: string, inner: string) =>
-        '"' + inner.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"'
-      );
-      const args = JSON.parse(raw);
-      return { tool: m[1], args: typeof args === 'object' && args !== null ? args : {}, raw: m[0] };
+      const args: Record<string, any> = {};
+      let body = m[2].slice(1, -1).trim(); // strip outer { }
+
+      while (body.length > 0) {
+        // Match key with optional type annotation (e.g. content:markdown: → key=content)
+        const keyMatch = body.match(/^([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*:[a-zA-Z_][a-zA-Z0-9_]*)?\s*:/);
+        if (!keyMatch) break;
+        const key = keyMatch[1];
+        body = body.slice(keyMatch[0].length);
+
+        let value: string;
+        if (body.startsWith('<|"|>')) {
+          // <|"|> delimited string — extract raw content, no escaping needed
+          body = body.slice(5);
+          const end = body.indexOf('<|"|>');
+          if (end === -1) break;
+          value = body.slice(0, end);
+          body = body.slice(end + 5);
+        } else if (body.startsWith('"')) {
+          // Regular JSON-quoted string — parse char-by-char respecting escapes
+          let i = 1;
+          let s = '';
+          while (i < body.length) {
+            const c = body[i];
+            if (c === '\\') { s += body[i] + body[i + 1]; i += 2; }
+            else if (c === '"') { i++; break; }
+            else { s += c; i++; }
+          }
+          try { value = JSON.parse('"' + s + '"'); } catch { value = s; }
+          body = body.slice(i);
+        } else {
+          // Unquoted primitive (number, boolean, etc.)
+          const vMatch = body.match(/^([^,}]+)/);
+          value = vMatch ? vMatch[1].trim() : '';
+          body = body.slice(vMatch ? vMatch[0].length : 0);
+        }
+
+        args[key] = value;
+        body = body.replace(/^\s*,\s*/, '');
+      }
+
+      return { tool: m[1], args, raw: m[0] };
     } catch { return null; }
   },
 

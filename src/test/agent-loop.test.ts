@@ -45,6 +45,9 @@ global.vscode = vscodeMock;
 const clientModule = require('../client');
 const contextModule = require('../context');
 const mcpModule = require('../mcp');
+// parseToolCall is re-exported from mcp-parser via a non-configurable getter, so sinon
+// must stub the source module (mcp-parser) where the property is writable.
+const mcpParserModule = require('../mcp-parser');
 const { AgentLoop } = require('../agent-loop');
 
 let expect;
@@ -191,7 +194,7 @@ describe('AgentLoop', () => {
       return 'I read the file.';
     });
 
-    sinon.stub(mcpModule, 'parseToolCall')
+    sinon.stub(mcpParserModule, 'parseToolCall')
       .onFirstCall().returns({ tool: 'read_file', args: { path: 'test.ts' }, raw: toolCallJson })
       .onSecondCall().returns(null);
 
@@ -199,6 +202,35 @@ describe('AgentLoop', () => {
 
     expect(deps.postMessage.calledWith(sinon.match({ type: 'toolCall', tool: 'read_file' }))).to.be.true;
     expect(deps.appendTaskLog.calledOnce).to.be.true;
+  });
+
+  it('posts clearToolCallChunk with raw text before toolCall', async () => {
+    const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+    // Compact JSON (no spaces) so JSON.stringify round-trips back to exactly this string,
+    // letting us assert the raw value without needing to stub the non-configurable re-export.
+    const toolCallJson = '{"tool":"read_file","args":{"path":"foo.ts"}}';
+
+    clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
+      onChunk(toolCallJson);
+      return toolCallJson;
+    });
+    clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
+      onChunk('Done.');
+      return 'Done.';
+    });
+
+    await loop.run('Read foo.ts', undefined, 'build', session, () => {}, () => {});
+
+    const calls = deps.postMessage.getCalls().map(c => c.args[0].type);
+    const clearIdx = calls.indexOf('clearToolCallChunk');
+    const toolCallIdx = calls.indexOf('toolCall');
+
+    expect(clearIdx).to.be.greaterThan(-1, 'clearToolCallChunk should be posted');
+    expect(toolCallIdx).to.be.greaterThan(-1, 'toolCall should be posted');
+    expect(clearIdx).to.be.lessThan(toolCallIdx, 'clearToolCallChunk must come before toolCall');
+
+    const clearMsg = deps.postMessage.getCalls().find(c => c.args[0].type === 'clearToolCallChunk').args[0];
+    expect(clearMsg.raw).to.equal(toolCallJson);
   });
 
   it('asks for approval for destructive tools', async () => {
@@ -220,7 +252,7 @@ describe('AgentLoop', () => {
       return 'File written.';
     });
 
-    sinon.stub(mcpModule, 'parseToolCall')
+    sinon.stub(mcpParserModule, 'parseToolCall')
       .onFirstCall().returns({ tool: 'write_file', args: { path: 'test.ts', content: 'hi' }, raw: toolCallJson })
       .onSecondCall().returns(null);
 
@@ -249,7 +281,7 @@ describe('AgentLoop', () => {
       return 'Okay, I wont write it.';
     });
 
-    sinon.stub(mcpModule, 'parseToolCall')
+    sinon.stub(mcpParserModule, 'parseToolCall')
       .onFirstCall().returns({ tool: 'write_file', args: { path: 'test.ts', content: 'hi' }, raw: toolCallJson })
       .onSecondCall().returns(null);
 
@@ -284,7 +316,7 @@ describe('AgentLoop', () => {
       return 'Done.';
     });
 
-    sinon.stub(mcpModule, 'parseToolCall')
+    sinon.stub(mcpParserModule, 'parseToolCall')
       .onFirstCall().returns(null)
       .onSecondCall().returns({ tool: 'read_file', args: { path: 'test.ts' }, raw: toolCallJson })
       .onThirdCall().returns(null);
@@ -339,7 +371,7 @@ describe('AgentLoop', () => {
 
   it('suppresses built-in tools in Plan mode even if model is tool-capable', async () => {
     const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
-    
+
     // Model tries to call a tool (read_file) even though it shouldn't have been told about it
     const toolCallJson = '{"tool": "read_file", "args": {"path": "test.ts"}}';
     clientStub.streamChatWithCallback.resolves(toolCallJson);
@@ -349,5 +381,73 @@ describe('AgentLoop', () => {
     // In Plan mode with no MCP tools, the prompt should NOT contain tool instructions,
     // and the system should have ignored the tool call (treated it as prose).
     expect(deps.appendTaskLog.called).to.be.false;
+  });
+
+  describe('toolsOffNudge', () => {
+    it('posts toolsOffNudge when tools are off and model outputs a tool call in build mode', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: false };
+      const toolCallJson = '{"tool":"write_file","args":{"path":"foo.ts","content":"hello"}}';
+
+      clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
+        onChunk(toolCallJson);
+        return toolCallJson;
+      });
+
+      await loop.run('Write a file', undefined, 'build', session, () => {}, () => {});
+
+      expect(deps.postMessage.calledWith(sinon.match({ type: 'toolsOffNudge' }))).to.be.true;
+      const call = deps.postMessage.getCalls().find(c => c.args[0].type === 'toolsOffNudge');
+      expect(call.args[0]).to.have.property('model');
+    });
+
+    it('does NOT post toolsOffNudge in plan mode even if model outputs a tool call', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan', agentEnabled: false };
+      const toolCallJson = '{"tool":"write_file","args":{"path":"foo.ts","content":"hello"}}';
+
+      clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
+        onChunk(toolCallJson);
+        return toolCallJson;
+      });
+
+      await loop.run('Write a file', undefined, 'plan', session, () => {}, () => {});
+
+      expect(deps.postMessage.calledWith(sinon.match({ type: 'toolsOffNudge' }))).to.be.false;
+    });
+
+    it('does NOT post toolsOffNudge when model output is plain prose', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: false };
+
+      clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
+        onChunk('Here is my answer in plain text.');
+        return 'Here is my answer in plain text.';
+      });
+
+      await loop.run('Say something', undefined, 'build', session, () => {}, () => {});
+
+      expect(deps.postMessage.calledWith(sinon.match({ type: 'toolsOffNudge' }))).to.be.false;
+    });
+
+    it('does NOT post toolsOffNudge when tools are on and model calls a tool normally', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const toolCallJson = '{"tool":"read_file","args":{"path":"test.ts"}}';
+
+      clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
+        onChunk(toolCallJson);
+        return toolCallJson;
+      });
+      clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
+        onChunk('Done.');
+        return 'Done.';
+      });
+
+      sinon.stub(mcpParserModule, 'parseToolCall')
+        .onFirstCall().returns({ tool: 'read_file', args: { path: 'test.ts' }, raw: toolCallJson })
+        .onSecondCall().returns(null);
+
+      await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+
+      expect(deps.postMessage.calledWith(sinon.match({ type: 'toolsOffNudge' }))).to.be.false;
+      expect(deps.postMessage.calledWith(sinon.match({ type: 'toolCall' }))).to.be.true;
+    });
   });
 });

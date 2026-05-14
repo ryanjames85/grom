@@ -915,6 +915,14 @@ window.addEventListener('message', e => {
       }
       break;
     case 'chunk': if (currentAiDiv) { currentAiText += m.text; const body = currentAiDiv.querySelector('.msg-body'); const dots = body.querySelector('.thinking-dots'); if (dots) dots.remove(); updateAiDisplay(body, currentAiText); if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight; } break;
+    case 'clearToolCallChunk': {
+      if (currentAiDiv) {
+        currentAiText = currentAiText.replace(m.raw, '').trim();
+        const body = currentAiDiv.querySelector('.msg-body');
+        if (currentAiText) { updateAiDisplay(body, currentAiText); } else { body.innerHTML = ''; }
+      }
+      break;
+    }
     case 'toolCall': {
       if (currentAiDiv) {
         const body = currentAiDiv.querySelector('.msg-body');

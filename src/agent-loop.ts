@@ -279,6 +279,7 @@ export class AgentLoop {
           }
         }
 
+        this.deps.postMessage({ type: 'clearToolCallChunk', raw: parsed.raw });
         this.deps.postMessage({ type: 'toolCall', tool: parsed.tool });
 
         let rawResult: string;
