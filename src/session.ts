@@ -121,6 +121,19 @@ export class SessionManager {
     return true;
   }
 
+  /** Removes the last user message and any immediately following assistant messages.
+   *  Used by resend to roll back before re-submitting the same message. */
+  trimLastExchange(sessionId: string): string | null {
+    const s = this.sessions[sessionId];
+    if (!s) { return null; }
+    const nonSystem = s.history.filter(m => m.role !== 'system' || m.content === '__compacted__');
+    const lastUserIdx = [...s.history].map((m, i) => ({ m, i })).reverse().find(({ m }) => m.role === 'user')?.i;
+    if (lastUserIdx === undefined) { return null; }
+    const text = s.history[lastUserIdx].content;
+    s.history = s.history.slice(0, lastUserIdx);
+    return text;
+  }
+
   /** Renames a session. Does nothing if the session ID doesn't exist. */
   renameSession(sessionId: string, title: string) {
     if (this.sessions[sessionId]) {

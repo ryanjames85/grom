@@ -281,4 +281,69 @@ describe('SessionManager', () => {
       expect(mgr.getCurrentSession().systemPrompt).to.be.undefined;
     });
   });
+
+  describe('trimLastExchange', () => {
+    it('removes the last user message and following assistant message', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'second question' },
+        { role: 'assistant', content: 'bad answer' },
+      ];
+      const text = mgr.trimLastExchange('default');
+      expect(text).to.equal('second question');
+      const h = mgr.getCurrentSession().history;
+      expect(h).to.have.length(2);
+      expect(h[0].content).to.equal('first question');
+      expect(h[1].content).to.equal('first answer');
+    });
+
+    it('removes only the last user message when no assistant reply follows', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'second question' },
+      ];
+      const text = mgr.trimLastExchange('default');
+      expect(text).to.equal('second question');
+      expect(mgr.getCurrentSession().history).to.have.length(2);
+    });
+
+    it('returns the trimmed message text', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'user', content: 'hello world' },
+        { role: 'assistant', content: 'hi' },
+      ];
+      expect(mgr.trimLastExchange('default')).to.equal('hello world');
+    });
+
+    it('returns null for an unknown session id', () => {
+      const mgr = makeManager();
+      expect(mgr.trimLastExchange('ghost')).to.be.null;
+    });
+
+    it('returns null when history has no user messages', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'system', content: 'you are helpful' },
+      ];
+      expect(mgr.trimLastExchange('default')).to.be.null;
+    });
+
+    it('preserves system messages when trimming', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'system', content: 'you are helpful' },
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ];
+      mgr.trimLastExchange('default');
+      const h = mgr.getCurrentSession().history;
+      expect(h[0].role).to.equal('system');
+      expect(h[0].content).to.equal('you are helpful');
+    });
+  });
 });

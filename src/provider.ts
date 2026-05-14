@@ -290,6 +290,15 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'updateHistory': await this._updateSessionHistory(data.text); break;
+        case 'resend': {
+          const session = this._sessionManager.getCurrentSession();
+          const text = this._sessionManager.trimLastExchange(session.id);
+          if (text !== null) {
+            this._saveState();
+            this._view?.webview.postMessage({ type: 'resendText', text });
+          }
+          break;
+        }
         case 'retryConnection': this._checkConnection(); break;
         case 'idleStart': {
           const cfg = vscode.workspace.getConfiguration('grom');

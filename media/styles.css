@@ -202,6 +202,11 @@ pre { background: #1e1e1e !important; padding: 10px; border-radius: 8px; border:
 .msg-actions-user { justify-content: flex-end; border-top: none; margin-top: 4px; }
 .msg:hover .msg-actions { opacity: 0.6; }
 .action-text-btn { font-size: 10px; cursor: pointer; display: flex; align-items: center; gap: 4px; background: none; border: none; color: inherit; padding: 2px 4px; border-radius: 4px; transition: all 0.1s; }
+.nudge-msg { display: flex; align-items: flex-start; gap: 10px; }
+.nudge-avatar { width: 28px; height: 28px; flex-shrink: 0; margin-top: 4px; }
+.nudge-body { font-size: 12px; color: var(--vscode-descriptionForeground); padding: 8px 0 4px; }
+.nudge-btn { margin-top: 8px; font-size: 11px; cursor: pointer; background: var(--accent); color: #000; border: none; padding: 5px 12px; border-radius: 6px; font-weight: 600; transition: opacity 0.15s; display: block; }
+.nudge-btn:hover { opacity: 0.85; }
 
 .usage-radial { position: relative; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: help; }
 .progress-ring__circle { transition: stroke-dashoffset 0.3s; stroke-linecap: round; }

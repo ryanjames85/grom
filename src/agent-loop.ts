@@ -183,6 +183,11 @@ export class AgentLoop {
           const patches = parseComposerResponse(fullText);
           if (patches.length > 0) await applyComposerPatches(patches);
         }
+        // If the model output a tool call but Tools is off, nudge the user
+        if (mode !== 'plan' && parseToolCall(fullText)) {
+          const modelName = config.get<string>('model') || 'your model';
+          this.deps.postMessage({ type: 'toolsOffNudge', model: modelName });
+        }
       } catch (e: any) {
         if (e?.name === 'AbortError') {
           this.deps.postMessage({ type: 'chunk', text: '\n\n*Cancelled.*' });

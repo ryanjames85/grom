@@ -503,7 +503,7 @@ function renderMsg(role, content, images = []) {
       const actions = document.createElement('div'); actions.className = 'msg-actions msg-actions-user';
       const resendBtn = document.createElement('button'); resendBtn.className = 'action-text-btn';
       resendBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-3.51"></path></svg> Resend`;
-      resendBtn.onclick = () => { prompt.value = content; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px'; sendBtn.onclick(); };
+      resendBtn.onclick = () => { vscode.postMessage({ type: 'resend' }); };
       actions.appendChild(resendBtn);
       div.appendChild(actions);
   } else {
@@ -957,6 +957,32 @@ window.addEventListener('message', e => {
     case 'idleHint': {
       const bubble = document.getElementById('thought-bubble');
       if (bubble && bubble.classList.contains('active')) bubble.textContent = m.text;
+      break;
+    }
+    case 'resendText': {
+      prompt.value = m.text; prompt.style.height = 'auto'; prompt.style.height = prompt.scrollHeight + 'px';
+      sendBtn.onclick();
+      break;
+    }
+    case 'toolsOffNudge': {
+      const nudge = document.createElement('div'); nudge.className = 'msg ai nudge-msg';
+      if (window.GROM_LOGOS?.default) {
+        const avatar = document.createElement('img'); avatar.src = window.GROM_LOGOS.default;
+        avatar.className = 'nudge-avatar'; nudge.appendChild(avatar);
+      }
+      const body = document.createElement('div'); body.className = 'msg-body nudge-body';
+      body.innerHTML = `Looks like ⚡ Tools is off — <strong>${m.model}</strong> tried to call a tool but couldn't. Turn on Tools and resend?`;
+      const btn = document.createElement('button'); btn.className = 'nudge-btn';
+      btn.textContent = 'Enable Tools and Resend';
+      btn.onclick = () => {
+        _setAgentEnabled(true);
+        vscode.postMessage({ type: 'toggleAgent', enabled: true });
+        nudge.remove();
+        vscode.postMessage({ type: 'resend' });
+      };
+      body.appendChild(btn); nudge.appendChild(body);
+      chatContainer.appendChild(nudge);
+      if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
       break;
     }
     case 'statusUpdate':
