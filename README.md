@@ -242,7 +242,7 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.autocompleteModel` | Dedicated FIM model | *(chat model)* |
 | `grom.languageModels` | Per-language model overrides | `{}` |
 | `grom.ragEnabled` | Enable codebase indexing | `true` |
-| `grom.embeddingModel` | Ollama model for semantic RAG | *(blank)* |
+| `grom.embeddingModel` | Embedding model for semantic RAG — works with Ollama and LM Studio | *(blank)* |
 | `grom.mcpServers` | MCP server definitions | `[]` |
 | `grom.customProviders` | Custom provider endpoints; keys stored securely in OS keychain | `[]` |
 | `grom.robotAnimations` | Enable Grom's animations | `true` |

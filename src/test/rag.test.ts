@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import * as sinon from 'sinon';
 import { RagIndex, RagFile } from '../rag';
 
 (global as any).vscode = {
@@ -233,5 +234,350 @@ describe('RagIndex BM25', () => {
     const result = idx.query('handler request response', 3);
     const matches = result.split('---').filter(s => s.trim());
     expect(matches.length).to.be.at.most(3);
+  });
+});
+
+// ── Embedding endpoint selection (issue #7) ───────────────────────────────────
+
+const FILE: RagFile[] = [{ path: 'a.ts', content: 'hello world foo bar baz qux' }];
+const EMB_CONFIG = { model: 'nomic-embed-text', apiUrl: 'http://localhost:11434' };
+const VEC = [0.1, 0.2, 0.3];
+
+function mockFetch(url: string, body: any, ok = true) {
+  return (input: string) =>
+    input === url
+      ? Promise.resolve({ ok, json: () => Promise.resolve(body) } as Response)
+      : Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+}
+
+describe('RagIndex embedding endpoint selection', () => {
+  let fetchStub: sinon.SinonStub;
+
+  beforeEach(() => { fetchStub = sinon.stub(global, 'fetch' as any); });
+  afterEach(() => sinon.restore());
+
+  it('uses /api/embed when it returns valid Ollama embeddings', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [VEC] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG);
+
+    const apiEmbedCalls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/api/embed'));
+    expect(apiEmbedCalls.length).to.be.greaterThan(0);
+    const v1Calls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/v1/embeddings'));
+    expect(v1Calls.length).to.equal(0);
+  });
+
+  it('falls back to /v1/embeddings when /api/embed returns HTTP 200 with no embeddings (LM Studio error body)', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed'))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ error: 'endpoint not supported' }) } as Response);
+      if (url.includes('/v1/embeddings'))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ embedding: VEC, index: 0 }] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, { ...EMB_CONFIG, apiUrl: 'http://localhost:1234' });
+
+    const v1Calls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/v1/embeddings'));
+    expect(v1Calls.length).to.be.greaterThan(0);
+  });
+
+  it('falls back to /v1/embeddings when /api/embed returns a non-ok status', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed'))
+        return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+      if (url.includes('/v1/embeddings'))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ embedding: VEC, index: 0 }] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, { ...EMB_CONFIG, apiUrl: 'http://localhost:1234' });
+
+    const v1Calls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/v1/embeddings'));
+    expect(v1Calls.length).to.be.greaterThan(0);
+  });
+
+  it('falls back to legacy /api/embeddings when both batch endpoints fail', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed') || url.includes('/v1/embeddings'))
+        return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+      if (url.includes('/api/embeddings'))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ embedding: VEC }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG);
+
+    const legacyCalls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/api/embeddings'));
+    expect(legacyCalls.length).to.be.greaterThan(0);
+  });
+
+  it('gracefully degrades to BM25 when all embedding endpoints fail', async () => {
+    fetchStub.callsFake(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response));
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG);
+
+    // BM25 still works
+    const result = idx.query('hello world');
+    expect(result).to.include('a.ts');
+  });
+
+  it('queryAsync returns results after successful /v1/embeddings build (LM Studio flow)', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed'))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ error: 'unsupported' }) } as Response);
+      if (url.includes('/v1/embeddings'))
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ embedding: VEC, index: 0 }] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, { ...EMB_CONFIG, apiUrl: 'http://localhost:1234' });
+
+    const result = await idx.queryAsync('hello world');
+    expect(result).to.include('a.ts');
+  });
+});
+
+// ── Endpoint caching ──────────────────────────────────────────────────────────
+
+describe('RagIndex endpoint caching', () => {
+  let fetchStub: sinon.SinonStub;
+  beforeEach(() => { fetchStub = sinon.stub(global, 'fetch' as any); });
+  afterEach(() => sinon.restore());
+
+  it('does not probe /v1/embeddings after /api/embed succeeds', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [VEC] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    // Two build calls — second is incremental with a changed file
+    await idx.build(FILE, EMB_CONFIG, true);
+    await idx.build([{ path: 'a.ts', content: 'hello world foo bar baz qux changed' }], EMB_CONFIG);
+
+    const v1Calls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/v1/embeddings'));
+    expect(v1Calls.length).to.equal(0);
+  });
+
+  it('does not probe /api/embed after /v1/embeddings is cached as working', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ error: 'unsupported' }) } as Response);
+      if (url.includes('/v1/embeddings')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ embedding: VEC, index: 0 }] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG, true);
+    fetchStub.resetHistory();
+
+    // Second call — should go straight to /v1/embeddings
+    await idx.build([{ path: 'a.ts', content: 'hello world foo bar changed' }], EMB_CONFIG);
+
+    const apiEmbedCalls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/api/embed'));
+    expect(apiEmbedCalls.length).to.equal(0);
+  });
+
+  it('resets endpoint cache when provider config changes', async () => {
+    let probeCount = 0;
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) { probeCount++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [VEC] }) } as Response); }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG, true);
+    const firstProbes = probeCount;
+
+    // Switching to a different apiUrl resets the cache — should probe again
+    await idx.build(FILE, { ...EMB_CONFIG, apiUrl: 'http://localhost:1234' }, true);
+    expect(probeCount).to.be.greaterThan(firstProbes);
+  });
+});
+
+// ── Dimension guard ───────────────────────────────────────────────────────────
+
+describe('RagIndex dimension guard', () => {
+  let fetchStub: sinon.SinonStub;
+  beforeEach(() => { fetchStub = sinon.stub(global, 'fetch' as any); });
+  afterEach(() => sinon.restore());
+
+  it('falls back to BM25 when query vector dimension does not match stored dimension', async () => {
+    // Build with 3-dim vectors
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [[0.1, 0.2, 0.3]] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG);
+
+    // Now return a 5-dim vector at query time (simulates model change)
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [[0.1, 0.2, 0.3, 0.4, 0.5]] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    // queryAsync should not throw; result comes from BM25 fallback
+    const result = await idx.queryAsync('hello world');
+    expect(result).to.include('a.ts');
+  });
+});
+
+// ── Failure surfacing ─────────────────────────────────────────────────────────
+
+describe('RagIndex failure surfacing', () => {
+  let fetchStub: sinon.SinonStub;
+  beforeEach(() => { fetchStub = sinon.stub(global, 'fetch' as any); });
+  afterEach(() => sinon.restore());
+
+  it('getStatus reports embeddingFailed when all endpoints fail', async () => {
+    fetchStub.callsFake(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response));
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG);
+
+    const status = idx.getStatus();
+    expect(status.embeddingFailed).to.be.true;
+    expect(status.semantic).to.be.false;
+    expect(status.indexed).to.be.true;
+  });
+
+  it('getStatus reports semantic=true and embeddingFailed=false on success', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [VEC] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const idx = new RagIndex();
+    await idx.build(FILE, EMB_CONFIG);
+
+    const status = idx.getStatus();
+    expect(status.semantic).to.be.true;
+    expect(status.embeddingFailed).to.be.false;
+    expect(status.chunks).to.be.greaterThan(0);
+  });
+
+  it('progress callback includes model name on success', async () => {
+    fetchStub.callsFake((url: string) => {
+      if (url.includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [VEC] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    const messages: string[] = [];
+    const idx = new RagIndex(msg => messages.push(msg));
+    await idx.build(FILE, EMB_CONFIG);
+
+    const final = messages[messages.length - 1];
+    expect(final).to.include('nomic-embed-text');
+  });
+
+  it('progress callback reports BM25 only when embedding unavailable', async () => {
+    fetchStub.callsFake(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response));
+
+    const messages: string[] = [];
+    const idx = new RagIndex(msg => messages.push(msg));
+    await idx.build(FILE, EMB_CONFIG);
+
+    const final = messages[messages.length - 1];
+    expect(final).to.include('BM25 only');
+  });
+});
+
+// ── Incremental re-indexing ───────────────────────────────────────────────────
+
+describe('RagIndex incremental re-indexing', () => {
+  it('does not re-index unchanged files', async () => {
+    const idx = new RagIndex();
+    await idx.build(FILE);
+    const chunksBefore = idx.getStatus().chunks;
+
+    // Second build with same content — should be a no-op
+    await idx.build(FILE);
+    expect(idx.getStatus().chunks).to.equal(chunksBefore);
+  });
+
+  it('picks up content changes in an existing file', async () => {
+    const idx = new RagIndex();
+    await idx.build([{ path: 'a.ts', content: 'function alpha() {}' }]);
+
+    await idx.build([{ path: 'a.ts', content: 'function beta() { return 42; }' }]);
+    const result = idx.query('beta');
+    expect(result).to.include('a.ts');
+  });
+
+  it('removes chunks for deleted files', async () => {
+    const idx = new RagIndex();
+    await idx.build([
+      { path: 'a.ts', content: 'function alpha() {}' },
+      { path: 'b.ts', content: 'function beta() {}' }
+    ]);
+
+    // Remove b.ts
+    await idx.build([{ path: 'a.ts', content: 'function alpha() {}' }]);
+    const result = idx.query('beta');
+    expect(result).to.not.include('b.ts');
+  });
+
+  it('adds chunks for newly added files', async () => {
+    const idx = new RagIndex();
+    await idx.build([{ path: 'a.ts', content: 'function alpha() {}' }]);
+
+    await idx.build([
+      { path: 'a.ts', content: 'function alpha() {}' },
+      { path: 'b.ts', content: 'function newFeature() { return true; }' }
+    ]);
+
+    const result = idx.query('newFeature');
+    expect(result).to.include('b.ts');
+  });
+
+  it('force=true rebuilds from scratch even when content is unchanged', async () => {
+    let buildCount = 0;
+    const idx = new RagIndex(() => { buildCount++; });
+    await idx.build(FILE);
+    const after1 = buildCount;
+
+    await idx.build(FILE, undefined, true);
+    expect(buildCount).to.be.greaterThan(after1);
+  });
+
+  it('only re-embeds changed files on incremental update', async () => {
+    const fetchStub = sinon.stub(global, 'fetch' as any);
+    fetchStub.callsFake((url: unknown) => {
+      if ((url as string).includes('/api/embed')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ embeddings: [VEC] }) } as Response);
+      return Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response);
+    });
+
+    try {
+      const idx = new RagIndex();
+      await idx.build([
+        { path: 'a.ts', content: 'function alpha() {}' },
+        { path: 'b.ts', content: 'function beta() {}' }
+      ], EMB_CONFIG);
+
+      fetchStub.resetHistory();
+
+      // Only b.ts changes — only b.ts should be re-embedded
+      await idx.build([
+        { path: 'a.ts', content: 'function alpha() {}' },        // unchanged
+        { path: 'b.ts', content: 'function beta() { return 1; }' } // changed
+      ], EMB_CONFIG);
+
+      // Only one batch call for the one changed file's chunk
+      const embedCalls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/api/embed'));
+      expect(embedCalls.length).to.equal(1);
+    } finally {
+      sinon.restore();
+    }
   });
 });

@@ -4,6 +4,21 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.4.4] — 2026-05-16
+
+### Fixed
+
+- **LM Studio RAG embeddings (issue #7)** — Grom now tries the OpenAI-compatible `/v1/embeddings` endpoint as a fallback when `/api/embed` is unsupported. LM Studio returns HTTP 200 with an error body for unknown endpoints; the response body is now validated before being accepted, so Grom correctly falls through to the working endpoint. Full fallback chain: `/api/embed` → `/v1/embeddings` → `/api/embeddings` (legacy Ollama).
+
+### Improved
+
+- **RAG endpoint caching** — the working embedding endpoint is detected once per session and cached. Subsequent indexing and query calls skip the failed endpoints entirely, eliminating redundant round-trips for LM Studio and other non-Ollama providers.
+- **RAG incremental re-indexing** — file content is now hashed on each build call. Only files whose content changed are re-chunked and re-embedded; unchanged files keep their existing vectors. Large workspaces re-index significantly faster after file saves.
+- **RAG dimension guard** — if the embedding model changes mid-session (e.g. after switching providers), query vectors with a different dimension are silently discarded and BM25 takes over, preventing silent cosine-similarity corruption.
+- **RAG failure surfacing** — when an embedding model is configured but all embedding attempts fail, the status bar now reports `BM25 only (embedding unavailable)` instead of showing a healthy-looking chunk count. `getStatus()` exposes `embeddingFailed` and `semantic` flags for richer status bar tooltips.
+
+---
+
 ## [0.4.3] — 2026-05-14
 
 ### New

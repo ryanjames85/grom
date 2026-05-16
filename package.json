@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Local-first agent harness for VS Code. Bring your own LLM — no cloud, no account, no telemetry. Your model, your machine, your rules.",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -213,7 +213,7 @@
         "grom.embeddingModel": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Ollama model to use for semantic RAG embeddings. Leave blank to use keyword search (TF-IDF) only.\n\nRecommended models (run `ollama pull <name>` first):\n- `nomic-embed-text` — fast, 274MB, great quality\n- `mxbai-embed-large` — larger, higher accuracy\n- `all-minilm` — very fast, smaller\n\nWith an embedding model, Grom understands meaning — `fetch data` will find chunks about `axios.get`."
+          "markdownDescription": "Embedding model for semantic RAG. Leave blank to use keyword search (BM25) only.\n\nWorks with **Ollama** and **LM Studio** — Grom tries each provider's embedding endpoint automatically.\n\n**Ollama** (run `ollama pull <name>` first):\n- `nomic-embed-text` — fast, 274MB, great quality\n- `mxbai-embed-large` — larger, higher accuracy\n- `all-minilm` — very fast, smaller\n\n**LM Studio** — load any embedding model and enter its name exactly as shown in LM Studio's model list (e.g. `text-embedding-nomic-embed-text-v1.5`).\n\nWith an embedding model, Grom understands meaning — `fetch data` will find chunks about `axios.get`."
         },
         "grom.autocomplete": {
           "type": "boolean",

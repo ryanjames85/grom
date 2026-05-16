@@ -3,7 +3,7 @@
  *
  * Codebase indexing and retrieval (RAG — Retrieval Augmented Generation).
  * Builds a searchable index from pre-read workspace files using BM25 keyword
- * scoring (always) and optional semantic embeddings via an Ollama embedding model.
+ * scoring (always) and optional semantic embeddings via an embedding model.
  *
  * Usage:
  *   - extension.ts reads files from the workspace and calls ragIndex.build(files, embConfig)
@@ -11,6 +11,11 @@
  *
  * Hybrid retrieval uses Reciprocal Rank Fusion (RRF) to merge BM25 and cosine ranking lists
  * when embeddings are available, or pure BM25 when no embedding model is configured.
+ *
+ * Embedding endpoint resolution order (cached after first success per session):
+ *   1. /api/embed       — Ollama native batch endpoint
+ *   2. /v1/embeddings   — OpenAI-compatible (LM Studio, OpenRouter, etc.)
+ *   3. /api/embeddings  — Legacy Ollama single-text endpoint
  *
  * NOTE: This file is intentionally vscode-free. All file discovery, config reading,
  * and status bar updates live in extension.ts. This makes the indexing logic independently
@@ -59,11 +64,20 @@ export const MAX_FILE_KB = 200;
 export class RagIndex {
   private _chunks: IndexedChunk[] = [];
   private _idf: Map<string, number> = new Map();
-  private _avgDl = 0; // Average document length across all chunks, used by BM25
+  private _avgDl = 0;
   private _indexed = false;
   private _indexing = false;
   private _hasEmbeddings = false;
   private _embConfig?: EmbeddingConfig;
+
+  // Endpoint cache — set on first successful call, skips re-probing for the session lifetime
+  private _workingEndpoint: 'ollama' | 'openai' | 'legacy' | null = null;
+  // Expected vector dimension — guards against silent corruption when the model changes mid-session
+  private _embDim = 0;
+  // Per-file content hashes — enables incremental re-indexing on file changes
+  private _fileHashes: Map<string, string> = new Map();
+  // Set when an embedding model is configured but all embedding attempts fail
+  private _embeddingFailed = false;
 
   /**
    * @param _onProgress Optional callback invoked with status messages during indexing.
@@ -71,52 +85,133 @@ export class RagIndex {
    */
   constructor(private readonly _onProgress?: (msg: string) => void) {}
 
+  /** Returns current indexing status for extension.ts status bar and tooltip display. */
+  getStatus(): { indexed: boolean; chunks: number; semantic: boolean; embeddingFailed: boolean } {
+    return { indexed: this._indexed, chunks: this._chunks.length, semantic: this._hasEmbeddings, embeddingFailed: this._embeddingFailed };
+  }
+
   /** Returns true once the index has been built at least once. */
   isIndexed() { return this._indexed; }
 
   /**
-   * Builds the full index from the provided file list.
-   * Skips files with non-indexed extensions. Chunks each file with a sliding window
-   * and builds a TF-IDF index. If embConfig is provided, also embeds all chunks
-   * via the Ollama /api/embed endpoint for semantic retrieval.
-   * Pass force=true to rebuild even if already indexed (e.g. on file change).
+   * Builds or incrementally updates the index from the provided file list.
+   *
+   * - First call (not yet indexed): full build — chunks all files, embeds all chunks.
+   * - Subsequent calls without force: incremental — only re-chunks and re-embeds files
+   *   whose content hash changed; untouched files keep their existing vectors.
+   * - force=true: full rebuild regardless (e.g. when the embedding model changes).
+   *
+   * Embedding endpoint is probed once per session and cached; subsequent calls skip
+   * failed endpoints. Pass force=true to reset the cache when switching providers.
    */
   async build(files: RagFile[], embConfig?: EmbeddingConfig, force = false): Promise<void> {
-    if (this._indexing || (this._indexed && !force)) return;
+    if (this._indexing) return;
+
+    // Invalidate endpoint cache and dimension guard when the provider config changes
+    if (embConfig && (embConfig.apiUrl !== this._embConfig?.apiUrl || embConfig.model !== this._embConfig?.model)) {
+      this._workingEndpoint = null;
+      this._embDim = 0;
+    }
+
+    if (!force && this._indexed) {
+      await this._incrementalBuild(files, embConfig);
+      return;
+    }
+
+    // Full rebuild
     this._indexing = true;
     this._chunks = [];
+    this._fileHashes = new Map();
     this._hasEmbeddings = false;
+    this._embeddingFailed = false;
     this._embConfig = embConfig;
     this._onProgress?.('indexing...');
 
     try {
       for (let fIdx = 0; fIdx < files.length; fIdx++) {
+        if (fIdx % 10 === 0) this._onProgress?.(`indexing ${Math.round(fIdx / files.length * 100)}%…`);
         const file = files[fIdx];
-        if (fIdx % 10 === 0) {
-          const pct = Math.round((fIdx / files.length) * 100);
-          this._onProgress?.(`indexing ${pct}%…`);
-        }
-        const ext = path.extname(file.path).toLowerCase();
-        if (!INDEXED_EXTS.has(ext)) continue;
-        // Skip binary files — null bytes indicate compiled/binary content that floods context
-        if (file.content.includes('\0')) continue; // fix: check for null byte not space
-        const lines = file.content.split('\n');
-        for (let i = 0; i < lines.length; i += CHUNK_LINES - CHUNK_OVERLAP) {
-          const chunk = lines.slice(i, i + CHUNK_LINES).join('\n');
-          if (chunk.trim().length < 20) continue;
-          const tokens = tokenizeToArray(chunk);
-          this._chunks.push({ file: file.path, line: i + 1, text: chunk, terms: termFreq(tokens), bigrams: buildBigrams(tokens), dl: tokens.length });
-        }
+        this._fileHashes.set(file.path, fileHash(file.content));
+        this._chunks.push(...this._chunkFile(file));
       }
       this._avgDl = this._chunks.length ? this._chunks.reduce((s, c) => s + c.dl, 0) / this._chunks.length : 1;
       this._buildIdf();
-      if (embConfig?.model) await this._embedAllChunks(embConfig);
+      if (embConfig?.model) await this._embedChunks(this._chunks, embConfig);
       this._indexed = true;
-      const embLabel = this._hasEmbeddings ? ' (semantic)' : '';
-      this._onProgress?.(`${this._chunks.length} chunks indexed${embLabel}`);
+      this._onProgress?.(this._progressLabel());
     } finally {
       this._indexing = false;
     }
+  }
+
+  /**
+   * Incremental update: computes content hashes for all incoming files, re-chunks and
+   * re-embeds only the files that changed, removes chunks for deleted files, and
+   * rebuilds IDF + avgDl. Returns immediately if nothing changed.
+   */
+  private async _incrementalBuild(files: RagFile[], embConfig?: EmbeddingConfig): Promise<void> {
+    this._indexing = true;
+    this._embConfig = embConfig;
+
+    try {
+      const incoming = new Map(files.map(f => [f.path, f]));
+
+      // Files whose content changed or that are new to the workspace
+      const changedFiles: RagFile[] = [];
+      for (const [p, f] of incoming) {
+        const hash = fileHash(f.content);
+        if (this._fileHashes.get(p) !== hash) {
+          changedFiles.push(f);
+          this._fileHashes.set(p, hash);
+        }
+      }
+
+      // Files removed from the workspace
+      const deletedPaths = new Set<string>();
+      for (const p of this._fileHashes.keys()) {
+        if (!incoming.has(p)) { deletedPaths.add(p); this._fileHashes.delete(p); }
+      }
+
+      if (changedFiles.length === 0 && deletedPaths.size === 0) return;
+
+      // Drop stale chunks; keep everything else (including their existing vectors)
+      const stale = new Set([...changedFiles.map(f => f.path), ...deletedPaths]);
+      this._chunks = this._chunks.filter(c => !stale.has(c.file));
+
+      // Chunk and embed only the changed files
+      const newChunks: IndexedChunk[] = [];
+      for (const f of changedFiles) newChunks.push(...this._chunkFile(f));
+      if (embConfig?.model && newChunks.length > 0) await this._embedChunks(newChunks, embConfig);
+      this._chunks.push(...newChunks);
+
+      this._avgDl = this._chunks.length ? this._chunks.reduce((s, c) => s + c.dl, 0) / this._chunks.length : 1;
+      this._buildIdf();
+      this._onProgress?.(this._progressLabel());
+    } finally {
+      this._indexing = false;
+    }
+  }
+
+  /** Chunks a single file into overlapping windows. Returns [] for non-indexed or binary files. */
+  private _chunkFile(file: RagFile): IndexedChunk[] {
+    const ext = path.extname(file.path).toLowerCase();
+    if (!INDEXED_EXTS.has(ext)) return [];
+    if (file.content.includes('\0')) return []; // skip binary files
+    const chunks: IndexedChunk[] = [];
+    const lines = file.content.split('\n');
+    for (let i = 0; i < lines.length; i += CHUNK_LINES - CHUNK_OVERLAP) {
+      const chunk = lines.slice(i, i + CHUNK_LINES).join('\n');
+      if (chunk.trim().length < 20) continue;
+      const tokens = tokenizeToArray(chunk);
+      chunks.push({ file: file.path, line: i + 1, text: chunk, terms: termFreq(tokens), bigrams: buildBigrams(tokens), dl: tokens.length });
+    }
+    return chunks;
+  }
+
+  private _progressLabel(): string {
+    if (this._embeddingFailed) return `${this._chunks.length} chunks — BM25 only (embedding unavailable)`;
+    const embLabel = this._hasEmbeddings ? ` (${this._embConfig?.model ?? 'semantic'})` : '';
+    return `${this._chunks.length} chunks indexed${embLabel}`;
   }
 
   /**
@@ -151,7 +246,10 @@ export class RagIndex {
     if (!this._hasEmbeddings) return this.query(query, topK);
 
     const qVecRaw = await this._embed(query, this._embConfig);
-    const qVec = qVecRaw ? new Float32Array(qVecRaw) : null;
+    // Guard against dimension mismatch — if the model changed mid-session cosine produces nonsense
+    const qVec = (qVecRaw && (this._embDim === 0 || qVecRaw.length === this._embDim))
+      ? new Float32Array(qVecRaw)
+      : null;
     const qTokens = tokenizeToArray(query);
     const qTerms = termFreq(qTokens);
     const qBigrams = buildBigrams(qTokens);
@@ -229,15 +327,15 @@ export class RagIndex {
   }
 
   /**
-   * Embeds all chunks in batches using the Ollama /api/embed endpoint.
-   * Falls back to per-chunk embedding via /api/embeddings if the batch endpoint fails.
-   * Embeddings are optional — failure is silently ignored and TF-IDF is used instead.
+   * Embeds a set of chunks in batches. Used for both full builds and incremental updates.
+   * Tries the cached working endpoint first; probes all three on first call.
+   * Updates _hasEmbeddings and _embeddingFailed based on results.
+   * Embedding is optional — silent failure degrades to BM25.
    */
-  private async _embedAllChunks(embConfig: EmbeddingConfig): Promise<void> {
+  private async _embedChunks(chunks: IndexedChunk[], embConfig: EmbeddingConfig): Promise<void> {
     let successCount = 0;
-    for (let i = 0; i < this._chunks.length; i += EMBED_BATCH) {
-      const batch = this._chunks.slice(i, i + EMBED_BATCH);
-      // Truncate chunk text to keep embedding requests fast
+    for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
+      const batch = chunks.slice(i, i + EMBED_BATCH);
       const inputs = batch.map(c => c.text.slice(0, 512));
       try {
         const vectors = await this._embedBatch(embConfig.apiUrl, embConfig.model, inputs);
@@ -247,44 +345,79 @@ export class RagIndex {
           }
           successCount += batch.length;
         } else {
-          // Batch endpoint not supported by this model — fall back to individual calls
           for (let j = 0; j < batch.length; j++) {
             const v = await this._embed(batch[j].text.slice(0, 512), embConfig);
             if (v) { batch[j].vector = new Float32Array(v); successCount++; }
           }
         }
-      } catch { /* embedding is optional — silently continue with TF-IDF */ }
-
-      const pct = Math.round((i / this._chunks.length) * 100);
-      this._onProgress?.(`embedding ${pct}%…`);
+      } catch {}
+      this._onProgress?.(`embedding ${Math.round(i / chunks.length * 100)}%…`);
     }
-    if (successCount > 0) this._hasEmbeddings = true;
-  }
-
-  /** Batch embedding via Ollama's /api/embed endpoint (preferred, more efficient). Returns null if unsupported. */
-  private async _embedBatch(apiUrl: string, model: string, inputs: string[]): Promise<number[][] | null> {
-    try {
-      const res = await fetch(`${apiUrl}/api/embed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input: inputs }),
-        signal: AbortSignal.timeout(30000)
-      });
-      if (!res.ok) return null;
-      const data: any = await res.json();
-      return data.embeddings || null;
-    } catch { return null; }
+    if (successCount > 0) {
+      this._hasEmbeddings = true;
+      this._embeddingFailed = false;
+    } else if (chunks.length > 0 && !this._hasEmbeddings) {
+      // Only flag as failed when this is the first/only embedding attempt
+      this._embeddingFailed = true;
+    }
   }
 
   /**
-   * Single-text embedding — tries /api/embed first, then falls back to the legacy /api/embeddings endpoint.
-   * embConfig is optional; when undefined (e.g. during a queryAsync call before build completes) returns null.
+   * Batch embedding with endpoint caching. On the first call, probes /api/embed then
+   * /v1/embeddings and stores whichever works. Subsequent calls skip the failed endpoint.
+   * Returns null if the cached endpoint stops working (caller falls back to per-chunk _embed).
+   */
+  private async _embedBatch(apiUrl: string, model: string, inputs: string[]): Promise<number[][] | null> {
+    if (this._workingEndpoint === 'legacy') return null; // legacy is single-text only
+
+    const h = { 'Content-Type': 'application/json' };
+    const tryOllama = this._workingEndpoint !== 'openai';
+    const tryOpenAI = this._workingEndpoint !== 'ollama';
+
+    if (tryOllama) {
+      try {
+        const res = await fetch(`${apiUrl}/api/embed`, { method: 'POST', headers: h, body: JSON.stringify({ model, input: inputs }), signal: AbortSignal.timeout(30000) });
+        if (res.ok) {
+          const data: any = await res.json();
+          if (Array.isArray(data.embeddings) && data.embeddings.length) {
+            this._workingEndpoint ??= 'ollama';
+            this._embDim ||= (data.embeddings[0] as number[])?.length ?? 0;
+            return data.embeddings;
+          }
+        }
+      } catch {}
+    }
+
+    if (tryOpenAI) {
+      try {
+        const res = await fetch(`${apiUrl}/v1/embeddings`, { method: 'POST', headers: h, body: JSON.stringify({ model, input: inputs }), signal: AbortSignal.timeout(30000) });
+        if (res.ok) {
+          const data: any = await res.json();
+          if (Array.isArray(data.data) && data.data.length) {
+            this._workingEndpoint ??= 'openai';
+            const vecs = data.data.map((d: any) => d.embedding as number[]);
+            this._embDim ||= vecs[0]?.length ?? 0;
+            return vecs;
+          }
+        }
+      } catch {}
+    }
+
+    return null;
+  }
+
+  /**
+   * Single-text embedding — delegates to _embedBatch first (Ollama + OpenAI-compat),
+   * then falls back to the legacy Ollama /api/embeddings endpoint for older servers.
+   * embConfig is optional; returns null when undefined.
    */
   private async _embed(text: string, embConfig: EmbeddingConfig | undefined): Promise<number[] | null> {
     if (!embConfig) return null;
     try {
       const batch = await this._embedBatch(embConfig.apiUrl, embConfig.model, [text]);
       if (batch?.[0]) return batch[0];
+      // Skip legacy probe when we already know the working endpoint (it would have succeeded above)
+      if (this._workingEndpoint !== null && this._workingEndpoint !== 'legacy') return null;
       // Legacy single-input endpoint for older Ollama versions
       const res = await fetch(`${embConfig.apiUrl}/api/embeddings`, {
         method: 'POST',
@@ -294,12 +427,25 @@ export class RagIndex {
       });
       if (!res.ok) return null;
       const data: any = await res.json();
-      return data.embedding || null;
+      const vec: number[] | null = data.embedding || null;
+      if (vec?.length) {
+        this._workingEndpoint ??= 'legacy';
+        this._embDim ||= vec.length;
+        return vec;
+      }
+      return null;
     } catch { return null; }
   }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Fast djb2 hash of file content — used for incremental re-indexing change detection. */
+function fileHash(content: string): string {
+  let h = 5381;
+  for (let i = 0; i < content.length; i++) h = (h * 33 ^ content.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
 
 /**
  * Tokenizes text into lowercase terms, expanding camelCase into component words.
