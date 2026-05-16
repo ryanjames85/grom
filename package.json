@@ -1,7 +1,7 @@
 {
   "name": "grom",
   "displayName": "Grom",
-  "description": "Your local AI assistant. Runs entirely on your machine — no cloud, no account, no telemetry. Powered by Ollama, LM Studio, or any OpenAI-compatible API.",
+  "description": "Local-first agent harness for VS Code. Bring your own LLM — no cloud, no account, no telemetry. Your model, your machine, your rules.",
   "version": "0.4.3",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",

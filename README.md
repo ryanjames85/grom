@@ -10,7 +10,7 @@
 
 ---
 
-Grom is a privacy-first AI coding assistant for VS Code that runs entirely on your local hardware.
+Grom is a local-first agent harness and AI coding assistant for VS Code. Bring your own LLM — your code never leaves your machine.
 
 No cloud. No account. No telemetry. No dark patterns. No upsell.
 
