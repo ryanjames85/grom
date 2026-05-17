@@ -54,6 +54,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _isStreaming = false;
   private _detectedContextLength: number | null = null;
   private _contextHintSent = new Set<string>(); // session IDs that have already received a context hint
+  private _docsHintSent = new Set<string>();   // session IDs that have already received the @docs hint
 
   constructor(private readonly _context: vscode.ExtensionContext, private readonly _rag?: RagIndex, private readonly _docs?: DocsIndex) {
     this._mcp = new McpManager();
@@ -398,7 +399,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'openSettings':
-          vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${this._context.extension.id}`);
+          vscode.commands.executeCommand('workbench.action.openSettings', data.query ?? `@ext:${this._context.extension.id}`);
           break;
         case 'getFiles': {
           // Collect open tabs first — these are highest priority
@@ -648,6 +649,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const toolsDefault = vscode.workspace.getConfiguration('grom').get<boolean>('toolsEnabledByDefault', false);
     this._sessionManager.deleteSession(id, toolsDefault);
     this._contextHintSent.delete(id);
+    this._docsHintSent.delete(id);
     this._saveState();
     this._loadAllSessions();
   }
@@ -882,6 +884,22 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   /** Delegates to AgentLoop.run() — context assembly, tool execution, and streaming all happen there. */
   private async _handleChat(text: string, images?: string[], mode: 'plan' | 'build' = 'plan') {
     if (!this._view) return;
+
+    // If @docs is used but no sources are configured, show the hint and skip the model call entirely —
+    // Grom already knows the answer; there's nothing useful to send to the provider.
+    if (/@docs\b/.test(text)) {
+      const docSources = vscode.workspace.getConfiguration('grom').get<any[]>('docSources', []);
+      if (!docSources.length) {
+        const hintsEnabled = vscode.workspace.getConfiguration('grom').get<boolean>('hints', true);
+        const sessionId = this._sessionManager.getCurrentSessionId();
+        if (hintsEnabled && !this._docsHintSent.has(sessionId)) {
+          this._docsHintSent.add(sessionId);
+          this._view.webview.postMessage({ type: 'gromHint', hint: 'docs' });
+        }
+        return;
+      }
+    }
+
     this._isStreaming = true;
     try {
       const session = this._sessionManager.getCurrentSession();

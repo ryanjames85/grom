@@ -62,19 +62,29 @@ export class DocsIndex {
 
     try {
       const pages = await this._crawl(source.url, source.name);
+      if (!pages.length) {
+        this._onProgress?.(`docs (${source.name}) — no pages found (check URL and server)`);
+        return;
+      }
+      let added = 0;
       for (const page of pages) {
-        const chunks = this._chunkText(page.text);
-        for (const chunk of chunks) {
+        for (const chunk of this._chunkText(page.text)) {
           if (chunk.trim().length < 40) continue;
-          const tokens = tokenize(chunk);
-          this._chunks.push({ source: source.name, url: page.url, text: chunk, terms: termFreq(tokens) });
+          this._chunks.push({ source: source.name, url: page.url, text: chunk, terms: termFreq(tokenize(chunk)) });
+          added++;
         }
+      }
+      if (!added) {
+        this._onProgress?.(`docs (${source.name}) — no usable content extracted (pages may be JS-rendered)`);
+        return;
       }
       this._buildIdf();
       this._indexed.add(source.name);
       this._onProgress?.(`docs indexed (${source.name})`);
     } catch {
-      this._onProgress?.(''); // Signal status bar to hide on failure
+      // Clean up any partial chunks written before the exception
+      this._chunks = this._chunks.filter(c => c.source !== source.name);
+      this._onProgress?.(`docs (${source.name}) — indexing failed`);
     } finally {
       this._indexing.delete(source.name);
     }
@@ -128,8 +138,14 @@ export class DocsIndex {
    * Uses an 80ms delay between requests to avoid hammering documentation servers.
    */
   private async _crawl(startUrl: string, sourceName: string): Promise<Array<{ url: string; text: string }>> {
-    let origin: string;
-    try { origin = new URL(startUrl).origin; } catch { return []; }
+    let parsedStart: URL;
+    try { parsedStart = new URL(startUrl); } catch { return []; }
+
+    const origin = parsedStart.origin;
+    // Normalise path prefix to always end without a trailing slash so startsWith
+    // checks don't accidentally match /reference-other when /reference is configured
+    const pathPrefix = parsedStart.pathname.replace(/\/$/, '') || '/';
+    const isLocal = parsedStart.hostname === 'localhost' || parsedStart.hostname === '127.0.0.1';
 
     const visited = new Set<string>();
     const queue = [startUrl];
@@ -153,21 +169,23 @@ export class DocsIndex {
 
         if (pages.length >= MAX_PAGES_PER_SOURCE) break;
 
-        // Extract same-origin links for the crawl queue
+        // Extract links that stay within the configured path prefix
         const linkRe = /href=["']([^"'#?][^"']*?)["']/g;
         let m: RegExpExecArray | null;
         while ((m = linkRe.exec(html)) !== null) {
           try {
             const abs = new URL(m[1], current).href.split('#')[0].split('?')[0];
-            if (abs.startsWith(origin) && !visited.has(abs)) queue.push(abs);
+            // Require the link to start with the path prefix followed by / or end exactly there
+            const absPath = new URL(abs).pathname;
+            if (abs.startsWith(origin) && (absPath === pathPrefix || absPath.startsWith(pathPrefix + '/')) && !visited.has(abs)) queue.push(abs);
           } catch { /* malformed href — skip */ }
         }
 
         this._onProgress?.(`docs (${sourceName}) — ${pages.length} pages…`);
       } catch { /* timeout or network error — skip this page and continue */ }
 
-      // Polite delay to avoid rate-limiting documentation servers
-      await new Promise(r => setTimeout(r, 80));
+      // Polite delay for external servers; skip for localhost
+      if (!isLocal) await new Promise(r => setTimeout(r, 80));
     }
 
     return pages;

@@ -1054,6 +1054,20 @@ window.addEventListener('message', e => {
         body.appendChild(btn); nudge.appendChild(body);
         chatContainer.appendChild(nudge);
         if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+      } else if (m.hint === 'docs') {
+        const nudge = document.createElement('div'); nudge.className = 'msg ai nudge-msg';
+        if (window.GROM_LOGOS?.default) {
+          const avatar = document.createElement('img'); avatar.src = window.GROM_LOGOS.default;
+          avatar.className = 'nudge-avatar'; nudge.appendChild(avatar);
+        }
+        const body = document.createElement('div'); body.className = 'msg-body nudge-body';
+        body.innerHTML = `No documentation sources are configured. Add URLs to <code>grom.docSources</code> so <code>@docs</code> has something to search.`;
+        const btn = document.createElement('button'); btn.className = 'nudge-btn';
+        btn.textContent = 'Open Settings';
+        btn.onclick = () => { vscode.postMessage({ type: 'openSettings', query: 'grom.docSources' }); nudge.remove(); };
+        body.appendChild(btn); nudge.appendChild(body);
+        chatContainer.appendChild(nudge);
+        if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
       }
       break;
     }

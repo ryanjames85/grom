@@ -135,6 +135,29 @@ Enable **⚡ Tools** in the toolbar (BUILD mode only) and Grom doesn't just repl
 
 > **Note on model size:** Tool call accuracy scales with model size. 32B+ models call tools reliably. Smaller models (1.5B–7B) occasionally write prose instead of a tool call. Grom handles this by re-prompting once when it detects prose where a tool call was expected, and enables structured JSON mode after the first tool use. For complex agentic tasks, 14B+ is significantly more reliable.
 
+### Documentation Sources
+
+Index web documentation so you can reference it with `@docs` in any message. Grom crawls the URLs you configure, strips the HTML, and builds a searchable index — no copy-pasting docs into context. Any HTTP/HTTPS URL works, including local dev servers (`http://localhost:3000/docs`).
+
+```json
+"grom.docSources": [
+  { "name": "react",   "url": "https://react.dev/reference" },
+  { "name": "mdn",     "url": "https://developer.mozilla.org/en-US/docs/Web/API" },
+  { "name": "mylib",   "url": "http://localhost:3000/docs" }
+]
+```
+
+Each source needs a `name` (short identifier) and a `url` (root page to start crawling). Grom follows links within the configured path only, up to 40 pages per source. Indexing runs at startup and whenever `grom.docSources` changes.
+
+> **Note:** Grom fetches pages directly — it does not run JavaScript. Sites that render content client-side (pure SPAs) will return little or no usable text. Use a server-side rendered URL, a static export, or a local dev server instead.
+
+Once indexed, use `@docs` to search all sources or `@docs:name` to target one:
+
+```text
+@docs how do I use useEffect?
+@docs:react suspense boundaries
+```
+
 ### MCP Tool Use
 
 Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server and Grom's model can call its tools during chat. Tool calls stream live with a badge showing which tool is running. Configure via `grom.mcpServers`.

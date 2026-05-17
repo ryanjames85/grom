@@ -1,6 +1,6 @@
 # Grom — Manual Testing Runbook
 
-All scenarios below must be tested by hand. Run `npm test` first to confirm all 184 unit tests pass before starting.
+All scenarios below must be tested by hand. Run `npm test` first to confirm all unit tests pass before starting.
 
 ---
 
@@ -9,7 +9,7 @@ All scenarios below must be tested by hand. Run `npm test` first to confirm all 
 1. Build and install the extension:
    ```
    npm run package
-   code --install-extension grom-0.3.6.vsix
+   code --install-extension grom-*.vsix
    ```
 2. Open a workspace folder in VS Code (the extension requires an open folder).
 3. Start LM Studio (or Ollama) and load a model. Confirm the server is reachable at `http://localhost:1234` (or your configured URL).
@@ -255,6 +255,30 @@ This covers a previously fixed bug where the agent kept calling tools after fini
 | Enable autocomplete (`✦ Grom` in status bar) | Status bar shows `✦ Grom` |
 | Accept several completions to tune the debounce | Hover the status bar item — tooltip shows accept rate and debounce ms |
 | Reload VS Code | Hover status bar — debounce value is restored from the previous session, not reset to default |
+
+---
+
+## 17. Documentation Sources (@docs)
+
+### No sources configured — hint fires, no model call made
+
+| Step | Expected |
+|------|----------|
+| Ensure `grom.docSources` is empty (default) | — |
+| Send `@docs what is useEffect?` | A Grom hint card appears: "No documentation sources are configured" with an **Open Settings** button. No model call is made; no response bubble appears |
+| Click **Open Settings** | VS Code settings open filtered to `grom.docSources` |
+| Send `@docs` again in the same session | Hint does **not** fire a second time (once per session) |
+| Start a new session and send `@docs` again | Hint fires again in the new session |
+
+### With sources configured — @docs returns results
+
+| Step | Expected |
+|------|----------|
+| Add a source to `grom.docSources`, e.g. `{ "name": "react", "url": "https://react.dev/reference" }` | Status bar shows indexing progress |
+| Wait for indexing to complete | Status bar shows chunk count |
+| Send `@docs how does useState work?` | Model receives relevant documentation chunks and answers accordingly |
+| Send `@docs:react how does useState work?` | Same result, scoped to the "react" source |
+| Send `@docs:missing something` | Model receives a "No relevant documentation found" note; responds gracefully |
 
 ---
 
