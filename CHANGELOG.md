@@ -4,11 +4,16 @@ All notable changes to Grom are documented here.
 
 ---
 
-## [0.4.4] — 2026-05-16
+## [0.4.4] — 2026-05-17
 
 ### Fixed
 
 - **LM Studio RAG embeddings (issue #7)** — Grom now tries the OpenAI-compatible `/v1/embeddings` endpoint as a fallback when `/api/embed` is unsupported. LM Studio returns HTTP 200 with an error body for unknown endpoints; the response body is now validated before being accepted, so Grom correctly falls through to the working endpoint. Full fallback chain: `/api/embed` → `/v1/embeddings` → `/api/embeddings` (legacy Ollama).
+
+### New
+
+- **`@docs` context mention** — type `@docs` in any message to search indexed documentation sources, or `@docs:name` to target a specific source. Configure sources via `grom.docSources` (name + URL pairs). Grom crawls up to 40 pages per source, staying within the configured path. Works with any HTTP/HTTPS URL including local dev servers. JS-rendered (SPA) sites are a known limitation — use a server-side rendered or statically exported URL instead.
+- **`@docs` hint** — if `@docs` is used with no sources configured, Grom shows a hint card with an Open Settings button and skips the model call entirely.
 
 ### Improved
 
@@ -18,6 +23,7 @@ All notable changes to Grom are documented here.
 - **RAG failure surfacing** — when an embedding model is configured but all embedding attempts fail, the status bar now reports `BM25 only (embedding unavailable)` instead of showing a healthy-looking chunk count. `getStatus()` exposes `embeddingFailed` and `semantic` flags for richer status bar tooltips.
 - **Context window auto-detection for LM Studio** — `fetchContextLength` now probes four endpoints in order: `/api/show` (Ollama/LocalAI), `/api/v1/models` (LM Studio native list — `loaded_context_length`), `/v1/models` (OpenAI-compatible — `max_context_length`), `/props` (llama.cpp/llamafile). LM Studio users now get an accurate token counter instead of a silent null.
 - **Context-length endpoint cache** — the first working endpoint per server URL is persisted to VS Code `globalState` and restored on restart. Subsequent connects go straight to the working endpoint; failed probes are never retried, so LM Studio logs stay clean after the first connect.
+- **Docs indexer robustness** — crawl scope now stays within the configured path prefix (e.g. `/reference` won't wander to `/blog`). Failures and empty results surface in the status bar instead of silently disappearing. Partial chunks are cleaned up on error. Localhost sources skip the 80ms inter-request delay.
 
 ---
 
