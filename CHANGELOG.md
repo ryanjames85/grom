@@ -16,6 +16,8 @@ All notable changes to Grom are documented here.
 - **RAG incremental re-indexing** — file content is now hashed on each build call. Only files whose content changed are re-chunked and re-embedded; unchanged files keep their existing vectors. Large workspaces re-index significantly faster after file saves.
 - **RAG dimension guard** — if the embedding model changes mid-session (e.g. after switching providers), query vectors with a different dimension are silently discarded and BM25 takes over, preventing silent cosine-similarity corruption.
 - **RAG failure surfacing** — when an embedding model is configured but all embedding attempts fail, the status bar now reports `BM25 only (embedding unavailable)` instead of showing a healthy-looking chunk count. `getStatus()` exposes `embeddingFailed` and `semantic` flags for richer status bar tooltips.
+- **Context window auto-detection for LM Studio** — `fetchContextLength` now probes four endpoints in order: `/api/show` (Ollama/LocalAI), `/api/v1/models` (LM Studio native list — `loaded_context_length`), `/v1/models` (OpenAI-compatible — `max_context_length`), `/props` (llama.cpp/llamafile). LM Studio users now get an accurate token counter instead of a silent null.
+- **Context-length endpoint cache** — the first working endpoint per server URL is persisted to VS Code `globalState` and restored on restart. Subsequent connects go straight to the working endpoint; failed probes are never retried, so LM Studio logs stay clean after the first connect.
 
 ---
 
@@ -366,9 +368,9 @@ Initial public release.
 | `grom.model` | `qwen2.5-coder` | Chat model |
 | `grom.useOllamaFormat` | `true` | Use Ollama API format |
 | `grom.autocomplete` | `true` | Enable inline completions |
-| `grom.autocompleteModel` | _(chat model)_ | Dedicated FIM model for completions |
+| `grom.autocompleteModel` | *(chat model)* | Dedicated FIM model for completions |
 | `grom.ragEnabled` | `true` | Enable codebase indexing |
-| `grom.embeddingModel` | _(blank)_ | Ollama model for semantic RAG (e.g. `nomic-embed-text`) |
+| `grom.embeddingModel` | *(blank)* | Ollama model for semantic RAG (e.g. `nomic-embed-text`) |
 | `grom.agentEnabled` | `true` | Enable built-in file tools in the agentic loop |
 | `grom.agentMaxIterations` | `20` | Maximum tool-call rounds per message |
 | `grom.mcpServers` | `[]` | MCP server definitions |
@@ -376,7 +378,7 @@ Initial public release.
 | `grom.customProviders` | `[]` | Additional LLM providers shown in the provider picker |
 | `grom.theme` | `Grom` | UI theme |
 | `grom.robotAnimations` | `true` | Enable robot animations |
-| `grom.presets` | _(defaults)_ | Prompt preset buttons |
-| `grom.customGreeting` | _(blank)_ | Override empty-state greeting text |
-| `grom.customLogo` | _(blank)_ | Override chat logo (URL, data URI, or emoji) |
+| `grom.presets` | *(defaults)* | Prompt preset buttons |
+| `grom.customGreeting` | *(blank)* | Override empty-state greeting text |
+| `grom.customLogo` | *(blank)* | Override chat logo (URL, data URI, or emoji) |
 | `grom.hints` | `true` | Show Grom hint cards in chat (e.g. context-full warning) |

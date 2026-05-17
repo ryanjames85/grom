@@ -20,7 +20,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LocalLLMClient, ChatMessage, AuthType, ProviderFormat, fetchContextLength } from './client';
+import { LocalLLMClient, ChatMessage, AuthType, ProviderFormat, fetchContextLength, loadCtxEndpointCache, dumpCtxEndpointCache, CtxEndpoint } from './client';
 import { SessionManager, ChatSession } from './session';
 import { getCustomPrompts } from './context';
 import { insertCode, applyCode, diffCode, acceptDiff, diffAgentWrite } from './editor';
@@ -825,11 +825,14 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       const caps = await capsClient.getCapabilities();
       if (mcpToolCount > 0) caps.tools = true;
 
-      // Auto-detect context length — cloud providers won't respond and fall through silently
+      // Auto-detect context length — cloud providers won't respond and fall through silently.
+      // Load cached endpoint so we skip failed probes from the last session.
+      loadCtxEndpointCache(this._context.globalState.get<Record<string, CtxEndpoint>>('grom.ctxEndpointCache', {}));
       const detectedCtx = await fetchContextLength(url, activeModel);
       if (detectedCtx) {
         this._detectedContextLength = detectedCtx;
         log(`[connection] detected context length: ${this._detectedContextLength}`);
+        void this._context.globalState.update('grom.ctxEndpointCache', dumpCtxEndpointCache());
       }
 
       log(`[connection] connected — model=${activeModel} models=[${models.join(', ')}] caps=${JSON.stringify(caps)} mcpTools=${mcpToolCount}`);

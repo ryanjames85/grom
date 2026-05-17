@@ -71,7 +71,7 @@ Grom works with local servers out of the box — no account, no key. Cloud provi
 | --- | --- |
 | **Ollama** | Local, `127.0.0.1:11434` — recommended |
 | **LM Studio** | Local, `127.0.0.1:1234` |
-| **Open Code** | Local |
+| **Open Code** | `api.opencode.ai` — requires API key |
 | **OpenAI** | GPT-4o, o1, o3-mini |
 | **Anthropic** | Claude Sonnet, Claude Opus |
 | **Groq** | Llama 3, Mixtral — fast inference |
@@ -94,6 +94,8 @@ Use `@` in any message to attach context:
 | `@git` | Your current uncommitted diff (`git diff HEAD`) |
 | `@terminal` | Recent output from the integrated terminal |
 | `@url:https://...` | Fetches a web page and includes its text |
+| `@docs` | Searches all indexed documentation sources (`grom.docSources`) |
+| `@docs:name` | Searches a specific doc source by name |
 
 Auto-context is on by default — Grom reads the file you have open automatically.
 
@@ -157,7 +159,7 @@ Open it with the brain icon in the header.
 - Export any conversation as `.md`, import it back to continue
 - Search through any conversation with live highlighting
 - Per-session system prompt override via the chat bubble icon
-- **Context window indicator** — the radial circle in the footer shows token usage; hover for exact counts and estimated cost (when pricing is configured in `grom.modelPricing`)
+- **Context window indicator** — the radial circle in the toolbar shows token usage; hover for exact counts and estimated cost (when pricing is configured in `grom.modelPricing`)
 
 ### Custom Prompt Files
 
@@ -252,8 +254,18 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.agentMaxIterations` | Max tool-call rounds per task | `20` |
 | `grom.fontSize` | Chat panel font size: `small`, `medium`, `large` | `medium` |
 | `grom.debugLogging` | Write diagnostics to the Grom Output channel | `false` |
+| `grom.hints` | Show in-chat hint cards (e.g. context window full warning) | `true` |
+| `grom.modelPricing` | Per-model token pricing and context window size overrides | `{}` |
+| `grom.docSources` | Documentation sources available via `@docs` | `[]` |
+| `grom.presets` | Custom prompt presets shown in the `/` menu | `[]` |
+| `grom.chatLanguageModels` | Per-language chat model overrides (takes priority over `grom.languageModels`) | `{}` |
+| `grom.autocompleteLanguageModels` | Per-language autocomplete model overrides (takes priority over `grom.languageModels`) | `{}` |
+| `grom.customGreeting` | Override the greeting shown in the empty chat state | *(blank)* |
+| `grom.customLogo` | Override the chat logo — URL, `data:` URI, or emoji | *(blank)* |
 
 ### Per-Language Model Routing
+
+`grom.languageModels` sets a model for a language in both chat and autocomplete. Use `grom.chatLanguageModels` or `grom.autocompleteLanguageModels` to set them independently — these take priority when set.
 
 ```json
 {

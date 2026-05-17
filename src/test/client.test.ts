@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 
 (global as any).vscode = { window: {}, workspace: {} };
 
-import { LocalLLMClient, fetchContextLength } from '../client';
+import { LocalLLMClient, fetchContextLength, clearCtxEndpointCache } from '../client';
 
 const makeStreamBody = (chunks: string[]) => {
   let callCount = 0;
@@ -745,7 +745,7 @@ describe('LocalLLMClient', () => {
 describe('fetchContextLength', () => {
   let fetchStub: sinon.SinonStub;
 
-  beforeEach(() => { fetchStub = sinon.stub(global, 'fetch'); });
+  beforeEach(() => { fetchStub = sinon.stub(global, 'fetch'); clearCtxEndpointCache(); });
   afterEach(() => { fetchStub.restore(); });
 
   const showOk = (body: object) => Promise.resolve({ ok: true, json: async () => body } as any);
@@ -769,34 +769,126 @@ describe('fetchContextLength', () => {
     expect(await fetchContextLength('http://localhost:11434', 'llama3')).to.equal(8192);
   });
 
-  // --- /props fallback (llama.cpp server / llamafile) ---
+  // --- /api/v1/models/{model} (LM Studio native — step 2) ---
 
-  it('falls back to /props when /api/show returns non-ok', async () => {
+  it('reads loaded_instances context_length from LM Studio native /api/v1/models list', async () => {
+    fetchStub.onFirstCall().resolves(notOk());  // api/show
+    fetchStub.onSecondCall().resolves(showOk({
+      models: [{ key: 'llava-v1.6', loaded_instances: [{ config: { context_length: 65536 } }], max_context_length: 131072 }]
+    }));
+    expect(await fetchContextLength('http://localhost:1234', 'llava-v1.6')).to.equal(65536);
+  });
+
+  it('reads max_context_length from LM Studio native list when no loaded instances', async () => {
+    fetchStub.onFirstCall().resolves(notOk());  // api/show
+    fetchStub.onSecondCall().resolves(showOk({
+      models: [{ key: 'gemma3', loaded_instances: [], max_context_length: 131072 }]
+    }));
+    expect(await fetchContextLength('http://localhost:1234', 'gemma3')).to.equal(131072);
+  });
+
+  it('matches namespaced model (google/gemma-4-e4b) via key field in LM Studio native list', async () => {
+    fetchStub.onFirstCall().resolves(notOk());  // api/show
+    fetchStub.onSecondCall().resolves(showOk({
+      models: [{ key: 'google/gemma-4-e4b', loaded_instances: [{ config: { context_length: 4096 } }], max_context_length: 131072 }]
+    }));
+    expect(await fetchContextLength('http://localhost:1234', 'google/gemma-4-e4b')).to.equal(4096);
+  });
+
+  // --- /v1/models fallback (LM Studio, OpenAI-compatible — step 3) ---
+
+  it('reads max_context_length from /v1/models when /api/show returns no usable data (LM Studio)', async () => {
+    fetchStub.onFirstCall().resolves(showOk({ error: 'Unexpected endpoint' })); // api/show — LM Studio 200 error
+    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
+    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'gemma-4-26b-a4b-it', max_context_length: 131072 }] }));
+    expect(await fetchContextLength('http://localhost:1234', 'gemma-4-26b-a4b-it')).to.equal(131072);
+  });
+
+  it('reads context_length from /v1/models when /api/show returns no usable data', async () => {
     fetchStub.onFirstCall().resolves(notOk());
-    fetchStub.onSecondCall().resolves(showOk({ default_generation_settings: { n_ctx: 4096 } }));
+    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
+    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'my-model', context_length: 32768 }] }));
+    expect(await fetchContextLength('http://localhost:1234', 'my-model')).to.equal(32768);
+  });
+
+  it('matches model by short name in /v1/models when full id is namespaced', async () => {
+    fetchStub.onFirstCall().resolves(notOk());
+    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
+    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'lmstudio/gemma-4-26b-a4b-it', max_context_length: 8192 }] }));
+    expect(await fetchContextLength('http://localhost:1234', 'gemma-4-26b-a4b-it')).to.equal(8192);
+  });
+
+  it('skips /v1/models entry when model id does not match', async () => {
+    fetchStub.onFirstCall().resolves(notOk());
+    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
+    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'other-model', max_context_length: 4096 }] }));
+    fetchStub.onCall(3).resolves(notOk());                                       // props
+    expect(await fetchContextLength('http://localhost:1234', 'my-model')).to.be.null;
+  });
+
+  // --- /props fallback (llama.cpp server / llamafile — step 4) ---
+
+  it('falls back to /props when all earlier probes return no usable data', async () => {
+    fetchStub.onFirstCall().resolves(notOk());                           // api/show
+    fetchStub.onSecondCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onThirdCall().resolves(notOk());                           // v1/models
+    fetchStub.onCall(3).resolves(showOk({ default_generation_settings: { n_ctx: 4096 } }));
     expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(4096);
   });
 
   it('falls back to /props when /api/show throws', async () => {
     fetchStub.onFirstCall().rejects(new Error('ECONNREFUSED'));
-    fetchStub.onSecondCall().resolves(showOk({ default_generation_settings: { n_ctx: 16384 } }));
+    fetchStub.onSecondCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onThirdCall().resolves(notOk());                           // v1/models
+    fetchStub.onCall(3).resolves(showOk({ default_generation_settings: { n_ctx: 16384 } }));
     expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(16384);
   });
 
   it('reads top-level n_ctx from /props', async () => {
     fetchStub.onFirstCall().resolves(notOk());
-    fetchStub.onSecondCall().resolves(showOk({ n_ctx: 2048 }));
+    fetchStub.onSecondCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onThirdCall().resolves(notOk());                           // v1/models
+    fetchStub.onCall(3).resolves(showOk({ n_ctx: 2048 }));
     expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(2048);
   });
 
-  // --- both endpoints unavailable ---
+  // --- endpoint caching ---
 
-  it('returns null when both /api/show and /props fail', async () => {
+  it('caches working endpoint and skips probes on second call', async () => {
+    // First call: api/show fails, lmstudio-native succeeds → cache 'lmstudio-native'
+    const nativeResp = showOk({ models: [{ key: 'model', loaded_instances: [{ config: { context_length: 65536 } }] }] });
+    fetchStub.onFirstCall().resolves(notOk());
+    fetchStub.onSecondCall().resolves(nativeResp);
+    const first = await fetchContextLength('http://localhost:1234', 'model');
+    expect(first).to.equal(65536);
+    expect(fetchStub.callCount).to.equal(2);
+    // Second call: cached → goes directly to lmstudio-native (1 fetch only, not 2)
+    fetchStub.onThirdCall().resolves(nativeResp);
+    const second = await fetchContextLength('http://localhost:1234', 'model');
+    expect(second).to.equal(65536);
+    expect(fetchStub.callCount).to.equal(3); // 2 probes first call + 1 cached second call
+  });
+
+  it('separate server URLs maintain independent cache entries', async () => {
+    // Ollama at :11434 — api/show works
+    fetchStub.onFirstCall().resolves(showOk({ model_info: { 'llama.context_length': 4096 } }));
+    // LM Studio at :1234 — api/show returns 200+error, native list endpoint works
+    fetchStub.onSecondCall().resolves(showOk({ error: 'Unexpected endpoint' }));
+    fetchStub.onThirdCall().resolves(showOk({ models: [{ key: 'model', loaded_instances: [{ config: { context_length: 16384 } }] }] }));
+    const r1 = await fetchContextLength('http://localhost:11434', 'llama3');
+    const r2 = await fetchContextLength('http://localhost:1234', 'model');
+    expect(r1).to.equal(4096);
+    expect(r2).to.equal(16384);
+  });
+
+  // --- all endpoints unavailable ---
+
+  it('returns null when all endpoints fail', async () => {
     fetchStub.rejects(new Error('ECONNREFUSED'));
     expect(await fetchContextLength('https://api.openai.com', 'gpt-4o')).to.be.null;
   });
 
-  it('returns null when both endpoints return non-ok with no usable data', async () => {
+  it('returns null when all endpoints return non-ok with no usable data', async () => {
     fetchStub.resolves(notOk());
     expect(await fetchContextLength('http://localhost:11434', 'model')).to.be.null;
   });
