@@ -24,6 +24,18 @@ const modeToggle = document.getElementById('mode-toggle');
 let currentAiDiv = null, currentAiText = "", pendingImages = [], currentMode = 'plan', uploadedContext = [], robotAnimations = true, _lastAutoFiles = [], _currentSessionId = null, _currentCaps = null, _memoryOriginal = '', _memorySaveTimer = null;
 let _requestId = 0; // incremented on each send; used to discard stale Ready/chunk messages
 let _cancelActiveRename = null; // call this before any session list re-render
+let _elapsedTimer = null, _elapsedStart = 0;
+function _startElapsedTimer(dotsEl) {
+  _elapsedStart = Date.now();
+  _elapsedTimer = setInterval(() => {
+    const span = dotsEl.querySelector('.elapsed-time');
+    if (!span) { clearInterval(_elapsedTimer); _elapsedTimer = null; return; }
+    const secs = Math.floor((Date.now() - _elapsedStart) / 1000);
+    span.textContent = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : secs + 's';
+    if (secs >= 8) span.classList.add('visible');
+  }, 1000);
+}
+function _stopElapsedTimer() { if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; } }
 let _userScrolledUp = false;
 const scrollBtn = document.getElementById('scroll-to-bottom');
 
@@ -591,7 +603,8 @@ sendBtn.onclick = () => {
   if (val && (_inputHistory.length === 0 || _inputHistory[_inputHistory.length - 1] !== val)) { _inputHistory.push(val); if (_inputHistory.length > 50) _inputHistory.shift(); }
   _historyIdx = -1;
   prompt.value = ''; currentAiText = ""; currentAiDiv = renderMsg('ai', '');
-  currentAiDiv.querySelector('.msg-body').innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
+  currentAiDiv.querySelector('.msg-body').innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span><span class="elapsed-time"></span></div>';
+  _startElapsedTimer(currentAiDiv.querySelector('.thinking-dots'));
   _requestId++;
   const _thisRequestId = _requestId;
   currentAiDiv._requestId = _thisRequestId;
@@ -606,7 +619,7 @@ stopBtn.onclick = () => {
   // Re-enable send immediately so the user can type a follow-up without waiting for Ready
   sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; document.body.classList.remove('grom-thinking'); updateGromLogo();
   if (currentAiDiv) {
-    currentAiDiv.querySelector('.thinking-dots')?.remove();
+    _stopElapsedTimer(); currentAiDiv.querySelector('.thinking-dots')?.remove();
     if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = '*Cancelled.*';
   }
 };
@@ -954,7 +967,7 @@ window.addEventListener('message', e => {
           });
       }
       break;
-    case 'chunk': if (currentAiDiv) { currentAiText += m.text; const body = currentAiDiv.querySelector('.msg-body'); const dots = body.querySelector('.thinking-dots'); if (dots) dots.remove(); updateAiDisplay(body, currentAiText); if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight; } break;
+    case 'chunk': if (currentAiDiv) { currentAiText += m.text; const body = currentAiDiv.querySelector('.msg-body'); const dots = body.querySelector('.thinking-dots'); if (dots) { _stopElapsedTimer(); dots.remove(); } updateAiDisplay(body, currentAiText); if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight; } break;
     case 'clearToolCallChunk': {
       if (currentAiDiv) {
         currentAiText = currentAiText.replace(m.raw, '').trim();
@@ -966,7 +979,7 @@ window.addEventListener('message', e => {
     case 'toolCall': {
       if (currentAiDiv) {
         const body = currentAiDiv.querySelector('.msg-body');
-        const dots = body.querySelector('.thinking-dots'); if (dots) dots.remove();
+        const dots = body.querySelector('.thinking-dots'); if (dots) { _stopElapsedTimer(); dots.remove(); }
         // Remove any previous tool-call badge for this turn
         body.querySelectorAll('.tool-call-badge').forEach(el => el.remove());
         const badge = document.createElement('div');
@@ -999,7 +1012,7 @@ window.addEventListener('message', e => {
       if (currentAiDiv) {
         currentAiDiv.querySelector('.tool-call-badge')?.remove();
         const dots = currentAiDiv.querySelector('.thinking-dots');
-        if (dots) { dots.remove(); if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = ''; }
+        if (dots) { _stopElapsedTimer(); dots.remove(); if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = ''; }
       }
     } break;
     case 'idleHint': {

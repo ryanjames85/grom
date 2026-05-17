@@ -89,10 +89,12 @@ mark.search-highlight { background: rgba(232, 168, 56, 0.4); color: inherit; bor
 .compact-notice::before, .compact-notice::after { content: ''; flex: 1; height: 1px; background: var(--vscode-widget-border, var(--border)); }
 .compact-notice svg { flex-shrink: 0; }
 .thinking-dots { display: flex; gap: 5px; padding: 6px 2px; align-items: center; }
-.thinking-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); opacity: 0.3; animation: dot-bounce 1.2s ease-in-out infinite; }
+.thinking-dots span:not(.elapsed-time) { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); opacity: 0.3; animation: dot-bounce 1.2s ease-in-out infinite; }
 .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
 .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes dot-bounce { 0%, 80%, 100% { opacity: 0.3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-5px); } }
+.elapsed-time { font-size: 11px; color: var(--vscode-descriptionForeground); margin-left: 4px; opacity: 0; transition: opacity 0.6s; }
+.elapsed-time.visible { opacity: 0.3; }
 
 #input-container { padding: 15px; flex-shrink: 0; }
 .input-box { background: var(--item-bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
