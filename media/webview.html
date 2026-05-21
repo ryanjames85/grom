@@ -161,14 +161,19 @@
         <div id="mcp-tool-list">Loading…</div>
       </div>
       <div class="settings-section" id="voice-settings-section">
-        <div class="settings-section-title">Voice Input <span class="info-badge" title="Audio is transcribed entirely on your device using a local AI model — nothing is ever sent to a server. The mic is optional and designed for those who want or need voice input as an accessibility tool. You can hide it at any time.">i</span></div>
+        <div class="settings-section-title">Voice Input <span class="info-badge" title="Audio is transcribed entirely on your device using a local AI model — nothing is ever sent to a server. The mic is optional and designed for those who want or need voice input as an accessibility tool. You can hide it at any time.">i</span> <span class="beta-tag">beta</span></div>
         <div class="voice-model-picker">
-          <button class="voice-remove-btn voice-model-btn active" id="voice-model-btn-tiny" onclick="window.setVoiceModel('tiny')">Tiny · ~75 MB</button>
-          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-base" onclick="window.setVoiceModel('base')">Base · ~300 MB</button>
+          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-tiny" onclick="window.selectVoiceModel('tiny')">Tiny · ~40 MB</button>
+          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-tiny.en" onclick="window.selectVoiceModel('tiny.en')">Tiny EN · ~40 MB</button>
+          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-base" onclick="window.selectVoiceModel('base')">Base · ~74 MB</button>
+          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-base.en" onclick="window.selectVoiceModel('base.en')">Base EN · ~74 MB</button>
+          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-small.en" onclick="window.selectVoiceModel('small.en')">Small EN · ~244 MB</button>
+          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-small" onclick="window.selectVoiceModel('small')">Small · ~244 MB</button>
         </div>
         <div class="voice-settings-model" id="voice-model-desc"></div>
         <div class="settings-row">
           <button id="voice-model-download-btn" class="voice-remove-btn" onclick="window.downloadVoiceModel()" style="display:none">Download model</button>
+          <button id="voice-set-default-btn" class="voice-remove-btn" onclick="window.applyVoiceModel()" style="display:none">Set as default</button>
           <button id="clear-voice-btn" class="voice-remove-btn" onclick="window.clearVoiceCache()">Clear model cache</button>
           <button id="download-ffmpeg-btn" class="voice-remove-btn" onclick="window.downloadFfmpeg()" style="display:none">Download ffmpeg</button>
           <button id="remove-ffmpeg-btn" class="voice-remove-btn" onclick="window.removeFfmpeg()" style="display:none">Remove ffmpeg</button>
@@ -199,6 +204,7 @@
 
 <div id="input-container">
     <div id="voice-download-row" style="display:none" class="voice-download-row"><div class="indexing-pulse"></div><span id="voice-download-text">Downloading voice model…</span></div>
+    <div id="voice-transcribing-row" style="display:none" class="voice-download-row"><div class="indexing-pulse"></div><span id="voice-transcribing-text">Transcribing…</span></div>
     <div id="context-row" class="context-row"></div>
     <div id="image-preview"></div>
     <div class="input-box">
@@ -221,6 +227,7 @@
     </div>
   </div>
 
+  <script>window._VOICE_WORKER_URL = '{{WORKER_JS}}';</script>
   <script src="{{MAIN_JS}}"></script>
   <script>
     window.onerror = function(msg, src, line, col, err) {

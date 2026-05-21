@@ -103,10 +103,12 @@ mark.search-highlight { background: rgba(232, 168, 56, 0.4); color: inherit; bor
 .voice-download-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); padding: 4px 0 8px; }
 .info-badge { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid currentColor; font-size: 9px; font-style: italic; font-weight: 700; cursor: default; opacity: 0.55; line-height: 1; flex-shrink: 0; vertical-align: middle; transition: opacity 0.15s; }
 .info-badge:hover { opacity: 1; }
-.voice-model-picker { display: flex; gap: 6px; margin-bottom: 6px; }
+.beta-tag { display: inline-block; font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #E8A838; border: 1px solid rgba(232,168,56,0.4); border-radius: 3px; padding: 0px 4px; vertical-align: middle; opacity: 0.8; margin-left: 3px; }
+.voice-model-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .voice-model-btn { padding: 5px 12px; font-size: 12px; background: none; border: 1px solid var(--border); color: inherit; border-radius: 6px; cursor: pointer; opacity: 0.7; transition: background 0.15s, opacity 0.15s, color 0.15s; }
 .voice-model-btn:hover:not(.active) { opacity: 1; }
 .voice-model-btn.active { opacity: 1; background: var(--vscode-button-background, #0078d4); color: var(--vscode-button-foreground, #fff); border-color: transparent; }
+.voice-model-btn.loaded:not(.active) { opacity: 1; border-color: #4ec9b0; color: #4ec9b0; }
 .voice-settings-model { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 8px; }
 .voice-setup-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .voice-remove-btn { padding: 5px 12px; font-size: 12px; background: none; border: 1px solid var(--border); color: inherit; border-radius: 6px; cursor: pointer; opacity: 0.7; }

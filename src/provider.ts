@@ -182,7 +182,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           this._updateTheme();
           this._loadAllSessions();
           this._updateActiveContext();
-          const voiceModel = vscode.workspace.getConfiguration('grom').get<string>('voiceModel', 'tiny');
+          const voiceModel = vscode.workspace.getConfiguration('grom').get<string>('voiceModel', 'tiny.en');
           webviewView.webview.postMessage({ type: 'voiceModelConfig', model: voiceModel });
           webviewView.webview.postMessage({ type: 'voiceFfmpegStatus', present: !!findFfmpeg(this._context.globalStorageUri.fsPath) });
           const isDev = this._context.extensionMode === vscode.ExtensionMode.Development;
@@ -977,7 +977,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const stripSvgDecl = (s: string) => s.replace(/<\?xml[^>]*\?>/g, '').replace(/<!DOCTYPE[^>]*>/g, '').trim();
     const idleSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-plan.svg'), 'utf8'));
     const buildSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-build.svg'), 'utf8'));
-    const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; img-src ${webview.cspSource} data: blob:; connect-src http://127.0.0.1:* http://localhost:* https: ws://127.0.0.1:* ws://localhost:*;`;
+    const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src ${webview.cspSource} blob:; img-src ${webview.cspSource} data: blob:; connect-src ${webview.cspSource} http://127.0.0.1:* http://localhost:* https: ws://127.0.0.1:* ws://localhost:*;`;
     const htmlPath = path.join(this._context.extensionUri.fsPath, 'media', 'webview.html');
     return fs.readFileSync(htmlPath, 'utf8')
       .replace('{{CSP}}', csp)
@@ -986,6 +986,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       .replace('{{HIGHLIGHT_JS}}', mediaUri('highlight.min.js'))
       .replace('{{STYLES_CSS}}', mediaUri('styles.css'))
       .replace('{{MAIN_JS}}', mediaUri('main.js'))
+      .replace('{{WORKER_JS}}', mediaUri('voice-worker.js'))
       .replace('{{LOGO_INLINE_SVG}}', idleSvgRaw)
       .replace('{{LOGO_BUILD_SVG}}', buildSvgRaw)
       .replace(/\{\{LOGO_DEFAULT\}\}/g, resourceUri('grom-plan.svg'))

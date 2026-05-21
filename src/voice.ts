@@ -218,7 +218,7 @@ export class VoiceManager {
   private _chunkTimer: NodeJS.Timeout | null = null;
   private _sentPcmLength: number = 0;
   private static readonly MAX_RECORD_MS = 30_000;
-  private static readonly CHUNK_BYTES = 16000 * 4 * 5; // 5s of f32le @ 16kHz
+  private static readonly CHUNK_BYTES = 16000 * 4 * 3; // 3s of f32le @ 16kHz
 
   constructor(
     private readonly _context: vscode.ExtensionContext,

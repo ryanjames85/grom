@@ -160,11 +160,12 @@ Once indexed, use `@docs` to search all sources or `@docs:name` to target one:
 
 ### Voice Input
 
-Speak your prompts instead of typing them. Grom captures audio locally and transcribes it on-device — nothing is ever sent to a server.
+Speak your prompts instead of typing them. Grom captures audio locally and transcribes it on-device using Whisper — nothing is ever sent to a server.
 
 - **Mic button** in the toolbar (enable in Settings → Voice Input on first use)
-- **Chunked streaming** — text appears as you speak, not just when you stop
-- **Two models** — Tiny (~75 MB, fast) or Base (~300 MB, more accurate), downloaded on demand
+- **Push-to-talk** — click to start recording, click again to stop and transcribe
+- **Six Whisper models** — from Tiny EN (~40 MB, fast) up to Small (~244 MB, best accuracy), downloaded on demand. English-only `.en` variants are faster and more accurate for English speakers
+- **Model pre-warming** — the selected model loads silently when Grom starts so the first utterance transcribes without delay
 - **No account, no cloud** — audio stays on your machine. The mic is optional and designed for those who want or need voice input as an accessibility tool.
 - Requires a one-time ffmpeg download (~50 MB), managed entirely within VS Code. Remove it anytime from Settings → Voice Input.
 
@@ -299,7 +300,7 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.customGreeting` | Override the greeting shown in the empty chat state | *(blank)* |
 | `grom.customLogo` | Override the chat logo — URL, `data:` URI, or emoji | *(blank)* |
 | `grom.voiceInput` | Enable the mic button in the toolbar | `false` |
-| `grom.voiceModel` | ASR model: `tiny` (~75 MB, fast) or `base` (~300 MB, more accurate) | `tiny` |
+| `grom.voiceModel` | Whisper model: `tiny.en`, `tiny`, `base.en`, `base`, `small.en`, `small` | `tiny.en` |
 | `grom.ffmpegPath` | Path to a custom ffmpeg binary (skips the built-in download) | *(blank)* |
 
 ### Per-Language Model Routing

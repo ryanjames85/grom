@@ -8,10 +8,11 @@ All notable changes to Grom are documented here.
 
 ### New
 
-- **Voice input** — speak your prompts instead of typing them. Grom captures audio locally via ffmpeg and transcribes it on-device using a Moonshine ONNX model — nothing is ever sent to a server. Enable the mic button from the toolbar; first use walks you through a one-time ffmpeg download.
-- **Local ASR model picker** — choose between Tiny (~75 MB, fast) and Base (~300 MB, more accurate) in Settings → Voice Input. Each model downloads on demand; the active model is highlighted. Switch models without restarting.
-- **Chunked streaming transcription** — audio is transcribed in 5-second chunks as you speak, so text appears progressively rather than all at once when you stop.
-- **Model pre-warming** — the ASR model loads in the background when Grom starts, eliminating the delay on first use after download.
+- **Voice input** — speak your prompts instead of typing them. Grom captures audio locally via ffmpeg and transcribes it on-device using OpenAI Whisper (via Transformers.js) — nothing is ever sent to a server. Push-to-talk: click mic to start, click again to transcribe. Enable from the toolbar; first use walks you through a one-time ffmpeg download.
+- **Six Whisper models** — Tiny EN, Tiny, Base EN, Base, Small EN, Small; ranging from ~40 MB to ~244 MB. English-only `.en` variants are faster and more accurate for English speakers. Models download on demand and are cached locally; multiple models can be downloaded and switched without restarting.
+- **Active model indicator** — the current default model is clearly marked in the picker. Selecting a model highlights it; a "Set as default" button promotes it. Downloaded models show a tick; the active model shows a filled dot.
+- **Model pre-warming** — Whisper loads silently in the background when Grom starts (if the mic is enabled and a model is downloaded), so the first utterance transcribes without delay.
+- **Full-utterance transcription** — the entire recording is sent to Whisper as one chunk (capped at 28 s), giving the model full context for accurate transcription. A 0.3 s silence pad is prepended to prevent Whisper from dropping the first word.
 - **ffmpeg lifecycle management** — Settings → Voice Input lets you remove the downloaded ffmpeg binary for a full cleanup. Re-downloading works seamlessly afterwards.
 - **Hide/show mic toggle** — hide the mic button from the toolbar via Settings → Voice Input; restore it anytime from the same panel. An info badge explains how to get it back if you hide it accidentally.
 - **Privacy badge** — the Voice Input settings section carries a circled-i badge explaining that audio is transcribed entirely on your device and never leaves your machine — part of Grom's accessibility and privacy ethos.

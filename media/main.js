@@ -817,13 +817,31 @@ function handleFileUpload(input) {
 // Audio capture: ffmpeg subprocess in extension host → raw 16kHz PCM → sent here as base64.
 // Inference: Moonshine ONNX via @huggingface/transformers CDN, runs in this webview.
 
+let _voiceRecordingTimer = null;
 function _setVoiceState(state) {
   _voiceState = state;
   const btn = document.getElementById('mic-btn');
   if (!btn) return;
+  if (_voiceRecordingTimer) { clearTimeout(_voiceRecordingTimer); _voiceRecordingTimer = null; }
   btn.classList.remove('recording', 'transcribing');
-  if (state === 'recording') btn.classList.add('recording');
-  else if (state === 'transcribing') btn.classList.add('transcribing');
+  if (state === 'recording') {
+    // Small delay so the button doesn't flash before audio actually starts flowing
+    _voiceRecordingTimer = setTimeout(() => { btn.classList.add('recording'); _voiceRecordingTimer = null; }, 150);
+  } else if (state === 'transcribing') {
+    btn.classList.add('transcribing');
+  }
+  if (state === 'transcribing') _vpSetTranscribingRow('Transcribing');
+  else if (state === 'idle') _vpSetTranscribingRow(null);
+}
+
+function _vpSetTranscribingRow(text) {
+  const row = document.getElementById('voice-transcribing-row');
+  if (!row) return;
+  row.style.display = text ? 'flex' : 'none';
+  if (text) {
+    const span = document.getElementById('voice-transcribing-text');
+    if (span) span.textContent = text;
+  }
 }
 
 function _setVoiceDownload(text) {
@@ -834,116 +852,343 @@ function _setVoiceDownload(text) {
   else { row.style.display = 'none'; }
 }
 
-// ── Moonshine inference ───────────────────────────────────────────────────────
-let _vpPipe = null, _vpAllPcm = null, _vpBusy = false, _vpPendingFinal = false, _vpTranscribedText = '';
-let _vpModelId = 'tiny';
-let _vpLoadedModel = null; // which model id was successfully loaded this session
+// ── Whisper inference — runs in a Web Worker to keep the UI thread free ───────
+let _vpWorker = null, _vpAllPcm = null, _vpBusy = false, _vpPendingFinal = false, _vpTranscribedText = '';
+let _vpWorkerSliceQueue = null;
+let _vpWarming = false; // true while silently pre-loading on startup — suppresses progress messages
+let _vpModelId = 'tiny.en';   // active/default model used for transcription
+let _vpSelectedId = 'tiny.en'; // currently highlighted in the picker UI
+let _vpLoadedModel = null;     // which model id is loaded in the active worker
+
+function _vpGetDownloaded() {
+  try { return JSON.parse(localStorage.getItem('grom_downloaded_models') || '[]'); } catch { return []; }
+}
+function _vpMarkDownloaded(modelId) {
+  try {
+    const set = new Set(_vpGetDownloaded());
+    set.add(modelId);
+    localStorage.setItem('grom_downloaded_models', JSON.stringify([...set]));
+  } catch {}
+}
+function _vpClearDownloaded() {
+  try { localStorage.removeItem('grom_downloaded_models'); } catch {}
+}
 
 const _VP_MODEL_INFO = {
-  tiny: { hf: 'onnx-community/moonshine-tiny-ONNX', note: 'Fast, lower accuracy' },
-  base: { hf: 'onnx-community/moonshine-base-ONNX', note: 'More accurate, slower' },
+  'tiny':     { hf: 'Xenova/whisper-tiny',     note: 'Multilingual · ~40 MB' },
+  'tiny.en':  { hf: 'Xenova/whisper-tiny.en',  note: 'English · ~40 MB' },
+  'base':     { hf: 'Xenova/whisper-base',     note: 'Multilingual · ~74 MB' },
+  'base.en':  { hf: 'Xenova/whisper-base.en',  note: 'English · ~74 MB' },
+  'small.en': { hf: 'Xenova/whisper-small.en', note: 'English · ~244 MB — best accuracy' },
+  'small':    { hf: 'Xenova/whisper-small',    note: 'Multilingual · ~244 MB' },
 };
 
+const _VP_MODEL_LABELS = { 'tiny': 'Tiny', 'tiny.en': 'Tiny EN', 'base': 'Base', 'base.en': 'Base EN', 'small.en': 'Small EN', 'small': 'Small' };
+
 function _vpUpdateModelUI() {
-  ['tiny', 'base'].forEach(id => {
+  const downloaded = new Set(_vpGetDownloaded());
+  Object.keys(_VP_MODEL_INFO).forEach(id => {
     const btn = document.getElementById('voice-model-btn-' + id);
-    if (btn) btn.classList.toggle('active', id === _vpModelId);
+    if (!btn) return;
+    const isSelected = id === _vpSelectedId;  // highlighted in picker
+    const isDefault  = id === _vpModelId;      // actual active model
+    const isDownloaded = downloaded.has(id);
+    btn.classList.toggle('active', isSelected);
+    btn.classList.toggle('loaded', isDownloaded && !isSelected);
+    const label = _VP_MODEL_LABELS[id] || id;
+    const sizePart = _VP_MODEL_INFO[id].note.match(/~\d+ MB/)?.[0] || '';
+    const badge = isDefault ? ' ●' : (isDownloaded ? ' ✓' : '');
+    btn.textContent = label + (sizePart ? ' · ' + sizePart : '') + badge;
+    btn.title = isDefault ? 'Default model — used for transcription' : (isDownloaded ? 'Downloaded — click to select, then set as default' : 'Not downloaded');
   });
-  const info = _VP_MODEL_INFO[_vpModelId] || _VP_MODEL_INFO.tiny;
-  const ready = _vpLoadedModel === _vpModelId;
+
+  // Desc line: always describes the highlighted (selected) model
+  const selInfo = _VP_MODEL_INFO[_vpSelectedId] || _VP_MODEL_INFO['tiny.en'];
+  const selLabel = _VP_MODEL_LABELS[_vpSelectedId] || _vpSelectedId;
+  const selDownloaded = downloaded.has(_vpSelectedId);
+  const isAlreadyDefault = _vpSelectedId === _vpModelId;
   const desc = document.getElementById('voice-model-desc');
-  if (desc) desc.textContent = info.note + (ready ? ' · ready' : '');
+  if (desc) {
+    if (isAlreadyDefault && selDownloaded) desc.textContent = '● Default: ' + selLabel + ' · ' + selInfo.note;
+    else if (selDownloaded) desc.textContent = selLabel + ' · ' + selInfo.note + ' · downloaded';
+    else desc.textContent = selLabel + ' · ' + selInfo.note + ' · not downloaded';
+  }
+
+  // Download button — for selected model if not downloaded
   const dlBtn = document.getElementById('voice-model-download-btn');
   if (dlBtn) {
-    dlBtn.style.display = ready ? 'none' : '';
-    dlBtn.textContent = 'Download ' + (_vpModelId === 'base' ? 'Base' : 'Tiny') + ' model';
+    dlBtn.style.display = selDownloaded ? 'none' : '';
+    dlBtn.textContent = 'Download ' + selLabel;
+    dlBtn.disabled = false;
+  }
+
+  // "Set as default" button — shown when selected is downloaded but not the default
+  const defBtn = document.getElementById('voice-set-default-btn');
+  if (defBtn) {
+    defBtn.style.display = (selDownloaded && !isAlreadyDefault) ? '' : 'none';
+    defBtn.textContent = 'Set as default';
   }
 }
 
-function _vpGetPipeline() {
-  if (!_vpPipe) {
-    const info = _VP_MODEL_INFO[_vpModelId] || _VP_MODEL_INFO.tiny;
-    _vpPipe = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm')
-      .then(({ pipeline }) => pipeline('automatic-speech-recognition', info.hf, {
-        progress_callback: p => {
-          if (p.status === 'downloading')
-            _setVoiceDownload(p.total
-              ? 'Downloading model… ' + Math.round(p.loaded / p.total * 100) + '%'
-              : 'Downloading model…');
-          else if (p.status === 'loading')
-            _setVoiceDownload('Loading model…');
-        }
-      }))
-      .then(pipe => { _vpLoadedModel = _vpModelId; _vpUpdateModelUI(); return pipe; });
-  }
-  return _vpPipe;
+let _vpWorkerPromise = null;
+
+function _vpMakeWorker() {
+  // Inline the worker code to avoid vscode-resource origin issues entirely.
+  // Classic worker (no type:module) — dynamic import() is sufficient.
+  const src = `
+const MODEL_INFO = {
+  'tiny':     'Xenova/whisper-tiny',
+  'tiny.en':  'Xenova/whisper-tiny.en',
+  'base':     'Xenova/whisper-base',
+  'base.en':  'Xenova/whisper-base.en',
+  'small.en': 'Xenova/whisper-small.en',
+  'small':    'Xenova/whisper-small',
+};
+const CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
+let _pipe = null;
+let _loadedModel = null;
+
+self.onunhandledrejection = function(e) {
+  self.postMessage({ type: 'error', message: 'Unhandled: ' + ((e.reason && e.reason.message) || String(e.reason)) });
+};
+
+async function _load(modelId) {
+  if (_loadedModel === modelId && _pipe) return _pipe;
+  _pipe = null; _loadedModel = null;
+  const hf = MODEL_INFO[modelId] || MODEL_INFO['tiny.en'];
+  self.postMessage({ type: 'progress', text: 'Loading pipeline…' });
+  const mod = await import(CDN);
+  const pipeline = mod.pipeline;
+  _pipe = await pipeline('automatic-speech-recognition', hf, {
+    dtype: 'q8',
+    progress_callback: function(p) {
+      if (p.status === 'downloading')
+        self.postMessage({ type: 'progress', text: p.total
+          ? 'Downloading model… ' + Math.round(p.loaded / p.total * 100) + '%'
+          : 'Downloading model…' });
+      else if (p.status === 'loading')
+        self.postMessage({ type: 'progress', text: 'Loading model…' });
+    }
+  });
+  _loadedModel = modelId;
+  self.postMessage({ type: 'ready', modelId: modelId });
+  return _pipe;
 }
 
-window.setVoiceModel = function(id) {
+self.onmessage = async function(e) {
+  const d = e.data;
+  if (d.type === 'load') {
+    try { await _load(d.modelId); }
+    catch(err) { self.postMessage({ type: 'error', message: err.message }); }
+    return;
+  }
+  if (d.type === 'transcribe') {
+    try {
+      const pipe = await _load(d.modelId);
+      self.postMessage({ type: 'progress', text: null });
+      const audio = new Float32Array(d.pcm);
+      const opts = { sampling_rate: 16000 };
+      if (d.isMultilingual) opts.language = 'english';
+      const result = await pipe(audio, opts);
+      const text = (Array.isArray(result) ? (result[0] && result[0].text) : result && result.text) || '';
+      self.postMessage({ type: 'result', text: text, isFinal: d.isFinal });
+    } catch(err) {
+      self.postMessage({ type: 'error', message: err.message, isFinal: d.isFinal });
+    }
+  }
+};
+`;
+  const blob = new Blob([src], { type: 'text/javascript' });
+  const url = URL.createObjectURL(blob);
+  console.log('[grom voice] creating inline blob worker');
+  const w = new Worker(url);
+  w.onmessage = _vpOnWorkerMessage;
+  w.onerror = e => {
+    console.error('[grom voice] worker onerror:', e.message, e);
+    _setVoiceDownload('⚠ Worker error: ' + e.message);
+    _vpBusy = false;
+    _vpWorker = null;
+    _setVoiceState('idle');
+  };
+  return w;
+}
+
+async function _vpGetWorker() {
+  if (_vpWorker) return _vpWorker;
+  if (_vpWorkerPromise) return _vpWorkerPromise;
+  console.log('[grom voice] _vpGetWorker: creating new worker');
+  _vpWorkerPromise = Promise.resolve().then(() => {
+    _vpWorker = _vpMakeWorker();
+    _vpWorkerPromise = null;
+    return _vpWorker;
+  });
+  return _vpWorkerPromise;
+}
+
+function _vpOnWorkerMessage(e) {
+  const { type, text, isFinal, modelId, message } = e.data;
+  if (type === 'progress') {
+    if (!_vpWarming) _setVoiceDownload(text); // suppress during silent warm-up
+    return;
+  }
+  if (type === 'ready') {
+    _vpLoadedModel = modelId;
+    _vpWarming = false;
+    _vpMarkDownloaded(modelId);
+    _vpUpdateModelUI();
+    _vpSetTranscribingRow(null); // clear "Warming up" if shown
+    _setVoiceDownload('✓ Model ready');
+    setTimeout(() => _setVoiceDownload(null), 2500);
+    return;
+  }
+  if (type === 'result') {
+    console.log('[grom voice] worker result:', JSON.stringify(text));
+    if (text && text.trim() && !_vpIsLooping(text)) {
+      _vpTranscribedText = _vpTranscribedText ? _vpTranscribedText + ' ' + text.trim() : text.trim();
+      const p = document.getElementById('prompt');
+      if (p) { p.value = _vpTranscribedText; p.dispatchEvent(new Event('input')); p.focus(); }
+    } else if (_vpIsLooping(text)) {
+      console.warn('[grom voice] repetition loop detected, discarding slice');
+    }
+    // Send next slice if queue has more
+    const q = _vpWorkerSliceQueue;
+    if (q && q.hasPending()) {
+      q.sendNext();
+    } else {
+      _vpWorkerSliceQueue = null;
+      _vpBusy = false;
+      if (_vpPendingFinal) { _vpPendingFinal = false; _vpTranscribe(true); }
+      else if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
+    }
+    return;
+  }
+  if (type === 'error') {
+    console.error('[grom voice] worker inference error:', message);
+    if (isFinal) _setVoiceDownload('⚠ ' + message);
+    _vpBusy = false;
+    if (isFinal) { _setVoiceState('idle'); }
+  }
+}
+
+// Highlight a model in the picker — does not change the active model
+window.selectVoiceModel = function(id) {
+  _vpSelectedId = id;
+  _vpUpdateModelUI();
+};
+
+// Promote the highlighted model to active default
+window.applyVoiceModel = function() {
+  const id = _vpSelectedId;
   if (id === _vpModelId) return;
   _vpModelId = id;
-  _vpPipe = null; // reset so next recording loads the new model
+  if (_vpWorker) { _vpWorker.terminate(); _vpWorker = null; _vpWorkerPromise = null; }
+  _vpLoadedModel = null;
   _vpUpdateModelUI();
   vscode.postMessage({ type: 'setVoiceModel', model: id });
 };
 
 window.downloadVoiceModel = async function() {
+  const targetModel = _vpSelectedId; // download the highlighted model
+  console.log('[grom voice] download:', targetModel);
   const dlBtn = document.getElementById('voice-model-download-btn');
   if (dlBtn) { dlBtn.disabled = true; dlBtn.textContent = 'Downloading…'; }
   try {
-    await _vpGetPipeline();
-  } catch(e) {
-    _setVoiceDownload('⚠ Download failed: ' + e.message);
-    setTimeout(() => _setVoiceDownload(null), 4000);
+    const worker = await _vpGetWorker();
+    worker.postMessage({ type: 'load', modelId: targetModel });
+  } catch (err) {
+    console.error('[grom voice] downloadVoiceModel failed:', err);
+    _vpUpdateModelUI();
   }
-  if (dlBtn) dlBtn.disabled = false;
-  _vpUpdateModelUI();
 };
+
+// Whisper's context window is 30s — beyond this it loops. Cap hard at 28s to be safe.
+const _VP_MAX_SAMPLES = 16000 * 28;
+// Slice size for splitting long audio into sequential inference calls — keeps UI responsive
+
+function _vpRms(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
+}
+
+// Detect Whisper repetition loops: a word repeated 4+ times consecutively
+function _vpIsLooping(text) {
+  const words = text.trim().split(/\s+/);
+  if (words.length < 4) return false;
+  for (let i = 0; i <= words.length - 4; i++) {
+    if (words[i] === words[i+1] && words[i] === words[i+2] && words[i] === words[i+3]) return true;
+  }
+  return false;
+}
 
 async function _vpTranscribe(isFinal) {
   if (_vpBusy) { if (isFinal) _vpPendingFinal = true; return; }
-  // Empty final (no audio in this pass) — just close out
   if (!_vpAllPcm || _vpAllPcm.length === 0) {
     if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
     return;
   }
-  _vpBusy = true;
-  let gotText = false;
-  try {
-    const pipe = await _vpGetPipeline();
-    _setVoiceDownload(null);
-    const result = await pipe(_vpAllPcm, { sampling_rate: 16000 });
-    console.log('[grom voice] result:', JSON.stringify(result));
-    const text = (Array.isArray(result) ? result[0]?.text : result?.text) || '';
-    if (text.trim()) {
-      _vpTranscribedText = _vpTranscribedText ? _vpTranscribedText + ' ' + text.trim() : text.trim();
-      const p = document.getElementById('prompt');
-      if (p) { p.value = _vpTranscribedText; p.dispatchEvent(new Event('input')); p.focus(); }
-      gotText = true;
-    }
-  } catch(e) { console.error('[grom voice] inference error:', e); if (isFinal) _setVoiceDownload('⚠ ' + e.message); }
-  _vpAllPcm = null; // clear after inference so next chunk replaces cleanly
-  _vpBusy = false;
-  if (_vpPendingFinal) {
-    _vpPendingFinal = false;
-    await _vpTranscribe(true);
-  } else if (isFinal) {
-    _setVoiceState('idle');
-    _setVoiceDownload(null);
+  const rms = _vpRms(_vpAllPcm);
+  console.log('[grom voice] RMS:', rms.toFixed(6));
+  if (rms < 0.010) {
+    console.log('[grom voice] energy gate: skipping (RMS ' + rms.toFixed(6) + ')');
+    if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
+    return;
   }
+  // Prepend 0.3s silence — Whisper often drops the leading word without it
+  const _VP_PAD = 16000 * 0.3 | 0;
+  const raw = _vpAllPcm.length > _VP_MAX_SAMPLES ? _vpAllPcm.slice(0, _VP_MAX_SAMPLES) : _vpAllPcm;
+  const audio = new Float32Array(_VP_PAD + raw.length);
+  audio.set(raw, _VP_PAD);
+  _vpAllPcm = null;
+
+  const isMultilingual = !_vpModelId.endsWith('.en');
+  // Always send as one chunk — Whisper is trained on 30s windows and loses context when sliced.
+  // The 28s cap above prevents repetition loops without needing fine-grained slicing.
+  const slices = [audio];
+  if (slices.length === 0) {
+    if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
+    return;
+  }
+
+  _vpBusy = true;
+  const worker = await _vpGetWorker();
+  // Send slices one at a time — worker signals result per slice,
+  // last slice carries isFinal so worker result handler knows when to go idle
+  let sent = 0;
+  function _sendNext() {
+    if (sent >= slices.length) return;
+    const slice = slices[sent++];
+    const isLast = sent === slices.length;
+    // Transfer the underlying ArrayBuffer — zero-copy
+    worker.postMessage(
+      { type: 'transcribe', modelId: _vpModelId, pcm: slice.buffer, isFinal: isLast && isFinal, isMultilingual },
+      [slice.buffer]
+    );
+  }
+  // Chain: after each result the handler calls _sendNext if more slices remain
+  _vpWorkerSliceQueue = { slices, isFinal, isMultilingual, sendNext: _sendNext, hasPending: () => sent < slices.length };
+  _sendNext();
 }
 
 function _vpAppendPcm(base64, isFinal) {
   const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
   if (bytes.length === 0) {
-    // Empty final — all audio was already sent as chunks; just signal end
+    // Empty final — all audio already sent as chunks; just transcribe what we have
     _vpTranscribe(true);
     return;
   }
   const chunk = new Float32Array(bytes.buffer);
-  console.log('[grom voice]', isFinal ? 'final' : 'chunk', 'PCM received, samples:', chunk.length, '(', (chunk.length / 16000).toFixed(2), 's)');
-  _vpAllPcm = chunk; // each message is an independent chunk, not accumulated
-  _vpTranscribe(isFinal);
+  // Accumulate all chunks — only transcribe on final (push-to-talk)
+  if (_vpAllPcm) {
+    const merged = new Float32Array(_vpAllPcm.length + chunk.length);
+    merged.set(_vpAllPcm);
+    merged.set(chunk, _vpAllPcm.length);
+    _vpAllPcm = merged;
+  } else {
+    _vpAllPcm = chunk;
+  }
+  console.log('[grom voice]', isFinal ? 'final' : 'chunk', 'PCM received, samples:', chunk.length, '(', (chunk.length / 16000).toFixed(2), 's), total:', _vpAllPcm.length);
+  if (isFinal) _vpTranscribe(true);
 }
 
 let _ffmpegRemovePending = false;
@@ -964,7 +1209,10 @@ function _vpSetFfmpegPresent(present) {
 }
 
 window.clearVoiceCache = async function() {
-  _vpPipe = null;
+  if (_vpWorker) { _vpWorker.terminate(); _vpWorker = null; _vpWorkerPromise = null; }
+  _vpLoadedModel = null;
+  _vpClearDownloaded();
+  _vpUpdateModelUI();
   try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); } catch {}
   const res = document.getElementById('clear-voice-result');
   if (res) { res.textContent = 'Cache cleared.'; setTimeout(() => { res.textContent = ''; }, 3000); }
@@ -1215,20 +1463,30 @@ window.addEventListener('message', e => {
     } break;
     case 'voiceState': _setVoiceState(m.state); break;
     case 'voiceDownload': _setVoiceDownload(m.text); break;
-    case 'voiceModelConfig': _vpModelId = m.model || 'tiny'; _vpUpdateModelUI(); _vpGetPipeline(); break;
+    case 'voiceModelConfig': _vpModelId = m.model || 'tiny.en'; _vpSelectedId = _vpModelId; _vpUpdateModelUI(); break;
     case 'voiceAudioStart': {
       _vpAllPcm = null; _vpBusy = false; _vpPendingFinal = false;
       const _existingPrompt = document.getElementById('prompt');
       _vpTranscribedText = _existingPrompt ? _existingPrompt.value.trim() : '';
+      // Warm up the worker and pre-load the model while the user is still speaking
+      _vpGetWorker().then(w => w.postMessage({ type: 'load', modelId: _vpModelId })).catch(() => {});
       break;
     }
     case 'voiceAudio': _vpAppendPcm(m.pcm, m.isFinal); break;
     case 'voiceClearCache': void window.clearVoiceCache(); break;
     case 'voiceFfmpegReady':
       _vpSetFfmpegPresent(true);
+      if (_voiceInputEnabled && _vpGetDownloaded().includes(_vpModelId)) {
+        _vpWarming = true; _vpSetTranscribingRow('Warming up…');
+        _vpGetWorker().then(w => w.postMessage({ type: 'load', modelId: _vpModelId })).catch(() => { _vpWarming = false; _vpSetTranscribingRow(null); });
+      }
       break;
     case 'voiceFfmpegStatus':
       _vpSetFfmpegPresent(m.present);
+      if (m.present && _voiceInputEnabled && _vpGetDownloaded().includes(_vpModelId)) {
+        _vpWarming = true; _vpSetTranscribingRow('Warming up…');
+        _vpGetWorker().then(w => w.postMessage({ type: 'load', modelId: _vpModelId })).catch(() => { _vpWarming = false; _vpSetTranscribingRow(null); });
+      }
       break;
     case 'voiceNoFfmpeg': {
       _vpSetFfmpegPresent(false);
@@ -1256,7 +1514,10 @@ window.addEventListener('message', e => {
       hideInfo.className = 'info-badge';
       hideInfo.title = 'You can re-enable the mic button anytime in Settings → Voice Input';
       hideInfo.textContent = 'i';
-      hideRow.appendChild(hideBtn); hideRow.appendChild(hideInfo);
+      const hideBeta = document.createElement('span');
+      hideBeta.className = 'beta-tag';
+      hideBeta.textContent = 'beta';
+      hideRow.appendChild(hideBtn); hideRow.appendChild(hideInfo); hideRow.appendChild(hideBeta);
       btns.appendChild(dlBtn); btns.appendChild(dismissBtn); btns.appendChild(hideRow);
       body.appendChild(btns); nudge.appendChild(body);
       chatContainer.appendChild(nudge);
