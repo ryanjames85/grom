@@ -116,6 +116,10 @@ mark.search-highlight { background: rgba(232, 168, 56, 0.4); color: inherit; bor
 .voice-mic-on  { border-color: #4ec9b0 !important; color: #4ec9b0 !important; opacity: 1 !important; }
 .voice-mic-off { opacity: 0.45 !important; }
 .voice-action-result { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; min-height: 16px; }
+.voice-sensitivity-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.voice-sensitivity-label { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+#voice-sensitivity-slider { flex: 1; accent-color: var(--vscode-button-background); cursor: pointer; }
+#voice-sensitivity-val { font-size: 11px; color: var(--vscode-descriptionForeground); min-width: 36px; text-align: right; }
 #input-container { padding: 15px; flex-shrink: 0; }
 .input-box { background: var(--item-bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 textarea { width: 100%; background: transparent; color: inherit; border: none; outline: none; resize: none; min-height: 20px; max-height: 200px; font-family: inherit; font-size: 13px; }

@@ -434,6 +434,13 @@
           "default": "tiny.en",
           "description": "Which Whisper model to use for local voice transcription. English-only (.en) models are more accurate for English speakers. The model is downloaded once and cached in your browser session."
         },
+        "grom.voiceSensitivity": {
+          "type": "number",
+          "default": 0.010,
+          "minimum": 0.001,
+          "maximum": 0.100,
+          "description": "Mic energy gate for voice input (RMS threshold). Lower = more sensitive (picks up quiet speech and background noise). Higher = less sensitive (ignores noise but may miss quiet speech). Default 0.010 works for most setups; raise to 0.020–0.030 if phantom transcriptions appear."
+        },
         "grom.ffmpegPath": {
           "type": "string",
           "default": "",

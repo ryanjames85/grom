@@ -815,7 +815,7 @@ function handleFileUpload(input) {
 
 // ── Voice input ──────────────────────────────────────────────────────────────
 // Audio capture: ffmpeg subprocess in extension host → raw 16kHz PCM → sent here as base64.
-// Inference: Moonshine ONNX via @huggingface/transformers CDN, runs in this webview.
+// Inference: Whisper via @huggingface/transformers CDN, runs in an inline blob Worker.
 
 let _voiceRecordingTimer = null;
 function _setVoiceState(state) {
@@ -859,6 +859,7 @@ let _vpWarming = false; // true while silently pre-loading on startup — suppre
 let _vpModelId = 'tiny.en';   // active/default model used for transcription
 let _vpSelectedId = 'tiny.en'; // currently highlighted in the picker UI
 let _vpLoadedModel = null;     // which model id is loaded in the active worker
+let _vpEnergyGate = 0.010;    // RMS threshold — audio below this is treated as silence
 
 function _vpGetDownloaded() {
   try { return JSON.parse(localStorage.getItem('grom_downloaded_models') || '[]'); } catch { return []; }
@@ -1129,8 +1130,8 @@ async function _vpTranscribe(isFinal) {
   }
   const rms = _vpRms(_vpAllPcm);
   console.log('[grom voice] RMS:', rms.toFixed(6));
-  if (rms < 0.010) {
-    console.log('[grom voice] energy gate: skipping (RMS ' + rms.toFixed(6) + ')');
+  if (rms < _vpEnergyGate) {
+    console.log('[grom voice] energy gate: skipping (RMS ' + rms.toFixed(6) + ' < ' + _vpEnergyGate + ')');
     if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
     return;
   }
@@ -1239,6 +1240,30 @@ function _updateMicToggleBtn() {
 
 window.toggleMicVisibility = function() {
   vscode.postMessage({ type: _voiceInputEnabled ? 'disableVoiceInput' : 'enableVoiceInput' });
+};
+
+// Slider: 1–100 maps to 0.001–0.100 linearly
+function _vpSliderToGate(v) { return Math.round(Number(v)) / 1000; }
+function _vpGateToSlider(g) { return Math.round(g * 1000); }
+
+function _vpSetSensitivity(gate, save) {
+  _vpEnergyGate = gate;
+  const slider = document.getElementById('voice-sensitivity-slider');
+  const val = document.getElementById('voice-sensitivity-val');
+  if (slider) slider.value = _vpGateToSlider(gate);
+  if (val) val.textContent = gate.toFixed(3);
+  if (save) vscode.postMessage({ type: 'setVoiceSensitivity', value: gate });
+}
+
+window.onVoiceSensitivityInput = function(v) {
+  const gate = _vpSliderToGate(v);
+  _vpEnergyGate = gate;
+  const val = document.getElementById('voice-sensitivity-val');
+  if (val) val.textContent = gate.toFixed(3);
+};
+
+window.onVoiceSensitivityChange = function(v) {
+  _vpSetSensitivity(_vpSliderToGate(v), true);
 };
 
 let _voiceToggleLock = false;
@@ -1463,7 +1488,11 @@ window.addEventListener('message', e => {
     } break;
     case 'voiceState': _setVoiceState(m.state); break;
     case 'voiceDownload': _setVoiceDownload(m.text); break;
-    case 'voiceModelConfig': _vpModelId = m.model || 'tiny.en'; _vpSelectedId = _vpModelId; _vpUpdateModelUI(); break;
+    case 'voiceModelConfig': {
+      _vpModelId = m.model || 'tiny.en'; _vpSelectedId = _vpModelId; _vpUpdateModelUI();
+      if (typeof m.sensitivity === 'number') _vpSetSensitivity(m.sensitivity, false);
+      break;
+    }
     case 'voiceAudioStart': {
       _vpAllPcm = null; _vpBusy = false; _vpPendingFinal = false;
       const _existingPrompt = document.getElementById('prompt');

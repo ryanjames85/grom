@@ -177,7 +177,7 @@
       <div class="feature-card">
         <div class="icon">🎙️</div>
         <h3>Voice Input</h3>
-        <p>Speak your prompts. Audio is transcribed on-device using a local Moonshine ONNX model — nothing is sent to a server. Choose Tiny (~75 MB) or Base (~300 MB). Chunked streaming so text appears as you speak.</p>
+        <p>Speak your prompts. Audio is transcribed on-device using Whisper — nothing is sent to a server. Six models from Tiny EN (~40 MB) to Small (~244 MB). Push-to-talk with model pre-warming for instant first use.</p>
       </div>
     </div>
   </section>
@@ -203,19 +203,19 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <h3>Choose your ASR model</h3>
-          <p>Pick <strong>Tiny</strong> (~75 MB, fast) or <strong>Base</strong> (~300 MB, more accurate) in Settings → Voice Input. Models download on demand and are cached locally. Switch at any time.</p>
+          <h3>Choose your Whisper model</h3>
+          <p>Pick from six models in Settings → Voice Input — from <strong>Tiny EN</strong> (~40 MB, fast) up to <strong>Small</strong> (~244 MB, best accuracy). English-only <code>.en</code> variants are more accurate for English speakers. Models download on demand and are cached locally. Download multiple and switch at any time.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
           <h3>Record</h3>
-          <p>Click the mic button or press <code>Ctrl+Shift+M</code> to start. Text appears as you speak. Click again or press the shortcut to stop — the transcript is appended to your prompt.</p>
+          <p>Click the mic button or press <code>Ctrl+Shift+M</code> to start recording. Click again to stop — the transcript is appended to your prompt. The model pre-warms on startup so the first utterance transcribes without delay.</p>
         </div>
       </div>
     </div>
-    <p style="margin-top:20px;font-size:13px;">Audio is transcribed entirely on your device using <a href="https://github.com/huggingface/transformers.js">Transformers.js</a> and the <a href="https://github.com/usefulsensors/moonshine">Moonshine</a> ONNX model. Nothing leaves your machine. Voice input is optional and designed for those who want or need it as an accessibility tool.</p>
+    <p style="margin-top:20px;font-size:13px;">Audio is transcribed entirely on your device using <a href="https://github.com/huggingface/transformers.js">Transformers.js</a> and <a href="https://openai.com/research/whisper">OpenAI Whisper</a>. Nothing leaves your machine. Voice input is optional and designed for those who want or need it as an accessibility tool.</p>
     <p style="font-size:13px;"><strong>Platform support:</strong> Windows (DirectShow), macOS (avfoundation), Linux (PulseAudio / PipeWire / ALSA).</p>
   </section>
 

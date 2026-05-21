@@ -183,7 +183,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           this._loadAllSessions();
           this._updateActiveContext();
           const voiceModel = vscode.workspace.getConfiguration('grom').get<string>('voiceModel', 'tiny.en');
-          webviewView.webview.postMessage({ type: 'voiceModelConfig', model: voiceModel });
+          const voiceSensitivity = vscode.workspace.getConfiguration('grom').get<number>('voiceSensitivity', 0.010);
+          webviewView.webview.postMessage({ type: 'voiceModelConfig', model: voiceModel, sensitivity: voiceSensitivity });
           webviewView.webview.postMessage({ type: 'voiceFfmpegStatus', present: !!findFfmpeg(this._context.globalStorageUri.fsPath) });
           const isDev = this._context.extensionMode === vscode.ExtensionMode.Development;
           if (isDev || !this._context.globalState.get('grom.welcomed')) {
@@ -528,6 +529,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         case 'voiceRemoveModel': void this._voice.removeModel(); break;
         case 'setVoiceModel':
           void vscode.workspace.getConfiguration('grom').update('voiceModel', data.model, vscode.ConfigurationTarget.Global);
+          break;
+        case 'setVoiceSensitivity':
+          void vscode.workspace.getConfiguration('grom').update('voiceSensitivity', data.value, vscode.ConfigurationTarget.Global);
           break;
         case 'removeFfmpeg': {
           const ffmpegDir = path.join(this._context.globalStorageUri.fsPath, 'ffmpeg');

@@ -301,6 +301,7 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.customLogo` | Override the chat logo — URL, `data:` URI, or emoji | *(blank)* |
 | `grom.voiceInput` | Enable the mic button in the toolbar | `false` |
 | `grom.voiceModel` | Whisper model: `tiny.en`, `tiny`, `base.en`, `base`, `small.en`, `small` | `tiny.en` |
+| `grom.voiceSensitivity` | Mic energy gate (RMS threshold). Raise if phantom transcriptions appear; lower for quiet mics | `0.010` |
 | `grom.ffmpegPath` | Path to a custom ffmpeg binary (skips the built-in download) | *(blank)* |
 
 ### Per-Language Model Routing

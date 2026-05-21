@@ -13,6 +13,7 @@ All notable changes to Grom are documented here.
 - **Active model indicator** — the current default model is clearly marked in the picker. Selecting a model highlights it; a "Set as default" button promotes it. Downloaded models show a tick; the active model shows a filled dot.
 - **Model pre-warming** — Whisper loads silently in the background when Grom starts (if the mic is enabled and a model is downloaded), so the first utterance transcribes without delay.
 - **Full-utterance transcription** — the entire recording is sent to Whisper as one chunk (capped at 28 s), giving the model full context for accurate transcription. A 0.3 s silence pad is prepended to prevent Whisper from dropping the first word.
+- **Mic sensitivity slider** — Settings → Voice Input exposes the energy gate (RMS threshold) as a slider. Raise it if phantom transcriptions appear from background noise; lower it for quiet microphones. Persisted to VS Code settings as `grom.voiceSensitivity`.
 - **ffmpeg lifecycle management** — Settings → Voice Input lets you remove the downloaded ffmpeg binary for a full cleanup. Re-downloading works seamlessly afterwards.
 - **Hide/show mic toggle** — hide the mic button from the toolbar via Settings → Voice Input; restore it anytime from the same panel. An info badge explains how to get it back if you hide it accidentally.
 - **Privacy badge** — the Voice Input settings section carries a circled-i badge explaining that audio is transcribed entirely on your device and never leaves your machine — part of Grom's accessibility and privacy ethos.

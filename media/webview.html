@@ -179,6 +179,11 @@
           <button id="remove-ffmpeg-btn" class="voice-remove-btn" onclick="window.removeFfmpeg()" style="display:none">Remove ffmpeg</button>
           <button id="mic-toggle-btn" class="voice-remove-btn voice-mic-on" onclick="window.toggleMicVisibility()" title="Toggle the mic button in the toolbar">● Mic on</button>
         </div>
+        <div class="settings-row voice-sensitivity-row">
+          <label for="voice-sensitivity-slider" class="voice-sensitivity-label">Mic sensitivity</label>
+          <input type="range" id="voice-sensitivity-slider" min="1" max="100" step="1" value="10" oninput="window.onVoiceSensitivityInput(this.value)" onchange="window.onVoiceSensitivityChange(this.value)" title="Energy gate — lower is more sensitive">
+          <span id="voice-sensitivity-val">0.010</span>
+        </div>
         <div id="clear-voice-result" class="voice-action-result"></div>
       </div>
       <div class="settings-section">
