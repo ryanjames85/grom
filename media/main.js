@@ -25,6 +25,8 @@ let currentAiDiv = null, currentAiText = "", pendingImages = [], currentMode = '
 let _requestId = 0; // incremented on each send; used to discard stale Ready/chunk messages
 let _cancelActiveRename = null; // call this before any session list re-render
 let _elapsedTimer = null, _elapsedStart = 0;
+let _voiceState = 'idle'; // idle | recording | transcribing — visual state only, audio runs in extension host
+let _voiceInputEnabled = true;
 function _startElapsedTimer(dotsEl) {
   _elapsedStart = Date.now();
   _elapsedTimer = setInterval(() => {
@@ -43,7 +45,8 @@ function _escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;
 function _initGromSelect(elId) {
   const el = document.getElementById(elId);
   if (!el) return;
-  el.innerHTML = `<button class="grom-select-btn" type="button"><span class="grom-select-label">—</span><svg class="grom-select-chevron" width="8" height="5" viewBox="0 0 8 5" fill="currentColor"><path d="M0 0l4 5 4-5z"/></svg></button><div class="grom-select-menu"></div>`;
+  const _btnTitle = el.dataset.tooltip || '';
+  el.innerHTML = `<button class="grom-select-btn" type="button"${_btnTitle ? ` title="${_btnTitle}"` : ''}><span class="grom-select-label">—</span><svg class="grom-select-chevron" width="8" height="5" viewBox="0 0 8 5" fill="currentColor"><path d="M0 0l4 5 4-5z"/></svg></button><div class="grom-select-menu"></div>`;
   const btn = el.querySelector('.grom-select-btn'), lbl = el.querySelector('.grom-select-label'), menu = el.querySelector('.grom-select-menu');
   let _val = '', _opts = [], _change = null;
   btn.addEventListener('click', e => {
@@ -55,7 +58,7 @@ function _initGromSelect(elId) {
   document.addEventListener('click', () => el.classList.remove('open'));
   el.setOptions = opts => {
     _opts = opts;
-    menu.innerHTML = opts.map(o => `<div class="grom-select-option${o.value === _val ? ' selected' : ''}" data-value="${_escHtml(o.value)}"><span class="grom-select-opt-label">${_escHtml(o.label)}</span></div>`).join('');
+    menu.innerHTML = opts.map(o => `<div class="grom-select-option${o.value === _val ? ' selected' : ''}" data-value="${_escHtml(o.value)}" title="${_escHtml(o.tooltip || o.label)}"><span class="grom-select-opt-label">${_escHtml(o.label)}</span></div>`).join('');
     menu.querySelectorAll('.grom-select-option').forEach(opt => opt.addEventListener('click', e => {
       e.stopPropagation();
       const v = opt.dataset.value;
@@ -810,6 +813,197 @@ function handleFileUpload(input) {
     }
 }
 
+// ── Voice input ──────────────────────────────────────────────────────────────
+// Audio capture: ffmpeg subprocess in extension host → raw 16kHz PCM → sent here as base64.
+// Inference: Moonshine ONNX via @huggingface/transformers CDN, runs in this webview.
+
+function _setVoiceState(state) {
+  _voiceState = state;
+  const btn = document.getElementById('mic-btn');
+  if (!btn) return;
+  btn.classList.remove('recording', 'transcribing');
+  if (state === 'recording') btn.classList.add('recording');
+  else if (state === 'transcribing') btn.classList.add('transcribing');
+}
+
+function _setVoiceDownload(text) {
+  const row = document.getElementById('voice-download-row');
+  const span = document.getElementById('voice-download-text');
+  if (!row || !span) return;
+  if (text) { span.textContent = text; row.style.display = 'flex'; }
+  else { row.style.display = 'none'; }
+}
+
+// ── Moonshine inference ───────────────────────────────────────────────────────
+let _vpPipe = null, _vpAllPcm = null, _vpBusy = false, _vpPendingFinal = false, _vpTranscribedText = '';
+let _vpModelId = 'tiny';
+let _vpLoadedModel = null; // which model id was successfully loaded this session
+
+const _VP_MODEL_INFO = {
+  tiny: { hf: 'onnx-community/moonshine-tiny-ONNX', note: 'Fast, lower accuracy' },
+  base: { hf: 'onnx-community/moonshine-base-ONNX', note: 'More accurate, slower' },
+};
+
+function _vpUpdateModelUI() {
+  ['tiny', 'base'].forEach(id => {
+    const btn = document.getElementById('voice-model-btn-' + id);
+    if (btn) btn.classList.toggle('active', id === _vpModelId);
+  });
+  const info = _VP_MODEL_INFO[_vpModelId] || _VP_MODEL_INFO.tiny;
+  const ready = _vpLoadedModel === _vpModelId;
+  const desc = document.getElementById('voice-model-desc');
+  if (desc) desc.textContent = info.note + (ready ? ' · ready' : '');
+  const dlBtn = document.getElementById('voice-model-download-btn');
+  if (dlBtn) {
+    dlBtn.style.display = ready ? 'none' : '';
+    dlBtn.textContent = 'Download ' + (_vpModelId === 'base' ? 'Base' : 'Tiny') + ' model';
+  }
+}
+
+function _vpGetPipeline() {
+  if (!_vpPipe) {
+    const info = _VP_MODEL_INFO[_vpModelId] || _VP_MODEL_INFO.tiny;
+    _vpPipe = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm')
+      .then(({ pipeline }) => pipeline('automatic-speech-recognition', info.hf, {
+        progress_callback: p => {
+          if (p.status === 'downloading')
+            _setVoiceDownload(p.total
+              ? 'Downloading model… ' + Math.round(p.loaded / p.total * 100) + '%'
+              : 'Downloading model…');
+          else if (p.status === 'loading')
+            _setVoiceDownload('Loading model…');
+        }
+      }))
+      .then(pipe => { _vpLoadedModel = _vpModelId; _vpUpdateModelUI(); return pipe; });
+  }
+  return _vpPipe;
+}
+
+window.setVoiceModel = function(id) {
+  if (id === _vpModelId) return;
+  _vpModelId = id;
+  _vpPipe = null; // reset so next recording loads the new model
+  _vpUpdateModelUI();
+  vscode.postMessage({ type: 'setVoiceModel', model: id });
+};
+
+window.downloadVoiceModel = async function() {
+  const dlBtn = document.getElementById('voice-model-download-btn');
+  if (dlBtn) { dlBtn.disabled = true; dlBtn.textContent = 'Downloading…'; }
+  try {
+    await _vpGetPipeline();
+  } catch(e) {
+    _setVoiceDownload('⚠ Download failed: ' + e.message);
+    setTimeout(() => _setVoiceDownload(null), 4000);
+  }
+  if (dlBtn) dlBtn.disabled = false;
+  _vpUpdateModelUI();
+};
+
+async function _vpTranscribe(isFinal) {
+  if (_vpBusy) { if (isFinal) _vpPendingFinal = true; return; }
+  // Empty final (no audio in this pass) — just close out
+  if (!_vpAllPcm || _vpAllPcm.length === 0) {
+    if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
+    return;
+  }
+  _vpBusy = true;
+  let gotText = false;
+  try {
+    const pipe = await _vpGetPipeline();
+    _setVoiceDownload(null);
+    const result = await pipe(_vpAllPcm, { sampling_rate: 16000 });
+    console.log('[grom voice] result:', JSON.stringify(result));
+    const text = (Array.isArray(result) ? result[0]?.text : result?.text) || '';
+    if (text.trim()) {
+      _vpTranscribedText = _vpTranscribedText ? _vpTranscribedText + ' ' + text.trim() : text.trim();
+      const p = document.getElementById('prompt');
+      if (p) { p.value = _vpTranscribedText; p.dispatchEvent(new Event('input')); p.focus(); }
+      gotText = true;
+    }
+  } catch(e) { console.error('[grom voice] inference error:', e); if (isFinal) _setVoiceDownload('⚠ ' + e.message); }
+  _vpAllPcm = null; // clear after inference so next chunk replaces cleanly
+  _vpBusy = false;
+  if (_vpPendingFinal) {
+    _vpPendingFinal = false;
+    await _vpTranscribe(true);
+  } else if (isFinal) {
+    _setVoiceState('idle');
+    _setVoiceDownload(null);
+  }
+}
+
+function _vpAppendPcm(base64, isFinal) {
+  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  if (bytes.length === 0) {
+    // Empty final — all audio was already sent as chunks; just signal end
+    _vpTranscribe(true);
+    return;
+  }
+  const chunk = new Float32Array(bytes.buffer);
+  console.log('[grom voice]', isFinal ? 'final' : 'chunk', 'PCM received, samples:', chunk.length, '(', (chunk.length / 16000).toFixed(2), 's)');
+  _vpAllPcm = chunk; // each message is an independent chunk, not accumulated
+  _vpTranscribe(isFinal);
+}
+
+let _ffmpegRemovePending = false;
+
+function _vpSetFfmpegPresent(present) {
+  const dl = document.getElementById('download-ffmpeg-btn');
+  const rm = document.getElementById('remove-ffmpeg-btn');
+  if (dl) dl.style.display = present ? 'none' : '';
+  if (rm) {
+    rm.style.display = present ? '' : 'none';
+    if (present) { rm.disabled = false; rm.textContent = 'Remove ffmpeg'; }
+  }
+  if (!present && _ffmpegRemovePending) {
+    _ffmpegRemovePending = false;
+    const res = document.getElementById('clear-voice-result');
+    if (res) { res.textContent = 'ffmpeg removed.'; setTimeout(() => { res.textContent = ''; }, 3000); }
+  }
+}
+
+window.clearVoiceCache = async function() {
+  _vpPipe = null;
+  try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); } catch {}
+  const res = document.getElementById('clear-voice-result');
+  if (res) { res.textContent = 'Cache cleared.'; setTimeout(() => { res.textContent = ''; }, 3000); }
+};
+
+window.downloadFfmpeg = function() {
+  vscode.postMessage({ type: 'voiceDownloadFfmpeg' });
+};
+
+window.removeFfmpeg = function() {
+  const rm = document.getElementById('remove-ffmpeg-btn');
+  if (rm) { rm.disabled = true; rm.textContent = 'Removing…'; }
+  _ffmpegRemovePending = true;
+  vscode.postMessage({ type: 'removeFfmpeg' });
+};
+
+function _updateMicToggleBtn() {
+  const btn = document.getElementById('mic-toggle-btn');
+  if (!btn) return;
+  btn.textContent = _voiceInputEnabled ? '● Mic on' : '○ Mic off';
+  btn.classList.toggle('voice-mic-on', _voiceInputEnabled);
+  btn.classList.toggle('voice-mic-off', !_voiceInputEnabled);
+}
+
+window.toggleMicVisibility = function() {
+  vscode.postMessage({ type: _voiceInputEnabled ? 'disableVoiceInput' : 'enableVoiceInput' });
+};
+
+let _voiceToggleLock = false;
+window.toggleVoiceInput = function() {
+  console.log('[grom voice] toggleVoiceInput called, lock:', _voiceToggleLock, 'state:', _voiceState);
+  if (_voiceToggleLock || _voiceState === 'transcribing') return;
+  _voiceToggleLock = true;
+  setTimeout(() => { _voiceToggleLock = false; }, 600);
+  // Immediately reflect the state change so rapid clicks can't double-fire
+  if (_voiceState === 'recording') _setVoiceState('transcribing');
+  vscode.postMessage({ type: 'voiceToggle' });
+};
+
 window.addEventListener('message', e => {
   const m = e.data;
   switch (m.type) {
@@ -864,6 +1058,7 @@ window.addEventListener('message', e => {
     case 'loadSessions':
       _currentSessionId = m.currentSessionId;
       robotAnimations = m.robotAnimations !== false;
+      { _voiceInputEnabled = m.voiceInput !== false; const micBtn = document.getElementById('mic-btn'); if (micBtn) micBtn.style.display = _voiceInputEnabled ? '' : 'none'; _updateMicToggleBtn(); }
       currentMode = m.mode || 'plan';
       _setMemoryDot(m.hasMemory);
       _setSysPromptDot(m.hasSystemPrompt);
@@ -930,6 +1125,7 @@ window.addEventListener('message', e => {
             const item = document.createElement('div'); item.className = 'menu-item';
             const preview = p.description || (p.text.startsWith('/') ? p.text : p.text.slice(0, 30) + (p.text.length > 30 ? '...' : ''));
             item.innerHTML = `<span class="menu-cmd">${escapeHtml(p.label)}</span><span style="opacity:0.5; font-size:10px;">${escapeHtml(preview)}</span>`;
+            item.title = p.description || (p.text.length > 80 ? p.text.slice(0, 80) + '…' : p.text);
             item.dataset.insertText = p.text;
             item.dataset.cmd = p.label.toLowerCase();
             item.dataset.cmdAlt = (p.text.startsWith('/') ? p.text.slice(1) : '').toLowerCase();
@@ -938,11 +1134,13 @@ window.addEventListener('message', e => {
           });
           const compact = document.createElement('div'); compact.className = 'menu-item';
           compact.innerHTML = `<span class="menu-cmd">Compact</span> <span style="opacity:0.5; font-size:10px;">Truncate history</span>`;
+          compact.title = 'Truncate conversation history to free up context window space';
           compact.dataset.cmd = 'compact';
           compact.addEventListener('click', () => { window.compactSession(); window.toggleSlashMenu(false); });
           menu.appendChild(compact);
           const clearHist = document.createElement('div'); clearHist.className = 'menu-item';
           clearHist.innerHTML = `<span class="menu-cmd">Clear-history</span> <span style="opacity:0.5; font-size:10px;">Clear prompt history</span>`;
+          clearHist.title = 'Clear your prompt input history (the ↑ / ↓ cycle)';
           clearHist.dataset.cmd = 'clear-history';
           clearHist.addEventListener('click', () => { _inputHistory = []; _historyIdx = -1; vscode.postMessage({ type: 'clearPromptHistory' }); window.toggleSlashMenu(false); renderMsg('ai', '*Prompt history cleared.*'); });
           menu.appendChild(clearHist);
@@ -1015,6 +1213,79 @@ window.addEventListener('message', e => {
         if (dots) { _stopElapsedTimer(); dots.remove(); if (!currentAiText.trim()) currentAiDiv.querySelector('.msg-body').textContent = ''; }
       }
     } break;
+    case 'voiceState': _setVoiceState(m.state); break;
+    case 'voiceDownload': _setVoiceDownload(m.text); break;
+    case 'voiceModelConfig': _vpModelId = m.model || 'tiny'; _vpUpdateModelUI(); _vpGetPipeline(); break;
+    case 'voiceAudioStart': {
+      _vpAllPcm = null; _vpBusy = false; _vpPendingFinal = false;
+      const _existingPrompt = document.getElementById('prompt');
+      _vpTranscribedText = _existingPrompt ? _existingPrompt.value.trim() : '';
+      break;
+    }
+    case 'voiceAudio': _vpAppendPcm(m.pcm, m.isFinal); break;
+    case 'voiceClearCache': void window.clearVoiceCache(); break;
+    case 'voiceFfmpegReady':
+      _vpSetFfmpegPresent(true);
+      break;
+    case 'voiceFfmpegStatus':
+      _vpSetFfmpegPresent(m.present);
+      break;
+    case 'voiceNoFfmpeg': {
+      _vpSetFfmpegPresent(false);
+      const nudge = document.createElement('div'); nudge.className = 'msg ai nudge-msg';
+      if (window.GROM_LOGOS?.default) {
+        const avatar = document.createElement('img'); avatar.src = window.GROM_LOGOS.default;
+        avatar.className = 'nudge-avatar'; nudge.appendChild(avatar);
+      }
+      const body = document.createElement('div'); body.className = 'msg-body nudge-body';
+      body.innerHTML = `Voice input requires <strong>ffmpeg</strong> for audio capture — it wasn't found on this system. Download it automatically (~80 MB, one-time), or install it yourself via <code>winget install ffmpeg</code> / <code>brew install ffmpeg</code> and it will be detected on next use.`;
+      const btns = document.createElement('div'); btns.className = 'voice-setup-btns';
+      const dlBtn = document.createElement('button'); dlBtn.className = 'nudge-btn';
+      dlBtn.textContent = 'Download ffmpeg';
+      dlBtn.onclick = () => { nudge.remove(); vscode.postMessage({ type: 'voiceDownloadFfmpeg' }); };
+      const dismissBtn = document.createElement('button'); dismissBtn.className = 'nudge-btn';
+      dismissBtn.style.cssText = 'background:transparent;border:1px solid var(--border);color:var(--text);';
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.onclick = () => nudge.remove();
+      const hideRow = document.createElement('div'); hideRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
+      const hideBtn = document.createElement('button'); hideBtn.className = 'nudge-btn';
+      hideBtn.style.cssText = 'background:transparent;border:1px solid var(--border);color:var(--text);';
+      hideBtn.textContent = 'Hide mic button';
+      hideBtn.onclick = () => { nudge.remove(); vscode.postMessage({ type: 'disableVoiceInput' }); };
+      const hideInfo = document.createElement('span');
+      hideInfo.className = 'info-badge';
+      hideInfo.title = 'You can re-enable the mic button anytime in Settings → Voice Input';
+      hideInfo.textContent = 'i';
+      hideRow.appendChild(hideBtn); hideRow.appendChild(hideInfo);
+      btns.appendChild(dlBtn); btns.appendChild(dismissBtn); btns.appendChild(hideRow);
+      body.appendChild(btns); nudge.appendChild(body);
+      chatContainer.appendChild(nudge);
+      if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+      break;
+    }
+    case 'voiceModelRemoved': {
+      const res = document.getElementById('clear-voice-result');
+      if (res) { res.textContent = 'Cache cleared.'; setTimeout(() => { res.textContent = ''; }, 3000); }
+      break;
+    }
+    case 'voiceTranscript': {
+      const p = document.getElementById('prompt');
+      if (p && m.text) {
+        p.value = m.text.trim();
+        p.dispatchEvent(new Event('input'));
+        p.focus();
+      }
+      break;
+    }
+    case 'voiceError': {
+      console.error('[voice] error from host:', m.message);
+      const res = document.getElementById('clear-voice-result');
+      if (res) { res.textContent = m.message; setTimeout(() => { res.textContent = ''; }, 5000); }
+      // Also surface in the download row so it's visible without settings open
+      _setVoiceDownload('⚠ ' + m.message);
+      setTimeout(() => _setVoiceDownload(null), 5000);
+      break;
+    }
     case 'idleHint': {
       const bubble = document.getElementById('thought-bubble');
       if (bubble && bubble.classList.contains('active')) bubble.textContent = m.text;
@@ -1107,15 +1378,15 @@ window.addEventListener('message', e => {
       updateGromLogo();
       const ps = document.getElementById('provider-select');
       const providerOpts = [
-        { value: 'ollama',    label: 'Ollama' },
-        { value: 'lmstudio', label: 'LM Studio' },
-        { value: 'opencode', label: 'Open Code' },
-        { value: 'openai',   label: 'OpenAI' },
-        { value: 'anthropic',label: 'Anthropic' },
-        { value: 'groq',     label: 'Groq' },
-        { value: 'mistral',  label: 'Mistral' },
-        { value: 'gemini',   label: 'Gemini' },
-        ...(m.customProviders || []).map((cp, i) => ({ value: `custom:${i}`, label: cp.name }))
+        { value: 'ollama',    label: 'Ollama',    tooltip: 'Ollama — run local models on your machine (ollama.ai)' },
+        { value: 'lmstudio', label: 'LM Studio',  tooltip: 'LM Studio — local models via LM Studio (lmstudio.ai)' },
+        { value: 'opencode', label: 'Open Code',  tooltip: 'Open Code — VS Code-native AI coding agent' },
+        { value: 'openai',   label: 'OpenAI',     tooltip: 'OpenAI — GPT-4o and o-series models (API key required)' },
+        { value: 'anthropic',label: 'Anthropic',  tooltip: 'Anthropic — Claude models (API key required)' },
+        { value: 'groq',     label: 'Groq',       tooltip: 'Groq — fast inference cloud API (API key required)' },
+        { value: 'mistral',  label: 'Mistral',    tooltip: 'Mistral — open-weight model API (API key required)' },
+        { value: 'gemini',   label: 'Gemini',     tooltip: 'Gemini — Google models (API key required)' },
+        ...(m.customProviders || []).map((cp, i) => ({ value: `custom:${i}`, label: cp.name, tooltip: cp.url ? `${cp.name} — ${cp.url}` : cp.name }))
       ];
       ps.setOptions(providerOpts);
       ps._customProviders = m.customProviders || [];

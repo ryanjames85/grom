@@ -30,6 +30,7 @@ import { McpManager } from './mcp';
 import { AgentLoop } from './agent-loop';
 import { estimateTokens, estimateHistoryTokens } from './utils';
 import { log, logError } from './logger';
+import { VoiceManager, findFfmpeg } from './voice';
 
 const MAX_GREETING_LEN = 200;
 const BLOCKED_TERMS = [
@@ -50,6 +51,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _sessionManager: SessionManager;
   private _mcp: McpManager;
   private _agentLoop: AgentLoop;
+  private _voice: VoiceManager;
   private _pendingApprovals = new Map<string, (result: 'allow' | 'allowAll' | 'deny') => void>();
   private _isStreaming = false;
   private _detectedContextLength: number | null = null;
@@ -59,6 +61,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   constructor(private readonly _context: vscode.ExtensionContext, private readonly _rag?: RagIndex, private readonly _docs?: DocsIndex) {
     this._mcp = new McpManager();
     this._mcp.initialize();
+    this._voice = new VoiceManager(_context, (msg) => this._view?.webview.postMessage(msg));
     const initialSessions = this._context.workspaceState.get<Record<string, ChatSession>>('sessions', {
       'default': { id: 'default', title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled: false }
     });
@@ -174,11 +177,14 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage(async (data) => {
       switch (data.type) {
-        case 'ready':
+        case 'ready': {
           this._checkConnection();
           this._updateTheme();
           this._loadAllSessions();
           this._updateActiveContext();
+          const voiceModel = vscode.workspace.getConfiguration('grom').get<string>('voiceModel', 'tiny');
+          webviewView.webview.postMessage({ type: 'voiceModelConfig', model: voiceModel });
+          webviewView.webview.postMessage({ type: 'voiceFfmpegStatus', present: !!findFfmpeg(this._context.globalStorageUri.fsPath) });
           const isDev = this._context.extensionMode === vscode.ExtensionMode.Development;
           if (isDev || !this._context.globalState.get('grom.welcomed')) {
             if (!isDev) void this._context.globalState.update('grom.welcomed', true);
@@ -188,6 +194,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             setTimeout(() => this._view?.webview.postMessage({ type: 'welcome', iconUri }), 150);
           }
           break;
+        }
         case 'send': {
           const ph = this._context.globalState.get<string[]>('promptHistory', []);
           if (data.text && (ph.length === 0 || ph[ph.length - 1] !== data.text)) {
@@ -516,12 +523,37 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           }
           break;
         }
+        case 'voiceToggle': void this._voice.toggle(); break;
+        case 'voiceDownloadFfmpeg': void this._voice.downloadFfmpeg(); break;
+        case 'voiceRemoveModel': void this._voice.removeModel(); break;
+        case 'setVoiceModel':
+          void vscode.workspace.getConfiguration('grom').update('voiceModel', data.model, vscode.ConfigurationTarget.Global);
+          break;
+        case 'removeFfmpeg': {
+          const ffmpegDir = path.join(this._context.globalStorageUri.fsPath, 'ffmpeg');
+          try {
+            fs.rmSync(ffmpegDir, { recursive: true, force: true });
+            this._view?.webview.postMessage({ type: 'voiceFfmpegStatus', present: false });
+          } catch (e: any) {
+            this._view?.webview.postMessage({ type: 'voiceError', message: `Could not remove ffmpeg: ${e.message}` });
+          }
+          break;
+        }
+        case 'disableVoiceInput':
+          void vscode.workspace.getConfiguration('grom').update('voiceInput', false, vscode.ConfigurationTarget.Global);
+          break;
+        case 'enableVoiceInput':
+          void vscode.workspace.getConfiguration('grom').update('voiceInput', true, vscode.ConfigurationTarget.Global);
+          break;
       }
     });
   }
 
   /** Sends a message to the webview â€” used by extension.ts to inject triggered actions (explain, refactor, etc.). */
   public postMessageToWebview(m: any) { this._view?.webview.postMessage(m); }
+
+  public toggleVoice() { void this._voice.toggle(); }
+  public async disposeVoice() { await this._voice.dispose(); }
 
   /** Notifies the webview of the currently active file so the context badge stays in sync. */
   private async _updateActiveContext() {
@@ -555,6 +587,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const configPresets = config.get<any[]>('presets') || [];
     const customPrompts = await getCustomPrompts();
     const robotAnimations = config.get<boolean>('robotAnimations') !== false;
+    const voiceInput = config.get<boolean>('voiceInput') !== false;
     const customLogo = config.get<string>('customLogo', '');
     const rawGreeting = (config.get<string>('customGreeting', '') || '').trim();
     const customGreeting = _sanitizeGreeting(rawGreeting) || "Hey. I'm Grom. Ready when you are.";
@@ -573,6 +606,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       customGreeting,
       presets: mergedPresets,
       robotAnimations,
+      voiceInput,
       fontSize,
       taskLog: current.taskLog || [],
       hasMemory: !!(this._context.globalState.get<string>('gromMemory', '') || '').trim(),
@@ -943,7 +977,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const stripSvgDecl = (s: string) => s.replace(/<\?xml[^>]*\?>/g, '').replace(/<!DOCTYPE[^>]*>/g, '').trim();
     const idleSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-plan.svg'), 'utf8'));
     const buildSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-build.svg'), 'utf8'));
-    const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data: blob:; connect-src http://127.0.0.1:* http://localhost:* https: ws://127.0.0.1:* ws://localhost:*;`;
+    const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; img-src ${webview.cspSource} data: blob:; connect-src http://127.0.0.1:* http://localhost:* https: ws://127.0.0.1:* ws://localhost:*;`;
     const htmlPath = path.join(this._context.extensionUri.fsPath, 'media', 'webview.html');
     return fs.readFileSync(htmlPath, 'utf8')
       .replace('{{CSP}}', csp)

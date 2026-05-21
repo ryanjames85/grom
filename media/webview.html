@@ -76,9 +76,9 @@
     <div class="header-bottom">
       <div class="status-pill" onclick="window.retryConnection()" title="Retry connection"><svg class="status-pill-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg><div id="status-dot" class="status-dot"></div><span id="conn-status">Checking...</span></div>
       <div id="indexing-indicator" style="display:none" title="Indexing project for RAG search..."><div class="indexing-pulse"></div><span id="indexing-text">Indexing...</span></div>
-      <div id="provider-select" class="grom-select"></div>
+      <div id="provider-select" class="grom-select" data-tooltip="Select AI provider"></div>
       <span id="api-key-btn" class="tool-icon" onclick="window.setProviderKey()" style="display:none;width:18px;height:18px;font-size:12px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
-      <div id="model-select" class="grom-select grom-select-grow"></div>
+      <div id="model-select" class="grom-select grom-select-grow" data-tooltip="Select model"></div>
     </div>
   </div>
 
@@ -160,6 +160,22 @@
         <div class="settings-section-title">MCP Tools <span id="mcp-tool-count"></span></div>
         <div id="mcp-tool-list">Loading…</div>
       </div>
+      <div class="settings-section" id="voice-settings-section">
+        <div class="settings-section-title">Voice Input <span class="info-badge" title="Audio is transcribed entirely on your device using a local AI model — nothing is ever sent to a server. The mic is optional and designed for those who want or need voice input as an accessibility tool. You can hide it at any time.">i</span></div>
+        <div class="voice-model-picker">
+          <button class="voice-remove-btn voice-model-btn active" id="voice-model-btn-tiny" onclick="window.setVoiceModel('tiny')">Tiny · ~75 MB</button>
+          <button class="voice-remove-btn voice-model-btn" id="voice-model-btn-base" onclick="window.setVoiceModel('base')">Base · ~300 MB</button>
+        </div>
+        <div class="voice-settings-model" id="voice-model-desc"></div>
+        <div class="settings-row">
+          <button id="voice-model-download-btn" class="voice-remove-btn" onclick="window.downloadVoiceModel()" style="display:none">Download model</button>
+          <button id="clear-voice-btn" class="voice-remove-btn" onclick="window.clearVoiceCache()">Clear model cache</button>
+          <button id="download-ffmpeg-btn" class="voice-remove-btn" onclick="window.downloadFfmpeg()" style="display:none">Download ffmpeg</button>
+          <button id="remove-ffmpeg-btn" class="voice-remove-btn" onclick="window.removeFfmpeg()" style="display:none">Remove ffmpeg</button>
+          <button id="mic-toggle-btn" class="voice-remove-btn voice-mic-on" onclick="window.toggleMicVisibility()" title="Toggle the mic button in the toolbar">● Mic on</button>
+        </div>
+        <div id="clear-voice-result" class="voice-action-result"></div>
+      </div>
       <div class="settings-section">
         <div class="settings-section-title">
           <svg class="settings-section-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"></path><path d="M12 2v2M12 20v2M2 12h2M20 12h2"></path></svg>
@@ -181,21 +197,23 @@
     <div class="menu-item" onclick="window.togglePlusMenu(false); vscode.postMessage({type:'getFiles'}); prompt.value+='@'; prompt.focus();"><span class="menu-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg></span> Add context</div>
   </div>
 
-  <div id="input-container">
+<div id="input-container">
+    <div id="voice-download-row" style="display:none" class="voice-download-row"><div class="indexing-pulse"></div><span id="voice-download-text">Downloading voice model…</span></div>
     <div id="context-row" class="context-row"></div>
     <div id="image-preview"></div>
     <div class="input-box">
       <textarea id="prompt" placeholder="Ask your model..." rows="1" title="↑ / ↓  cycle prompt history"></textarea>
       <div class="toolbar">
         <div class="toolbar-left">
-          <span id="plus-btn" class="tool-icon" onclick="window.togglePlusMenu(); event.stopPropagation();"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
-          <span id="slash-btn" class="tool-icon" onclick="window.openSlashMenu(); event.stopPropagation();">/</span>
+          <span id="plus-btn" class="tool-icon" onclick="window.togglePlusMenu(); event.stopPropagation();" title="Attach files or images"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></span>
+          <span id="slash-btn" class="tool-icon" onclick="window.openSlashMenu(); event.stopPropagation();" title="Slash commands — presets and shortcuts">/</span>
+          <span id="mic-btn" class="tool-icon mic-btn" onclick="window.toggleVoiceInput()" title="Voice input (Ctrl+Shift+M)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg></span>
           <div id="model-caps"></div>
           <input type="file" id="img-upload" hidden onchange="handleFileUpload(this)">
         </div>
         <div class="toolbar-right">
           <button id="agent-btn" class="agent-btn" onclick="window.toggleAgent()" title="Tools — allow Grom to read and write files, run terminal commands, and call MCP tools. Only active in BUILD mode.">⚡ Tools</button>
-          <div id="mode-toggle" class="mode-toggle" onclick="window.toggleMode()"><div class="mode-slider"></div><div id="plan-btn" class="mode-btn active">PLAN</div><div id="build-btn" class="mode-btn">BUILD</div></div>
+          <div id="mode-toggle" class="mode-toggle" onclick="window.toggleMode()"><div class="mode-slider"></div><div id="plan-btn" class="mode-btn active" title="Plan mode — chat only, no file edits">PLAN</div><div id="build-btn" class="mode-btn" title="Build mode — Grom can read/write files and run terminal commands">BUILD</div></div>
           <div class="send-btn" id="sendBtn" title="Send (Enter)">↑</div>
           <div class="send-btn" id="stopBtn">■</div>
         </div>

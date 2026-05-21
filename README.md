@@ -158,6 +158,18 @@ Once indexed, use `@docs` to search all sources or `@docs:name` to target one:
 @docs:react suspense boundaries
 ```
 
+### Voice Input
+
+Speak your prompts instead of typing them. Grom captures audio locally and transcribes it on-device — nothing is ever sent to a server.
+
+- **Mic button** in the toolbar (enable in Settings → Voice Input on first use)
+- **Chunked streaming** — text appears as you speak, not just when you stop
+- **Two models** — Tiny (~75 MB, fast) or Base (~300 MB, more accurate), downloaded on demand
+- **No account, no cloud** — audio stays on your machine. The mic is optional and designed for those who want or need voice input as an accessibility tool.
+- Requires a one-time ffmpeg download (~50 MB), managed entirely within VS Code. Remove it anytime from Settings → Voice Input.
+
+> **Platform support:** Windows (DirectShow), macOS (avfoundation), Linux (PulseAudio/PipeWire, ALSA fallback).
+
 ### MCP Tool Use
 
 Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server and Grom's model can call its tools during chat. Tool calls stream live with a badge showing which tool is running. Configure via `grom.mcpServers`.
@@ -218,6 +230,7 @@ Type `/` to open the command menu:
 | `Ctrl+Shift+Y` / `Cmd+Shift+Y` | Accept inline diff |
 | `Ctrl+Shift+U` / `Cmd+Shift+U` | Reject inline diff |
 | `Ctrl+Shift+O` / `Cmd+Shift+O` | Open Compose mode |
+| `Ctrl+Shift+M` / `Cmd+Shift+M` | Toggle voice recording (when mic is enabled) |
 | `Enter` | Send message |
 | `Shift+Enter` | New line |
 
@@ -285,6 +298,9 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.autocompleteLanguageModels` | Per-language autocomplete model overrides (takes priority over `grom.languageModels`) | `{}` |
 | `grom.customGreeting` | Override the greeting shown in the empty chat state | *(blank)* |
 | `grom.customLogo` | Override the chat logo — URL, `data:` URI, or emoji | *(blank)* |
+| `grom.voiceInput` | Enable the mic button in the toolbar | `false` |
+| `grom.voiceModel` | ASR model: `tiny` (~75 MB, fast) or `base` (~300 MB, more accurate) | `tiny` |
+| `grom.ffmpegPath` | Path to a custom ffmpeg binary (skips the built-in download) | *(blank)* |
 
 ### Per-Language Model Routing
 

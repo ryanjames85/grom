@@ -4,6 +4,26 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.5.0] — 2026-05-21
+
+### New
+
+- **Voice input** — speak your prompts instead of typing them. Grom captures audio locally via ffmpeg and transcribes it on-device using a Moonshine ONNX model — nothing is ever sent to a server. Enable the mic button from the toolbar; first use walks you through a one-time ffmpeg download.
+- **Local ASR model picker** — choose between Tiny (~75 MB, fast) and Base (~300 MB, more accurate) in Settings → Voice Input. Each model downloads on demand; the active model is highlighted. Switch models without restarting.
+- **Chunked streaming transcription** — audio is transcribed in 5-second chunks as you speak, so text appears progressively rather than all at once when you stop.
+- **Model pre-warming** — the ASR model loads in the background when Grom starts, eliminating the delay on first use after download.
+- **ffmpeg lifecycle management** — Settings → Voice Input lets you remove the downloaded ffmpeg binary for a full cleanup. Re-downloading works seamlessly afterwards.
+- **Hide/show mic toggle** — hide the mic button from the toolbar via Settings → Voice Input; restore it anytime from the same panel. An info badge explains how to get it back if you hide it accidentally.
+- **Privacy badge** — the Voice Input settings section carries a circled-i badge explaining that audio is transcribed entirely on your device and never leaves your machine — part of Grom's accessibility and privacy ethos.
+- **Cross-platform audio** — Windows uses DirectShow device enumeration; macOS enumerates avfoundation devices; Linux probes for a running PulseAudio/PipeWire daemon and falls back to ALSA.
+
+### Improved
+
+- **Tooltip coverage** — Plan/Build mode buttons, provider dropdown, model dropdown, `+` (attach) button, and `/` (slash commands) button all now carry descriptive title tooltips. Provider options in the dropdown each carry a tooltip. Slash menu preset items and built-in commands (`/compact`, `/clear-history`) show their descriptions as tooltips.
+- **Button consistency** — voice settings buttons (model picker, mic toggle) use the same style as action buttons throughout the panel. The active model and mic state are indicated with a filled background.
+
+---
+
 ## [0.4.4] — 2026-05-17
 
 ### Fixed

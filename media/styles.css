@@ -96,6 +96,24 @@ mark.search-highlight { background: rgba(232, 168, 56, 0.4); color: inherit; bor
 .elapsed-time { font-size: 11px; color: var(--vscode-descriptionForeground); margin-left: 4px; opacity: 0; transition: opacity 0.6s; }
 .elapsed-time.visible { opacity: 0.3; }
 
+.mic-btn.recording { color: var(--vscode-charts-red, #f14c4c) !important; opacity: 1 !important; }
+.mic-btn.recording svg { animation: mic-pulse 1.2s ease-in-out infinite; }
+.mic-btn.transcribing { opacity: 0.4 !important; pointer-events: none; }
+@keyframes mic-pulse { 0%, 100% { opacity: 0.7; transform: scale(1); } 50% { opacity: 1; transform: scale(1.2); } }
+.voice-download-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); padding: 4px 0 8px; }
+.info-badge { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid currentColor; font-size: 9px; font-style: italic; font-weight: 700; cursor: default; opacity: 0.55; line-height: 1; flex-shrink: 0; vertical-align: middle; transition: opacity 0.15s; }
+.info-badge:hover { opacity: 1; }
+.voice-model-picker { display: flex; gap: 6px; margin-bottom: 6px; }
+.voice-model-btn { padding: 5px 12px; font-size: 12px; background: none; border: 1px solid var(--border); color: inherit; border-radius: 6px; cursor: pointer; opacity: 0.7; transition: background 0.15s, opacity 0.15s, color 0.15s; }
+.voice-model-btn:hover:not(.active) { opacity: 1; }
+.voice-model-btn.active { opacity: 1; background: var(--vscode-button-background, #0078d4); color: var(--vscode-button-foreground, #fff); border-color: transparent; }
+.voice-settings-model { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 8px; }
+.voice-setup-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.voice-remove-btn { padding: 5px 12px; font-size: 12px; background: none; border: 1px solid var(--border); color: inherit; border-radius: 6px; cursor: pointer; opacity: 0.7; }
+.voice-remove-btn:hover { opacity: 1; }
+.voice-mic-on  { border-color: #4ec9b0 !important; color: #4ec9b0 !important; opacity: 1 !important; }
+.voice-mic-off { opacity: 0.45 !important; }
+.voice-action-result { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; min-height: 16px; }
 #input-container { padding: 15px; flex-shrink: 0; }
 .input-box { background: var(--item-bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 textarea { width: 100%; background: transparent; color: inherit; border: none; outline: none; resize: none; min-height: 20px; max-height: 200px; font-family: inherit; font-size: 13px; }

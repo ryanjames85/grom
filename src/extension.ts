@@ -246,6 +246,11 @@ export function activate(context: vscode.ExtensionContext) {
     await inlineEdit(context);
   }));
 
+  context.subscriptions.push(vscode.commands.registerCommand('grom.toggleVoiceInput', async () => {
+    await vscode.commands.executeCommand('workbench.view.extension.grom-container');
+    provider.toggleVoice();
+  }));
+
   context.subscriptions.push(vscode.commands.registerCommand('grom.terminalDebug', async () => {
     await vscode.commands.executeCommand('workbench.action.terminal.copySelection');
     const clipboard = await vscode.env.clipboard.readText();
@@ -263,4 +268,6 @@ export function activate(context: vscode.ExtensionContext) {
   ));
 
   context.subscriptions.push({ dispose: disposeLogger });
+  // Close the voice browser on deactivation so Chrome doesn't show "Restore pages?" next launch.
+  context.subscriptions.push({ dispose: () => void provider.disposeVoice() });
 }

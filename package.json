@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Local-first agent harness for VS Code. Bring your own LLM — no cloud, no account, no telemetry. Your model, your machine, your rules.",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -114,6 +114,10 @@
       {
         "command": "grom.reindexDocs",
         "title": "Grom: Reindex Documentation Sources"
+      },
+      {
+        "command": "grom.toggleVoiceInput",
+        "title": "Grom: Toggle Voice Input"
       }
     ],
     "keybindings": [
@@ -142,6 +146,11 @@
         "command": "grom.compose",
         "key": "ctrl+shift+o",
         "mac": "cmd+shift+o"
+      },
+      {
+        "command": "grom.toggleVoiceInput",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
       }
     ],
     "menus": {
@@ -249,13 +258,20 @@
               },
               "authType": {
                 "type": "string",
-                "enum": ["bearer", "x-api-key", "none"],
+                "enum": [
+                  "bearer",
+                  "x-api-key",
+                  "none"
+                ],
                 "default": "bearer",
                 "description": "How to send the API key. 'bearer' = Authorization: Bearer, 'x-api-key' = x-api-key header, 'none' = no auth (local servers)."
               },
               "providerFormat": {
                 "type": "string",
-                "enum": ["openai", "anthropic"],
+                "enum": [
+                  "openai",
+                  "anthropic"
+                ],
                 "default": "openai",
                 "description": "Wire format for chat requests. 'openai' = /v1/chat/completions (default), 'anthropic' = /v1/messages (Claude models)."
               }
@@ -391,9 +407,33 @@
         },
         "grom.fontSize": {
           "type": "string",
-          "enum": ["small", "medium", "large"],
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ],
           "default": "medium",
           "description": "Font size for the Grom chat panel. Small: 11px, Medium: 13px (default), Large: 15px."
+        },
+        "grom.voiceInput": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the voice input (mic) button in the chat toolbar. Requires a one-time model download (~75–150 MB) on first use. Audio is processed locally — nothing is sent to any server."
+        },
+        "grom.voiceModel": {
+          "type": "string",
+          "enum": ["tiny", "base"],
+          "enumDescriptions": [
+            "Moonshine Tiny (~75 MB) — fast, lower accuracy. Good for quick notes.",
+            "Moonshine Base (~300 MB) — slower to download and transcribe, but noticeably more accurate."
+          ],
+          "default": "tiny",
+          "description": "Which Moonshine model to use for local voice transcription. Tiny is fast; Base is more accurate but larger. The model is downloaded once and cached in your browser session."
+        },
+        "grom.ffmpegPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to ffmpeg executable for voice input. Leave blank to auto-detect (checks PATH and previously downloaded binary). You can also set the GROM_FFMPEG or FFMPEG_PATH environment variable."
         },
         "grom.debugLogging": {
           "type": "boolean",

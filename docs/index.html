@@ -99,10 +99,11 @@
 <nav>
   <img src="https://raw.githubusercontent.com/ryanjames85/grom/main/resources/icon.png" alt="Grom">
   <strong>Grom</strong>
-  <span class="badge">v0.4.4</span>
+  <span class="badge">v0.5.0</span>
   <div class="nav-links">
     <a href="#features">Features</a>
     <a href="#providers">Providers</a>
+    <a href="#voice">Voice</a>
     <a href="#quickstart">Quick Start</a>
     <a href="https://github.com/ryanjames85/grom">GitHub</a>
   </div>
@@ -173,7 +174,49 @@
         <h3>Memory</h3>
         <p>Persistent instructions injected into every chat. Auto-saves as you type. Amber dot on the icon when active.</p>
       </div>
+      <div class="feature-card">
+        <div class="icon">🎙️</div>
+        <h3>Voice Input</h3>
+        <p>Speak your prompts. Audio is transcribed on-device using a local Moonshine ONNX model — nothing is sent to a server. Choose Tiny (~75 MB) or Base (~300 MB). Chunked streaming so text appears as you speak.</p>
+      </div>
     </div>
+  </section>
+
+  <section id="voice">
+    <h2>Voice Input</h2>
+    <p>Grom can transcribe your voice directly into the prompt input — entirely on your device, with no cloud involvement.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Enable the mic button</h3>
+          <p>Open Settings → Voice Input and toggle <strong>Enable voice input</strong>. The mic button appears in the toolbar.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Download ffmpeg (once)</h3>
+          <p>Grom uses ffmpeg for audio capture. On first use it offers to download a ~50 MB static binary into its own storage folder — nothing is added to your system PATH. Remove it anytime from Settings → Voice Input.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Choose your ASR model</h3>
+          <p>Pick <strong>Tiny</strong> (~75 MB, fast) or <strong>Base</strong> (~300 MB, more accurate) in Settings → Voice Input. Models download on demand and are cached locally. Switch at any time.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>Record</h3>
+          <p>Click the mic button or press <code>Ctrl+Shift+M</code> to start. Text appears as you speak. Click again or press the shortcut to stop — the transcript is appended to your prompt.</p>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:20px;font-size:13px;">Audio is transcribed entirely on your device using <a href="https://github.com/huggingface/transformers.js">Transformers.js</a> and the <a href="https://github.com/usefulsensors/moonshine">Moonshine</a> ONNX model. Nothing leaves your machine. Voice input is optional and designed for those who want or need it as an accessibility tool.</p>
+    <p style="font-size:13px;"><strong>Platform support:</strong> Windows (DirectShow), macOS (avfoundation), Linux (PulseAudio / PipeWire / ALSA).</p>
   </section>
 
   <section id="providers">
