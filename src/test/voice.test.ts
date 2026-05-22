@@ -278,14 +278,13 @@ describe('voice — model pre-warming', () => {
   });
 
   it('warm-up only fires when voice input is enabled', () => {
-    // Both _voiceInputEnabled and _vpWarming = true must appear in the voiceFfmpegStatus handler
-    const ffmpegIdx = js.indexOf('voiceFfmpegStatus');
-    expect(ffmpegIdx).to.be.greaterThan(-1, 'voiceFfmpegStatus handler not found');
-    const handlerSlice = js.slice(ffmpegIdx, ffmpegIdx + 500);
-    expect(handlerSlice).to.include('_voiceInputEnabled',
-      '_voiceInputEnabled guard missing in voiceFfmpegStatus handler');
-    expect(handlerSlice).to.include('_vpWarming',
-      '_vpWarming not set in voiceFfmpegStatus handler');
+    // Guard lives in _vpMaybeWarmUp which is called from the ffmpeg handlers
+    expect(js).to.include('_vpMaybeWarmUp',
+      '_vpMaybeWarmUp helper missing');
+    const warmUpFn = js.match(/function _vpMaybeWarmUp\(\)[^}]+}/s);
+    expect(warmUpFn).to.not.equal(null, '_vpMaybeWarmUp function not found');
+    expect(warmUpFn![0]).to.include('_voiceInputEnabled',
+      '_vpMaybeWarmUp must guard on _voiceInputEnabled');
   });
 
   it('warm-up posts load message to worker', () => {

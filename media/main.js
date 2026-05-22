@@ -854,11 +854,26 @@ function _setVoiceDownload(text) {
 
 // ── Whisper inference — runs in a Web Worker to keep the UI thread free ───────
 let _vpWorker = null, _vpAllPcm = null, _vpBusy = false, _vpPendingFinal = false, _vpTranscribedText = '';
-let _vpWorkerSliceQueue = null;
-let _vpWarming = false; // true while silently pre-loading on startup — suppresses progress messages
+let _vpWarming = false; // suppresses worker progress messages during silent startup pre-load
+
+function _vpInjectToPrompt(text) {
+  const p = document.getElementById('prompt');
+  if (p) { p.value = text; p.dispatchEvent(new Event('input')); p.focus(); }
+}
+
+function _vpFlashResult(text, ms) {
+  const res = document.getElementById('clear-voice-result');
+  if (res) { res.textContent = text; setTimeout(() => { res.textContent = ''; }, ms); }
+}
+
+function _vpMaybeWarmUp() {
+  if (!_voiceInputEnabled || !_vpGetDownloaded().includes(_vpModelId)) return;
+  _vpWarming = true; _vpSetTranscribingRow('Warming up…');
+  _vpGetWorker().then(w => w.postMessage({ type: 'load', modelId: _vpModelId }))
+    .catch(() => { _vpWarming = false; _vpSetTranscribingRow(null); });
+}
 let _vpModelId = 'tiny.en';   // active/default model used for transcription
 let _vpSelectedId = 'tiny.en'; // currently highlighted in the picker UI
-let _vpLoadedModel = null;     // which model id is loaded in the active worker
 let _vpEnergyGate = 0.010;    // RMS threshold — audio below this is treated as silence
 
 function _vpGetDownloaded() {
@@ -1003,6 +1018,7 @@ self.onmessage = async function(e) {
   const url = URL.createObjectURL(blob);
   console.log('[grom voice] creating inline blob worker');
   const w = new Worker(url);
+  URL.revokeObjectURL(url);
   w.onmessage = _vpOnWorkerMessage;
   w.onerror = e => {
     console.error('[grom voice] worker onerror:', e.message, e);
@@ -1033,7 +1049,6 @@ function _vpOnWorkerMessage(e) {
     return;
   }
   if (type === 'ready') {
-    _vpLoadedModel = modelId;
     _vpWarming = false;
     _vpMarkDownloaded(modelId);
     _vpUpdateModelUI();
@@ -1046,28 +1061,20 @@ function _vpOnWorkerMessage(e) {
     console.log('[grom voice] worker result:', JSON.stringify(text));
     if (text && text.trim() && !_vpIsLooping(text)) {
       _vpTranscribedText = _vpTranscribedText ? _vpTranscribedText + ' ' + text.trim() : text.trim();
-      const p = document.getElementById('prompt');
-      if (p) { p.value = _vpTranscribedText; p.dispatchEvent(new Event('input')); p.focus(); }
+      _vpInjectToPrompt(_vpTranscribedText);
     } else if (_vpIsLooping(text)) {
-      console.warn('[grom voice] repetition loop detected, discarding slice');
+      console.warn('[grom voice] repetition loop detected, discarding');
     }
-    // Send next slice if queue has more
-    const q = _vpWorkerSliceQueue;
-    if (q && q.hasPending()) {
-      q.sendNext();
-    } else {
-      _vpWorkerSliceQueue = null;
-      _vpBusy = false;
-      if (_vpPendingFinal) { _vpPendingFinal = false; _vpTranscribe(true); }
-      else if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
-    }
+    _vpBusy = false;
+    if (_vpPendingFinal) { _vpPendingFinal = false; _vpTranscribe(true); }
+    else if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
     return;
   }
   if (type === 'error') {
     console.error('[grom voice] worker inference error:', message);
     if (isFinal) _setVoiceDownload('⚠ ' + message);
     _vpBusy = false;
-    if (isFinal) { _setVoiceState('idle'); }
+    _setVoiceState('idle');
   }
 }
 
@@ -1083,7 +1090,9 @@ window.applyVoiceModel = function() {
   if (id === _vpModelId) return;
   _vpModelId = id;
   if (_vpWorker) { _vpWorker.terminate(); _vpWorker = null; _vpWorkerPromise = null; }
-  _vpLoadedModel = null;
+  _vpBusy = false;
+  _vpPendingFinal = false;
+  _vpAllPcm = null;
   _vpUpdateModelUI();
   vscode.postMessage({ type: 'setVoiceModel', model: id });
 };
@@ -1104,7 +1113,8 @@ window.downloadVoiceModel = async function() {
 
 // Whisper's context window is 30s — beyond this it loops. Cap hard at 28s to be safe.
 const _VP_MAX_SAMPLES = 16000 * 28;
-// Slice size for splitting long audio into sequential inference calls — keeps UI responsive
+// Silence prepended to each utterance — Whisper often drops the first word without it.
+const _VP_PAD = 16000 * 0.3 | 0;
 
 function _vpRms(samples) {
   let sum = 0;
@@ -1135,40 +1145,18 @@ async function _vpTranscribe(isFinal) {
     if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
     return;
   }
-  // Prepend 0.3s silence — Whisper often drops the leading word without it
-  const _VP_PAD = 16000 * 0.3 | 0;
   const raw = _vpAllPcm.length > _VP_MAX_SAMPLES ? _vpAllPcm.slice(0, _VP_MAX_SAMPLES) : _vpAllPcm;
   const audio = new Float32Array(_VP_PAD + raw.length);
   audio.set(raw, _VP_PAD);
-  _vpAllPcm = null;
-
   const isMultilingual = !_vpModelId.endsWith('.en');
-  // Always send as one chunk — Whisper is trained on 30s windows and loses context when sliced.
-  // The 28s cap above prevents repetition loops without needing fine-grained slicing.
-  const slices = [audio];
-  if (slices.length === 0) {
-    if (isFinal) { _setVoiceState('idle'); _setVoiceDownload(null); }
-    return;
-  }
 
   _vpBusy = true;
   const worker = await _vpGetWorker();
-  // Send slices one at a time — worker signals result per slice,
-  // last slice carries isFinal so worker result handler knows when to go idle
-  let sent = 0;
-  function _sendNext() {
-    if (sent >= slices.length) return;
-    const slice = slices[sent++];
-    const isLast = sent === slices.length;
-    // Transfer the underlying ArrayBuffer — zero-copy
-    worker.postMessage(
-      { type: 'transcribe', modelId: _vpModelId, pcm: slice.buffer, isFinal: isLast && isFinal, isMultilingual },
-      [slice.buffer]
-    );
-  }
-  // Chain: after each result the handler calls _sendNext if more slices remain
-  _vpWorkerSliceQueue = { slices, isFinal, isMultilingual, sendNext: _sendNext, hasPending: () => sent < slices.length };
-  _sendNext();
+  _vpAllPcm = null;
+  worker.postMessage(
+    { type: 'transcribe', modelId: _vpModelId, pcm: audio.buffer, isFinal, isMultilingual },
+    [audio.buffer]
+  );
 }
 
 function _vpAppendPcm(base64, isFinal) {
@@ -1211,12 +1199,10 @@ function _vpSetFfmpegPresent(present) {
 
 window.clearVoiceCache = async function() {
   if (_vpWorker) { _vpWorker.terminate(); _vpWorker = null; _vpWorkerPromise = null; }
-  _vpLoadedModel = null;
   _vpClearDownloaded();
   _vpUpdateModelUI();
   try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); } catch {}
-  const res = document.getElementById('clear-voice-result');
-  if (res) { res.textContent = 'Cache cleared.'; setTimeout(() => { res.textContent = ''; }, 3000); }
+  _vpFlashResult('Cache cleared.', 3000);
 };
 
 window.downloadFfmpeg = function() {
@@ -1256,10 +1242,7 @@ function _vpSetSensitivity(gate, save) {
 }
 
 window.onVoiceSensitivityInput = function(v) {
-  const gate = _vpSliderToGate(v);
-  _vpEnergyGate = gate;
-  const val = document.getElementById('voice-sensitivity-val');
-  if (val) val.textContent = gate.toFixed(3);
+  _vpSetSensitivity(_vpSliderToGate(v), false);
 };
 
 window.onVoiceSensitivityChange = function(v) {
@@ -1488,6 +1471,13 @@ window.addEventListener('message', e => {
     } break;
     case 'voiceState': _setVoiceState(m.state); break;
     case 'voiceDownload': _setVoiceDownload(m.text); break;
+    case 'voiceInputChanged': {
+      _voiceInputEnabled = m.enabled !== false;
+      const micBtn = document.getElementById('mic-btn');
+      if (micBtn) micBtn.style.display = _voiceInputEnabled ? '' : 'none';
+      _updateMicToggleBtn();
+      break;
+    }
     case 'voiceModelConfig': {
       _vpModelId = m.model || 'tiny.en'; _vpSelectedId = _vpModelId; _vpUpdateModelUI();
       if (typeof m.sensitivity === 'number') _vpSetSensitivity(m.sensitivity, false);
@@ -1505,17 +1495,11 @@ window.addEventListener('message', e => {
     case 'voiceClearCache': void window.clearVoiceCache(); break;
     case 'voiceFfmpegReady':
       _vpSetFfmpegPresent(true);
-      if (_voiceInputEnabled && _vpGetDownloaded().includes(_vpModelId)) {
-        _vpWarming = true; _vpSetTranscribingRow('Warming up…');
-        _vpGetWorker().then(w => w.postMessage({ type: 'load', modelId: _vpModelId })).catch(() => { _vpWarming = false; _vpSetTranscribingRow(null); });
-      }
+      _vpMaybeWarmUp();
       break;
     case 'voiceFfmpegStatus':
       _vpSetFfmpegPresent(m.present);
-      if (m.present && _voiceInputEnabled && _vpGetDownloaded().includes(_vpModelId)) {
-        _vpWarming = true; _vpSetTranscribingRow('Warming up…');
-        _vpGetWorker().then(w => w.postMessage({ type: 'load', modelId: _vpModelId })).catch(() => { _vpWarming = false; _vpSetTranscribingRow(null); });
-      }
+      if (m.present) _vpMaybeWarmUp();
       break;
     case 'voiceNoFfmpeg': {
       _vpSetFfmpegPresent(false);
@@ -1553,25 +1537,15 @@ window.addEventListener('message', e => {
       if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
       break;
     }
-    case 'voiceModelRemoved': {
-      const res = document.getElementById('clear-voice-result');
-      if (res) { res.textContent = 'Cache cleared.'; setTimeout(() => { res.textContent = ''; }, 3000); }
+    case 'voiceModelRemoved':
+      _vpFlashResult('Cache cleared.', 3000);
       break;
-    }
-    case 'voiceTranscript': {
-      const p = document.getElementById('prompt');
-      if (p && m.text) {
-        p.value = m.text.trim();
-        p.dispatchEvent(new Event('input'));
-        p.focus();
-      }
+    case 'voiceTranscript':
+      if (m.text) _vpInjectToPrompt(m.text.trim());
       break;
-    }
     case 'voiceError': {
       console.error('[voice] error from host:', m.message);
-      const res = document.getElementById('clear-voice-result');
-      if (res) { res.textContent = m.message; setTimeout(() => { res.textContent = ''; }, 5000); }
-      // Also surface in the download row so it's visible without settings open
+      _vpFlashResult(m.message, 5000);
       _setVoiceDownload('⚠ ' + m.message);
       setTimeout(() => _setVoiceDownload(null), 5000);
       break;

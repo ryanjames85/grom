@@ -4,6 +4,22 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.5.1] — 2026-05-22
+
+### Fixed
+
+- **Mic hide/show toggle** — enabling or disabling the mic button via Settings → Voice Input now instantly reflects in the toolbar without requiring a reload. The provider now sends a `voiceInputChanged` message back to the webview after persisting the setting.
+- **Transcription accuracy** — PCM chunks were being overwritten on each audio packet instead of accumulated, causing partial or incorrect transcriptions ("Firecat Blue" for "why are cats blue"). All chunks are now merged into a single buffer before being sent to Whisper.
+- **Model switch deadlock** — switching the active Whisper model while a transcription was in flight left `_vpBusy` permanently set, silently blocking all future transcriptions. Changing model now resets busy state and discards the in-flight buffer.
+- **Error recovery** — a worker inference error now always resets the voice UI to idle, regardless of whether the failed transcription was the final one in a session.
+- **Silent audio loss on worker init failure** — PCM buffer was cleared before the worker was ready; if worker initialisation failed, the recording was discarded with no error shown. Buffer is now cleared only after the message is successfully posted.
+
+### Improved
+
+- **Code hygiene** — removed dead `_vpLoadedModel` variable (was written but never read). Extracted shared helpers `_vpInjectToPrompt`, `_vpFlashResult`, and `_vpMaybeWarmUp` to eliminate duplicated logic.
+
+---
+
 ## [0.5.0] — 2026-05-21
 
 ### New

@@ -182,9 +182,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           this._updateTheme();
           this._loadAllSessions();
           this._updateActiveContext();
-          const voiceModel = vscode.workspace.getConfiguration('grom').get<string>('voiceModel', 'tiny.en');
-          const voiceSensitivity = vscode.workspace.getConfiguration('grom').get<number>('voiceSensitivity', 0.010);
-          webviewView.webview.postMessage({ type: 'voiceModelConfig', model: voiceModel, sensitivity: voiceSensitivity });
+          const voiceCfg = vscode.workspace.getConfiguration('grom');
+          webviewView.webview.postMessage({ type: 'voiceModelConfig', model: voiceCfg.get<string>('voiceModel', 'tiny.en'), sensitivity: voiceCfg.get<number>('voiceSensitivity', 0.010) });
           webviewView.webview.postMessage({ type: 'voiceFfmpegStatus', present: !!findFfmpeg(this._context.globalStorageUri.fsPath) });
           const isDev = this._context.extensionMode === vscode.ExtensionMode.Development;
           if (isDev || !this._context.globalState.get('grom.welcomed')) {
@@ -544,11 +543,12 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'disableVoiceInput':
-          void vscode.workspace.getConfiguration('grom').update('voiceInput', false, vscode.ConfigurationTarget.Global);
+        case 'enableVoiceInput': {
+          const enabled = data.type === 'enableVoiceInput';
+          void vscode.workspace.getConfiguration('grom').update('voiceInput', enabled, vscode.ConfigurationTarget.Global)
+            .then(() => this._view?.webview.postMessage({ type: 'voiceInputChanged', enabled }));
           break;
-        case 'enableVoiceInput':
-          void vscode.workspace.getConfiguration('grom').update('voiceInput', true, vscode.ConfigurationTarget.Global);
-          break;
+        }
       }
     });
   }
