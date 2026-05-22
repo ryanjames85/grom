@@ -282,6 +282,67 @@ This covers a previously fixed bug where the agent kept calling tools after fini
 
 ---
 
+## 18. Voice Input
+
+> Requires ffmpeg and at least one Whisper model downloaded. Test with the mic button visible in the toolbar.
+
+### Setup
+
+| Step | Expected |
+|------|----------|
+| Open Settings → Voice Input | Voice section visible with model picker, sensitivity slider, ffmpeg buttons |
+| Click **Download ffmpeg** (if not already present) | Progress shown; button swaps to **Remove ffmpeg** when done |
+| Select **Tiny EN** and click **Download model** | Download progress shown in the status row below the input box |
+| After download, Tiny EN shows a tick (✓) | Tick persists after closing and reopening VS Code |
+| Click **Set as default** | Tiny EN shows a filled dot (●); "Set as default" button disappears |
+| Reload VS Code | Active model and downloaded ticks are restored from settings/localStorage |
+
+### Recording and transcription
+
+| Step | Expected |
+|------|----------|
+| Click the mic button or press `Ctrl+Shift+M` | Mic button turns red; recording starts |
+| Speak a short phrase ("why is the sky blue?") | Mic records silently — no transcription yet |
+| Click the mic button again | Recording stops; "Transcribing…" indicator appears near the text box; result appended to input |
+| Transcription appears in the input box | Text is reasonable; submit works normally |
+| Click mic, say nothing for 2 seconds, click again | Energy gate fires — no phantom text appears in the input |
+
+### Model switching
+
+| Step | Expected |
+|------|----------|
+| Download a second model (e.g. Base EN) | Base EN shows ✓; Tiny EN still shows ● |
+| Select Base EN, click **Set as default** | Base EN shows ●; Tiny EN shows ✓ only |
+| Record a phrase | Transcription uses Base EN (confirmed by model shown in worker logs) |
+| Switch back to Tiny EN and set as default | Active model updates without restarting |
+
+### Mic sensitivity slider
+
+| Step | Expected |
+|------|----------|
+| Drag slider left (lower, e.g. 0.005) | Value label updates live; very quiet audio passes the gate |
+| Drag slider right (higher, e.g. 0.030) | Value label updates; mic in a noisy room produces no phantom transcriptions |
+| Close and reopen VS Code | Slider restores to the saved value |
+
+### Warm-up indicator
+
+| Step | Expected |
+|------|----------|
+| Reload VS Code with mic enabled and a model downloaded | "Warming up…" appears briefly near the input box on load, then disappears |
+| Reload with voice input disabled (mic hidden) | No warm-up indicator — model does not pre-load |
+
+### Sad path
+
+| Step | Expected |
+|------|----------|
+| Click **Clear model cache** | Downloaded ticks clear; models must be re-downloaded |
+| Click **Remove ffmpeg** | ffmpeg removed; mic button becomes non-functional until re-downloaded |
+| Click **Download ffmpeg** again | Re-download works; mic functional again |
+| Hide the mic button via **● Mic on** toggle | Mic button disappears from toolbar |
+| Restore via **○ Mic off** toggle in settings | Mic button reappears |
+
+---
+
 ## Known Limitations
 
 - **Reload Window** (`Ctrl+R`) does not reload the extension host — use **Shift+F5** then **F5** when developing.
