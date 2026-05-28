@@ -44,10 +44,10 @@ His antenna tells you what's happening before you read a word:
 | ![Disconnected](resources/grom-disconnect.png) | Grey, unplugged | Your server isn't running or isn't connected |
 | ![Error](resources/grom-error.png) | Glitching | Server returned an error |
 | ![Idle](resources/grom-idle.png) | Eyes closed, thought bubble *(animated)* | Idle — keeps model in VRAM; shows error count if active file has issues |
-| ![Float PLAN](resources/grom-float-plan.svg) | Gold, riding a cloud | Floating window — PLAN mode detached from the sidebar |
-| ![Float BUILD](resources/grom-float-build.svg) | Blue, riding a cloud | Floating window — BUILD mode detached from the sidebar |
-| ![Mic PLAN](resources/grom-mic-plan.svg) | Gold, sound waves | Voice recording active — PLAN mode listening |
-| ![Mic BUILD](resources/grom-mic-build.svg) | Blue, sound waves | Voice recording active — BUILD mode listening |
+| <img src="resources/grom-float-plan.png" width="140" alt="Float PLAN"> | Gold, riding a cloud | Floating window — PLAN mode detached from the sidebar |
+| <img src="resources/grom-float-build.png" width="140" alt="Float BUILD"> | Blue, riding a cloud | Floating window — BUILD mode detached from the sidebar |
+| <img src="resources/grom-mic-plan.png" width="80" alt="Mic PLAN"> | Gold, sound waves | Voice recording active — PLAN mode listening |
+| <img src="resources/grom-mic-build.png" width="80" alt="Mic BUILD"> | Blue, sound waves | Voice recording active — BUILD mode listening |
 
 ---
 
@@ -179,7 +179,7 @@ Speak your prompts instead of typing them. Grom captures audio locally and trans
 
 Pop Grom out of the sidebar into a standalone window — useful for multi-monitor setups where you want Grom on a second screen while keeping your file tree visible.
 
-- Click the ![float](resources/icon-float.svg) button in the header to detach Grom into its own window
+- Click the expand arrows button in the header to detach Grom into its own window
 - The sidebar becomes a passive mirror — the **"floating"** pill and a banner confirm it's active
 - The floating window is fully functional — chat, voice input, model switching, all modes work
 - Grom's icon changes to the **cloud variant** in the floating window so you always know which panel is live
