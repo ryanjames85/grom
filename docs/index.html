@@ -99,11 +99,12 @@
 <nav>
   <img src="https://raw.githubusercontent.com/ryanjames85/grom/main/resources/icon.png" alt="Grom">
   <strong>Grom</strong>
-  <span class="badge">v0.5.1</span>
+  <span class="badge">v0.5.2</span>
   <div class="nav-links">
     <a href="#features">Features</a>
     <a href="#providers">Providers</a>
     <a href="#voice">Voice</a>
+    <a href="#floating">Floating</a>
     <a href="#quickstart">Quick Start</a>
     <a href="https://github.com/ryanjames85/grom">GitHub</a>
   </div>
@@ -179,6 +180,11 @@
         <h3>Voice Input</h3>
         <p>Speak your prompts. Audio is transcribed on-device using Whisper — nothing is sent to a server. Six models from Tiny EN (~40 MB) to Small (~244 MB). Push-to-talk with model pre-warming for instant first use.</p>
       </div>
+      <div class="feature-card">
+        <div class="icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></div>
+        <h3>Floating Panel</h3>
+        <p>Pop Grom out of the sidebar into a standalone window. Ideal for multi-monitor setups — keep your file tree and editor visible while Grom floats on a second screen. Persists across restarts.</p>
+      </div>
     </div>
   </section>
 
@@ -217,6 +223,34 @@
     </div>
     <p style="margin-top:20px;font-size:13px;">Audio is transcribed entirely on your device using <a href="https://github.com/huggingface/transformers.js">Transformers.js</a> and <a href="https://openai.com/research/whisper">OpenAI Whisper</a>. Nothing leaves your machine. Voice input is optional and designed for those who want or need it as an accessibility tool.</p>
     <p style="font-size:13px;"><strong>Platform support:</strong> Windows (DirectShow), macOS (avfoundation), Linux (PulseAudio / PipeWire / ALSA).</p>
+  </section>
+
+  <section id="floating">
+    <h2>Floating Panel</h2>
+    <p>Pop Grom out of the sidebar into its own window — perfect for multi-monitor setups where you want Grom on a second screen without sacrificing your file tree.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Click the float button</h3>
+          <p>Press the <strong><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;display:inline-block"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></strong> button in the Grom header to detach the panel into a standalone window. The sidebar shows a <strong>floating</strong> pill and a banner confirming it's active.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Use Grom normally</h3>
+          <p>Chat, voice input, model switching, PLAN and BUILD modes — everything works in the floating window. Grom's icon switches to the cloud variant so you always know which panel is live.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Close when done</h3>
+          <p>Close the floating window or click <strong>Close floating</strong> in the sidebar banner to return to the sidebar. The panel persists across VS Code restarts and reopens automatically.</p>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="providers">

@@ -127,12 +127,13 @@ describe('LocalLLMClient', () => {
       expect(caps.tools).to.be.true;
     });
 
-    it('does NOT flag plain llama3 as vision or tools when server gives no caps', async () => {
+    it('does NOT flag plain llama3 as vision when server gives no caps', async () => {
       const client = new LocalLLMClient('http://localhost:1234', 'llama3.1:8b', false);
       fetchStub.resolves(minimalModelEntry('llama3.1:8b'));
       const caps = await client.getCapabilities();
       expect(caps.vision).to.be.false;
-      expect(caps.tools).to.be.false;
+      // llama3.1 is tool-capable by name
+      expect(caps.tools).to.be.true;
     });
 
     // Server-reported capabilities take precedence

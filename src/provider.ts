@@ -52,6 +52,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _mcp: McpManager;
   private _agentLoop: AgentLoop;
   private _voice: VoiceManager;
+  private _popout?: vscode.WebviewPanel;
+  private _voiceReply?: vscode.Webview;
   private _pendingApprovals = new Map<string, (result: 'allow' | 'allowAll' | 'deny') => void>();
   private _isStreaming = false;
   private _detectedContextLength: number | null = null;
@@ -61,7 +63,13 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   constructor(private readonly _context: vscode.ExtensionContext, private readonly _rag?: RagIndex, private readonly _docs?: DocsIndex) {
     this._mcp = new McpManager();
     this._mcp.initialize();
-    this._voice = new VoiceManager(_context, (msg) => this._view?.webview.postMessage(msg));
+    this._voice = new VoiceManager(_context, (msg: any) => {
+      if (msg.type === 'voiceAudio' || msg.type === 'voiceAudioStart') {
+        try { this._voiceReply?.postMessage(msg); } catch { this._voiceReply = undefined; }
+      } else {
+        this._post(msg);
+      }
+    });
     const initialSessions = this._context.workspaceState.get<Record<string, ChatSession>>('sessions', {
       'default': { id: 'default', title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled: false }
     });
@@ -78,11 +86,17 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       mcp: this._mcp,
       rag: this._rag,
       docs: this._docs,
-      postMessage: (msg) => this._view?.webview.postMessage(msg),
+      postMessage: (msg) => this._post(msg),
       requestApproval: (id, tool, args) => this._requestApproval(id, tool, args),
       appendTaskLog: (sid, tool, args, result) => this._appendTaskLog(sid, tool, args, result),
       getMemory: () => this._context.globalState.get<string>('gromMemory', ''),
     });
+  }
+
+  /** Broadcasts a message to all open Grom panels (popout first as primary, then sidebar). */
+  private _post(msg: object) {
+    this._popout?.webview.postMessage(msg);
+    this._view?.webview.postMessage(msg);
   }
 
   /** Resolves the secret storage key, auth type, and wire format for the active provider URL. */
@@ -176,22 +190,32 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     webviewView.webview.onDidReceiveMessage(async (data) => {
-      switch (data.type) {
+      await this._handleMessage(data, webviewView.webview, false);
+    });
+  }
+
+  private async _handleMessage(data: any, reply: vscode.Webview, isPopout: boolean) {
+    switch (data.type) {
         case 'ready': {
+          // Send popoutActive first so the webview knows to skip animations before loadSessions arrives
+          if (isPopout) reply.postMessage({ type: 'popoutActive' });
           this._checkConnection();
           this._updateTheme();
           this._loadAllSessions();
           this._updateActiveContext();
           const voiceCfg = vscode.workspace.getConfiguration('grom');
-          webviewView.webview.postMessage({ type: 'voiceModelConfig', model: voiceCfg.get<string>('voiceModel', 'tiny.en'), sensitivity: voiceCfg.get<number>('voiceSensitivity', 0.010) });
-          webviewView.webview.postMessage({ type: 'voiceFfmpegStatus', present: !!findFfmpeg(this._context.globalStorageUri.fsPath) });
-          const isDev = this._context.extensionMode === vscode.ExtensionMode.Development;
-          if (isDev || !this._context.globalState.get('grom.welcomed')) {
-            if (!isDev) void this._context.globalState.update('grom.welcomed', true);
-            const iconUri = webviewView.webview.asWebviewUri(
-              vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'grom-plan.svg')
-            ).toString();
-            setTimeout(() => this._view?.webview.postMessage({ type: 'welcome', iconUri }), 150);
+          reply.postMessage({ type: 'voiceModelConfig', model: voiceCfg.get<string>('voiceModel', 'tiny.en'), sensitivity: voiceCfg.get<number>('voiceSensitivity', 0.010) });
+          reply.postMessage({ type: 'voiceFfmpegStatus', present: !!findFfmpeg(this._context.globalStorageUri.fsPath) });
+          if (!isPopout && this._popout) reply.postMessage({ type: 'popoutOpened' });
+          if (!isPopout) {
+            const isDev = this._context.extensionMode === vscode.ExtensionMode.Development;
+            if (isDev || !this._context.globalState.get('grom.welcomed')) {
+              if (!isDev) void this._context.globalState.update('grom.welcomed', true);
+              const iconUri = reply.asWebviewUri(
+                vscode.Uri.joinPath(this._context.extensionUri, 'resources', 'grom-plan.svg')
+              ).toString();
+              setTimeout(() => this._view?.webview.postMessage({ type: 'welcome', iconUri }), 150);
+            }
           }
           break;
         }
@@ -239,12 +263,11 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         case 'importChat': this._importChat(); break;
         case 'openMemory': {
           const memory = this._context.globalState.get<string>('gromMemory', '');
-          webviewView.webview.postMessage({ type: 'showMemory', memory });
+          reply.postMessage({ type: 'showMemory', memory });
           break;
         }
         case 'saveMemory': {
           await this._context.globalState.update('gromMemory', data.memory);
-          // Update the system message in the current session so memory applies immediately
           const memSession = this._sessionManager.getCurrentSession();
           if (memSession.history.length > 0 && memSession.history[0].role === 'system') {
             const base = memSession.history[0].content.replace(/\n\nUSER MEMORY:[\s\S]*?(?=\n\nSESSION INSTRUCTIONS:|$)/, '');
@@ -252,19 +275,19 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             memSession.history[0] = { ...memSession.history[0], content: base + memSection };
             this._saveState();
           }
-          webviewView.webview.postMessage({ type: 'memorySaved', hasMemory: !!(data.memory || '').trim() });
+          reply.postMessage({ type: 'memorySaved', hasMemory: !!(data.memory || '').trim() });
           break;
         }
         case 'setSystemPrompt': {
           const current = this._sessionManager.getCurrentSession();
           this._sessionManager.setSystemPrompt(current.id, data.prompt);
           this._saveState();
-          webviewView.webview.postMessage({ type: 'systemPromptSaved', hasSystemPrompt: !!(data.prompt || '').trim() });
+          reply.postMessage({ type: 'systemPromptSaved', hasSystemPrompt: !!(data.prompt || '').trim() });
           break;
         }
         case 'getSystemPrompt': {
           const current = this._sessionManager.getCurrentSession();
-          webviewView.webview.postMessage({ type: 'showSystemPrompt', prompt: current.systemPrompt || '' });
+          reply.postMessage({ type: 'showSystemPrompt', prompt: current.systemPrompt || '' });
           break;
         }
         case 'revertAgentChanges': {
@@ -306,7 +329,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           const text = this._sessionManager.trimLastExchange(session.id);
           if (text !== null) {
             this._saveState();
-            this._view?.webview.postMessage({ type: 'resendText', text });
+            reply.postMessage({ type: 'resendText', text });
           }
           break;
         }
@@ -329,7 +352,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
               .filter(d => d.severity === vscode.DiagnosticSeverity.Error);
             if (errors.length > 0) {
               const fname = editor.document.fileName.split(/[/\\]/).pop() ?? '';
-              this._view?.webview.postMessage({
+              reply.postMessage({
                 type: 'idleHint',
                 text: `${errors.length} error${errors.length > 1 ? 's' : ''} in ${fname}`
               });
@@ -348,18 +371,18 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             const endpoint = useOllama ? `${url}/api/tags` : `${url}/v1/models`;
             const res = await fetch(endpoint, { signal: controller.signal });
             if (res.ok) {
-              webviewView.webview.postMessage({ type: 'testConnectionResult', ok: true, message: `Connected to ${url} (model: ${model})` });
+              reply.postMessage({ type: 'testConnectionResult', ok: true, message: `Connected to ${url} (model: ${model})` });
             } else {
-              webviewView.webview.postMessage({ type: 'testConnectionResult', ok: false, message: `Server responded with ${res.status} ${res.statusText}` });
+              reply.postMessage({ type: 'testConnectionResult', ok: false, message: `Server responded with ${res.status} ${res.statusText}` });
             }
           } catch (e: any) {
-            webviewView.webview.postMessage({ type: 'testConnectionResult', ok: false, message: e.name === 'AbortError' ? `Timeout â€” is ${url} running?` : e.message });
+            reply.postMessage({ type: 'testConnectionResult', ok: false, message: e.name === 'AbortError' ? `Timeout — is ${url} running?` : e.message });
           }
           break;
         }
         case 'getMcpStatus': {
           const tools = this._mcp.getAllTools();
-          webviewView.webview.postMessage({ type: 'mcpStatus', tools: tools.map(t => ({ name: t.name, description: t.description })) });
+          reply.postMessage({ type: 'mcpStatus', tools: tools.map(t => ({ name: t.name, description: t.description })) });
           break;
         }
         case 'createFile': {
@@ -377,7 +400,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
             const doc = await vscode.workspace.openTextDocument(uri);
             await vscode.window.showTextDocument(doc, { preview: false });
-            webviewView.webview.postMessage({ type: 'fileCreated', path: data.path });
+            reply.postMessage({ type: 'fileCreated', path: data.path });
           } else {
             await diffAgentWrite(data.path as string, content);
             const action = await vscode.window.showInformationMessage(
@@ -390,7 +413,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
               await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
               const doc = await vscode.workspace.openTextDocument(uri);
               await vscode.window.showTextDocument(doc, { preview: false });
-              webviewView.webview.postMessage({ type: 'fileCreated', path: data.path });
+              reply.postMessage({ type: 'fileCreated', path: data.path });
             }
           }
           break;
@@ -432,7 +455,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
               .filter(f => !openPaths.has(f.fsPath))
               .map(f => ({ name: f.fsPath.split(/[\\\/]/).pop()!, path: f.fsPath, group: 'file' }))
           ];
-          webviewView.webview.postMessage({ type: 'fileList', files: allFiles });
+          reply.postMessage({ type: 'fileList', files: allFiles });
           break;
         }
         case 'changeModel':
@@ -523,7 +546,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           }
           break;
         }
-        case 'voiceToggle': void this._voice.toggle(); break;
+        case 'voiceToggle': this._voiceReply = reply; void this._voice.toggle(); break;
         case 'voiceDownloadFfmpeg': void this._voice.downloadFfmpeg(); break;
         case 'voiceRemoveModel': void this._voice.removeModel(); break;
         case 'setVoiceModel':
@@ -536,9 +559,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           const ffmpegDir = path.join(this._context.globalStorageUri.fsPath, 'ffmpeg');
           try {
             fs.rmSync(ffmpegDir, { recursive: true, force: true });
-            this._view?.webview.postMessage({ type: 'voiceFfmpegStatus', present: false });
+            this._post({ type: 'voiceFfmpegStatus', present: false });
           } catch (e: any) {
-            this._view?.webview.postMessage({ type: 'voiceError', message: `Could not remove ffmpeg: ${e.message}` });
+            this._post({ type: 'voiceError', message: `Could not remove ffmpeg: ${e.message}` });
           }
           break;
         }
@@ -546,22 +569,70 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         case 'enableVoiceInput': {
           const enabled = data.type === 'enableVoiceInput';
           void vscode.workspace.getConfiguration('grom').update('voiceInput', enabled, vscode.ConfigurationTarget.Global)
-            .then(() => this._view?.webview.postMessage({ type: 'voiceInputChanged', enabled }));
+            .then(() => this._post({ type: 'voiceInputChanged', enabled }));
+          break;
+        }
+        case 'popout': {
+          if (this._popout) { this._popout.reveal(); break; }
+          const panel = vscode.window.createWebviewPanel(
+            'grom.popout', 'Grom',
+            vscode.ViewColumn.One,
+            { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this._context.extensionUri] }
+          );
+          panel.webview.html = this._getHtmlForWebview(panel.webview);
+          this._popout = panel;
+          panel.webview.onDidReceiveMessage(async (d) => {
+            await this._handleMessage(d, panel.webview, true);
+          });
+          const cleanupPopout = () => {
+            if (this._popout !== panel) { return; }
+            this._popout = undefined;
+            try { if (this._voiceReply === panel.webview) { this._voiceReply = this._view?.webview; } } catch {}
+            try { this._view?.webview.postMessage({ type: 'popoutClosed' }); } catch {}
+            try { this._view?.webview.postMessage({ type: 'voiceState', state: 'idle' }); } catch {}
+          };
+          panel.onDidDispose(cleanupPopout);
+          this._view?.webview.postMessage({ type: 'popoutOpened' });
+          await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
+          panel.onDidChangeViewState(() => {
+            if (!panel.visible) { setTimeout(() => { try { panel.dispose(); } catch {} }, 50); }
+          });
+          break;
+        }
+        case 'closePopout': {
+          this._popout?.dispose();
           break;
         }
       }
-    });
   }
 
-  /** Sends a message to the webview â€” used by extension.ts to inject triggered actions (explain, refactor, etc.). */
-  public postMessageToWebview(m: any) { this._view?.webview.postMessage(m); }
+  /** Sends a message to the webview — used by extension.ts to inject triggered actions (explain, refactor, etc.). */
+  public postMessageToWebview(m: any) { this._post(m); }
+
+  /** Re-adopts a popout panel restored by VS Code after a restart. */
+  public restorePopout(panel: vscode.WebviewPanel) {
+    panel.webview.options = { enableScripts: true, localResourceRoots: [this._context.extensionUri] };
+    panel.webview.html = this._getHtmlForWebview(panel.webview);
+    this._popout = panel;
+    panel.webview.onDidReceiveMessage(async (d) => {
+      await this._handleMessage(d, panel.webview, true);
+    });
+    panel.onDidDispose(() => {
+      if (this._popout !== panel) { return; }
+      this._popout = undefined;
+      try { if (this._voiceReply === panel.webview) { this._voiceReply = this._view?.webview; } } catch {}
+      try { this._view?.webview.postMessage({ type: 'popoutClosed' }); } catch {}
+      try { this._view?.webview.postMessage({ type: 'voiceState', state: 'idle' }); } catch {}
+    });
+    this._view?.webview.postMessage({ type: 'popoutOpened' });
+  }
 
   public toggleVoice() { void this._voice.toggle(); }
   public async disposeVoice() { await this._voice.dispose(); }
 
   /** Notifies the webview of the currently active file so the context badge stays in sync. */
   private async _updateActiveContext() {
-    if (!this._view) return;
+    if (!this._view && !this._popout) return;
     const editor = vscode.window.activeTextEditor;
     const files = [];
     if (editor) {
@@ -570,12 +641,12 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       const tokens = estimateTokens(text);
       files.push({ name, tokens });
     }
-    this._view.webview.postMessage({ type: 'filesUsed', files });
+    this._post({ type: 'filesUsed', files });
   }
 
   private _updateTheme() {
     const theme = vscode.workspace.getConfiguration('grom').get<string>('theme') || 'Claude';
-    this._view?.webview.postMessage({ type: 'setTheme', theme });
+    this._post({ type: 'setTheme', theme });
   }
 
   /** Persists all sessions and the active session ID to workspaceState so they survive VS Code restarts. */
@@ -600,7 +671,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const seenTexts = new Set(configPresets.map((p: any) => p.text));
     const mergedPresets = [...configPresets, ...customPrompts.filter(p => !seenTexts.has(p.text))];
 
-    this._view?.webview.postMessage({
+    this._post({
       type: 'loadSessions',
       sessions: Object.values(sessions).sort((a, b) => b.lastModified - a.lastModified),
       currentSessionId: current.id,
@@ -644,7 +715,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     }
     return new Promise<'allow' | 'allowAll' | 'deny'>((resolve) => {
       this._pendingApprovals.set(id, resolve);
-      this._view?.webview.postMessage({ type: 'toolApproval', id, tool, args, existingContent });
+      this._post({ type: 'toolApproval', id, tool, args, existingContent });
     });
   }
 
@@ -660,7 +731,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     if (s.taskLog.length > 200) s.taskLog = s.taskLog.slice(-200);
     this._saveState();
     // Notify webview so task log tab can update live
-    this._view?.webview.postMessage({ type: 'taskLogEntry', entry: s.taskLog[s.taskLog.length - 1] });
+    this._post({ type: 'taskLogEntry', entry: s.taskLog[s.taskLog.length - 1] });
   }
 
   private _createNewSession() {
@@ -700,7 +771,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       this._saveState();
       this._updateUsageDisplay();
       // Tell the webview to show a compact notice inline without wiping the chat
-      this._view?.webview.postMessage({ type: 'compacted' });
+      this._post({ type: 'compacted' });
     } else {
       vscode.window.showInformationMessage('Nothing to compact.');
     }
@@ -720,7 +791,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     // Also send the updated session list so the sidebar reflects the new name
     // even if the DOM-side title element update was missed
     const sessions = this._sessionManager.getSessions();
-    this._view?.webview.postMessage({
+    this._post({
       type: 'sessionListUpdate',
       sessions: Object.values(sessions).sort((a, b) => b.lastModified - a.lastModified),
       currentSessionId: this._sessionManager.getCurrentSessionId()
@@ -820,7 +891,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Updates just the session title in the sidebar without re-rendering the full chat. */
   private _postSessionTitleUpdate(sessionId: string, title: string) {
-    this._view?.webview.postMessage({ type: 'sessionTitleUpdate', sessionId, title });
+    this._post({ type: 'sessionTitleUpdate', sessionId, title });
   }
 
   /** Pings the LLM server, fetches available models and capabilities, and posts the status to the webview. */
@@ -831,7 +902,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const useOllama = overrideOllama ?? (config.get<boolean>('useOllamaFormat') ?? true);
     let url: string;
     try { new URL(rawUrl); url = rawUrl; } catch {
-      this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Invalid URL', color: 'var(--vscode-errorForeground)', url: rawUrl, useOllama });
+      this._post({ type: 'statusUpdate', status: 'Invalid URL', color: 'var(--vscode-errorForeground)', url: rawUrl, useOllama });
       return;
     }
     log(`[connection] checking ${url} model=${model}`);
@@ -876,11 +947,11 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       log(`[connection] connected — model=${activeModel} models=[${models.join(', ')}] caps=${JSON.stringify(caps)} mcpTools=${mcpToolCount}`);
-      this._view?.webview.postMessage({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model: activeModel, models, caps, useOllama, customProviders });
+      this._post({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model: activeModel, models, caps, useOllama, customProviders });
     } catch (err: any) {
       const isNetworkError = err.message?.includes('fetch failed') || err.name === 'AbortError' || err.message?.includes('ECONNREFUSED');
       logError(`[connection] failed (${isNetworkError ? 'network' : 'error'})`, err);
-      this._view?.webview.postMessage({ type: 'statusUpdate', status: isNetworkError ? 'Disconnected' : 'Error', color: 'var(--vscode-errorForeground)', url, useOllama });
+      this._post({ type: 'statusUpdate', status: isNetworkError ? 'Disconnected' : 'Error', color: 'var(--vscode-errorForeground)', url, useOllama });
     }
   }
 
@@ -888,7 +959,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _updateUsageDisplay() {
     const sessions = this._sessionManager.getSessions();
     const s = sessions[this._sessionManager.getCurrentSessionId()];
-    if (!s || !this._view) return;
+    if (!s || (!this._view && !this._popout)) return;
     const config = vscode.workspace.getConfiguration('grom');
     const pricing = config.get<Record<string, any>>('modelPricing') || {};
     const model = config.get<string>('model') || 'qwen2.5-coder';
@@ -900,7 +971,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     // Derive live token count from actual history so the circle fills as the conversation grows
     const liveTokens = estimateHistoryTokens(s.history) + s.tokens.output;
     const contextPercent = Math.min(100, Math.round((liveTokens / contextLength) * 100));
-    this._view.webview.postMessage({
+    this._post({
       type: 'usageUpdate',
       inputTokens: s.tokens.input,
       outputTokens: s.tokens.output,
@@ -915,13 +986,13 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const sessionId = this._sessionManager.getCurrentSessionId();
     if (hintsEnabled && contextPercent >= 80 && !this._contextHintSent.has(sessionId)) {
       this._contextHintSent.add(sessionId);
-      this._view.webview.postMessage({ type: 'gromHint', hint: 'context', percent: contextPercent });
+      this._post({ type: 'gromHint', hint: 'context', percent: contextPercent });
     }
   }
 
   /** Delegates to AgentLoop.run() — context assembly, tool execution, and streaming all happen there. */
   private async _handleChat(text: string, images?: string[], mode: 'plan' | 'build' = 'plan') {
-    if (!this._view) return;
+    if (!this._view && !this._popout) return;
 
     // If @docs is used but no sources are configured, show the hint and skip the model call entirely —
     // Grom already knows the answer; there's nothing useful to send to the provider.
@@ -932,7 +1003,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         const sessionId = this._sessionManager.getCurrentSessionId();
         if (hintsEnabled && !this._docsHintSent.has(sessionId)) {
           this._docsHintSent.add(sessionId);
-          this._view.webview.postMessage({ type: 'gromHint', hint: 'docs' });
+          this._post({ type: 'gromHint', hint: 'docs' });
         }
         return;
       }
@@ -947,7 +1018,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       );
       const backups = this._agentLoop.getBackups();
       if (backups.size > 0) {
-        this._view?.webview.postMessage({ type: 'agentWritesDone', files: [...backups.keys()] });
+        this._post({ type: 'agentWritesDone', files: [...backups.keys()] });
       }
     } finally {
       this._isStreaming = false;
@@ -981,6 +1052,11 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const stripSvgDecl = (s: string) => s.replace(/<\?xml[^>]*\?>/g, '').replace(/<!DOCTYPE[^>]*>/g, '').trim();
     const idleSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-plan.svg'), 'utf8'));
     const buildSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-build.svg'), 'utf8'));
+    const floatPlanSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-float-plan.svg'), 'utf8'));
+    const floatBuildSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-float-build.svg'), 'utf8'));
+    const hintMicSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-hint-mic.svg'), 'utf8'));
+    const micPlanSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-mic-plan.svg'), 'utf8'));
+    const micBuildSvgRaw = stripSvgDecl(fs.readFileSync(path.join(this._context.extensionUri.fsPath, 'resources', 'grom-mic-build.svg'), 'utf8'));
     const csp = `default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src ${webview.cspSource} blob:; img-src ${webview.cspSource} data: blob:; connect-src ${webview.cspSource} http://127.0.0.1:* http://localhost:* https: ws://127.0.0.1:* ws://localhost:*;`;
     const htmlPath = path.join(this._context.extensionUri.fsPath, 'media', 'webview.html');
     return fs.readFileSync(htmlPath, 'utf8')
@@ -993,10 +1069,19 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       .replace('{{WORKER_JS}}', mediaUri('voice-worker.js'))
       .replace('{{LOGO_INLINE_SVG}}', idleSvgRaw)
       .replace('{{LOGO_BUILD_SVG}}', buildSvgRaw)
+      .replace('{{LOGO_FLOAT_PLAN_SVG}}', floatPlanSvgRaw)
+      .replace('{{LOGO_FLOAT_BUILD_SVG}}', floatBuildSvgRaw)
+      .replace('{{LOGO_HINT_MIC_SVG}}', hintMicSvgRaw)
+      .replace('{{LOGO_MIC_PLAN_SVG}}', micPlanSvgRaw)
+      .replace('{{LOGO_MIC_BUILD_SVG}}', micBuildSvgRaw)
       .replace(/\{\{LOGO_DEFAULT\}\}/g, resourceUri('grom-plan.svg'))
       .replace('{{LOGO_BUILDING}}', resourceUri('grom-build.svg'))
       .replace('{{LOGO_DISCONNECTED}}', resourceUri('grom-disconnect.svg'))
-      .replace('{{LOGO_ERROR}}', resourceUri('grom-error.svg'));
+      .replace('{{LOGO_ERROR}}', resourceUri('grom-error.svg'))
+      .replace('{{LOGO_MIC_PLAN_URI}}', resourceUri('grom-mic-plan.svg'))
+      .replace('{{LOGO_MIC_BUILD_URI}}', resourceUri('grom-mic-build.svg'))
+      .replace('{{LOGO_FLOAT_PLAN_URI}}', resourceUri('grom-float-plan.svg'))
+      .replace('{{LOGO_FLOAT_BUILD_URI}}', resourceUri('grom-float-build.svg'));
   }
 }
 

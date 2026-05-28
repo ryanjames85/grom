@@ -68,8 +68,7 @@ export class OllamaProvider implements ILLMProvider {
       const families = (details.families || []).map((f: string) => f.toLowerCase());
       
       return {
-        // Vision models in Ollama almost always have a 'projector' component or are in the 'mllm' family
-        vision: infoStr.includes('projector') || families.some((f: string) => f.includes('mllm') || f.includes('vision') || f.includes('clip')),
+        vision: infoStr.includes('projector') || infoStr.includes('vision') || infoStr.includes('vlm') || infoStr.includes('multimodal') || families.some((f: string) => f.includes('mllm') || f.includes('vision') || f.includes('clip') || f.includes('vlm')),
         reasoning: infoStr.includes('think') || infoStr.includes('reasoning') || model.toLowerCase().includes('r1'),
         // Tools: look for explicit tool support or common architecture keywords
         tools: infoStr.includes('"tools"') || infoStr.includes('"functions"') || infoStr.includes('parameter')
@@ -146,12 +145,38 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     const m = model.toLowerCase();
     const shortName = m.includes('/') ? m.split('/').pop()! : m;
     const nameBased = {
-      // Vision: explicit model-name markers only. gemma-4 included because all sizes are multimodal.
-      vision: ['vision', '-vl', 'llava', 'bakllava', 'moondream', 'pixtral', 'qwen-vl', 'internvl', 'cogvlm', 'phi-3-vision', 'phi3-vision', 'gemma-4', 'gemma4'].some(k => shortName.includes(k)),
-      reasoning: ['think', 'reason', 'r1', 'qwq', 'deepseek-r', 'marco-o1'].some(k => shortName.includes(k)),
+      // Vision: families where vision is standard across all sizes, plus explicit -vl/-vision suffixes.
+      vision: [
+        'vision', '-vl', 'vlm',
+        'llava', 'bakllava', 'moondream', 'pixtral',
+        'qwen-vl', 'qwen3',
+        'internvl', 'cogvlm', 'ovis',
+        'phi-3-vision', 'phi3-vision',
+        'gemma-4', 'gemma4', 'gemma3', 'gemma-3',
+        'llama-4',
+        'mistral-small-3',
+        'minicpm-v',
+        'paligemma',
+        'molmo',
+        'janus',
+        'idefics',
+        'florence',
+      ].some(k => shortName.includes(k)),
+      reasoning: ['think', 'reason', 'r1', 'qwq', 'deepseek-r', 'marco-o1', 's1-', 'sky-t1'].some(k => shortName.includes(k)),
       // Tools: families/variants reliably trained for function calling.
       // Server-reported caps take precedence; name-based is a fallback for servers that don't report caps.
-      tools: ['tool', 'function', 'agent', 'qwen3', 'qwen2.5', 'gemma-4', 'gemma4', 'mistral-nemo', 'command-r', 'firefunction'].some(k => shortName.includes(k))
+      tools: [
+        'tool', 'function', 'agent',
+        'qwen3', 'qwen2.5', 'qwen2',
+        'gemma-4', 'gemma4',
+        'llama3', 'llama-3', 'llama-4',
+        'mistral-nemo', 'mistral-small', 'mistral-large',
+        'command-r', 'firefunction',
+        'hermes',
+        'phi-3', 'phi3', 'phi-4', 'phi4',
+        'deepseek-v',
+        'nemotron',
+      ].some(k => shortName.includes(k))
     };
     try {
       // Reuse data from the preceding getModels() call if available — avoids a second network request.
@@ -172,8 +197,8 @@ export class OpenAICompatibleProvider implements ILLMProvider {
       // tool_calls is LM Studio's field name; tool_use / function_calling are used by other servers.
       const serverTools = !!(caps.tools || caps.tool_use || caps.tool_calls || caps.function_calling || info.includes('tool_use') || info.includes('tool_calls') || info.includes('function_call'));
       return {
-        vision: !!(caps.vision || caps.image_input || info.includes('vision') || info.includes('vlm') || info.includes('multimodal') || nameBased.vision),
-        reasoning: !!(caps.reasoning || info.includes('reasoning') || info.includes('thinking') || nameBased.reasoning),
+        vision: !!(caps.vision || caps.image_input || caps.image_url || caps.images || caps.multimodal || info.includes('vision') || info.includes('vlm') || info.includes('multimodal') || nameBased.vision),
+        reasoning: !!(caps.reasoning || caps.thinking || info.includes('reasoning') || info.includes('thinking') || nameBased.reasoning),
         tools: hasExplicitCaps ? serverTools : nameBased.tools
       };
     } catch { return nameBased; }

@@ -74,6 +74,9 @@ body { font-family: var(--vscode-font-family); font-size: 13px; margin: 0; backg
 .empty-logo img { width: 70px; height: 70px; display: block; object-fit: contain; }
 body.mode-plan .empty-logo svg { position: absolute; top: 0px; left: 0px; width: 73px; height: 70px; }
 body.mode-build .empty-logo svg, body.grom-thinking .empty-logo svg { position: absolute; top: 0px; left: -1px; bottom: 0px; right: 1px; width: 75px; height: 78px; }
+body.grom-popout .empty-logo { width: 130px; height: 130px; animation: grom-float 3s ease-in-out infinite; }
+body.grom-popout .empty-logo svg { width: 130px; height: 130px; }
+@keyframes grom-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
 .empty-text { font-size: 14px; max-width: 200px; line-height: 1.4; min-height: 2.8em; }
 .empty-text::after { content: '|'; animation: caret-blink 0.8s step-end infinite; opacity: 0; }
 .empty-text.typing::after { opacity: 1; }
@@ -120,6 +123,11 @@ mark.search-highlight { background: rgba(232, 168, 56, 0.4); color: inherit; bor
 .voice-sensitivity-label { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
 #voice-sensitivity-slider { flex: 1; accent-color: var(--vscode-button-background); cursor: pointer; }
 #voice-sensitivity-val { font-size: 11px; color: var(--vscode-descriptionForeground); min-width: 36px; text-align: right; }
+#popout-banner { display: none; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; background: var(--vscode-badge-background, rgba(128,128,128,0.15)); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--vscode-descriptionForeground); }
+#popout-banner button { font-size: 11px; padding: 2px 8px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; border-radius: 3px; cursor: pointer; }
+#popout-banner button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+#input-container.popout-active { opacity: 0.45; pointer-events: none; }
+#popout-pill { font-size: 10px; font-weight: 500; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 10px; background: #7c3aed; color: #fff; opacity: 0.85; vertical-align: middle; pointer-events: none; user-select: none; }
 #input-container { padding: 15px; flex-shrink: 0; }
 .input-box { background: var(--item-bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 textarea { width: 100%; background: transparent; color: inherit; border: none; outline: none; resize: none; min-height: 20px; max-height: 200px; font-family: inherit; font-size: 13px; }
@@ -279,6 +287,7 @@ body.grom-thinking .antenna { animation: antenna-bob 0.9s ease-in-out infinite; 
 .startle-mark.active { animation: startle-pop 0.6s ease-out forwards; }
 @keyframes startle-pop { 0% { opacity: 0; transform: translateX(-50%) scale(0.5) translateY(10px); } 20% { opacity: 1; transform: translateX(-50%) scale(1.3) translateY(0); } 100% { opacity: 0; transform: translateX(-50%) scale(1) translateY(-15px); } }
 #mini-grom { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.8; transition: opacity 0.3s ease; pointer-events: none; object-fit: contain; }
+body.grom-popout #mini-grom { width: 28px; height: 28px; }
 
 /* Error boundary */
 #error-boundary { display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 9999; background: var(--vscode-inputValidation-errorBackground, #5a1d1d); color: var(--vscode-inputValidation-errorForeground, #f48771); padding: 10px 14px; font-size: 12px; line-height: 1.5; flex-direction: column; gap: 6px; }

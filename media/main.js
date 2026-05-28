@@ -27,6 +27,7 @@ let _cancelActiveRename = null; // call this before any session list re-render
 let _elapsedTimer = null, _elapsedStart = 0;
 let _voiceState = 'idle'; // idle | recording | transcribing — visual state only, audio runs in extension host
 let _voiceInputEnabled = true;
+let _isPopout = false;
 function _startElapsedTimer(dotsEl) {
   _elapsedStart = Date.now();
   _elapsedTimer = setInterval(() => {
@@ -101,18 +102,24 @@ function updateGromLogo() {
     else state = 'default';
     const mini = document.getElementById('mini-grom');
     if (mini) {
-        mini.src = state === 'default' ? GROM_LOGOS.default
-                 : state === 'building' ? GROM_LOGOS.building || GROM_LOGOS.default
-                 : GROM_LOGOS[state] || GROM_LOGOS.default;
+        if (_isPopout) {
+            mini.src = state === 'building'
+                ? (GROM_LOGOS.floatBuild || GROM_LOGOS.building || GROM_LOGOS.default)
+                : (GROM_LOGOS.floatPlan || GROM_LOGOS.default);
+        } else {
+            mini.src = state === 'default' ? GROM_LOGOS.default
+                     : state === 'building' ? GROM_LOGOS.building || GROM_LOGOS.default
+                     : GROM_LOGOS[state] || GROM_LOGOS.default;
+        }
     }
     const logo = document.getElementById('main-logo');
     if (!logo) return;
     if (state === _gromLogoState) return;
     _gromLogoState = state;
     if (state === 'default') {
-        logo.innerHTML = window.GROM_IDLE_SVG || '';
+        logo.innerHTML = (_isPopout && window.GROM_FLOAT_PLAN_SVG) ? window.GROM_FLOAT_PLAN_SVG : (window.GROM_IDLE_SVG || '');
     } else if (state === 'building') {
-        logo.innerHTML = window.GROM_BUILD_SVG || '';
+        logo.innerHTML = (_isPopout && window.GROM_FLOAT_BUILD_SVG) ? window.GROM_FLOAT_BUILD_SVG : (window.GROM_BUILD_SVG || '');
     } else {
         logo.innerHTML = `<img id="grom-logo-img" src="${GROM_LOGOS[state]}" alt="Grom" width="70" height="70">`;
     }
@@ -832,6 +839,17 @@ function _setVoiceState(state) {
   }
   if (state === 'transcribing') _vpSetTranscribingRow('Transcribing');
   else if (state === 'idle') _vpSetTranscribingRow(null);
+  const isBuild = document.body.classList.contains('mode-build');
+  const mini = document.getElementById('mini-grom');
+  const logo = document.getElementById('main-logo');
+  if (state === 'recording') {
+    if (mini) mini.src = (isBuild ? window.GROM_LOGOS?.micBuild : window.GROM_LOGOS?.micPlan) || window.GROM_LOGOS?.default || '';
+    const micSvg = (isBuild ? window.GROM_MIC_BUILD_SVG : window.GROM_MIC_PLAN_SVG) || null;
+    if (logo && micSvg) { _gromLogoState = '__mic__'; logo.innerHTML = micSvg; }
+  } else if (_gromLogoState === '__mic__') {
+    _gromLogoState = null;
+    updateGromLogo();
+  }
 }
 
 function _vpSetTranscribingRow(text) {
@@ -1363,15 +1381,24 @@ window.addEventListener('message', e => {
           titleContainer.onclick = window.startEditingTitle;
       }
 
+      // Don't reset the chat container if a request is in-flight — the in-flight message
+      // and thinking dots are not yet in session history so a reload would wipe them.
+      if (currentAiDiv) break;
+
       const greeting = m.customGreeting || "Hey. I'm Grom. Ready when you are.";
       const defaultLogoContent = m.customLogo
           ? (m.customLogo.startsWith('http') || m.customLogo.startsWith('data:') ? `<img src="${m.customLogo}" alt="Grom">` : m.customLogo)
-          : (window.GROM_IDLE_SVG || '');
+          : ((_isPopout && window.GROM_FLOAT_PLAN_SVG) ? window.GROM_FLOAT_PLAN_SVG : (window.GROM_IDLE_SVG || ''));
       _gromLogoState = null;
-      chatContainer.innerHTML = `<div class="empty-state" id="empty-state"><div class="empty-logo" id="main-logo" style="position:relative;">${defaultLogoContent}</div><div class="empty-text typing" id="main-greeting"></div></div>`;
+      chatContainer.innerHTML = `<div class="empty-state" id="empty-state"><div class="empty-logo" id="main-logo" style="position:relative;">${defaultLogoContent}</div><div class="empty-text" id="main-greeting"></div></div>`;
       const greetEl = document.getElementById('main-greeting');
-      let i = 0; greetEl.textContent = '';
-      const typeInterval = setInterval(() => { greetEl.textContent += greeting[i++]; if (i >= greeting.length) { clearInterval(typeInterval); greetEl.classList.remove('typing'); } }, 80);
+      if (_isPopout) {
+        greetEl.textContent = greeting;
+      } else {
+        greetEl.classList.add('typing');
+        let i = 0;
+        const typeInterval = setInterval(() => { greetEl.textContent += greeting[i++]; if (i >= greeting.length) { clearInterval(typeInterval); greetEl.classList.remove('typing'); } }, 80);
+      }
       updateGromLogo();
 
       if (m.presets) {
@@ -1504,9 +1531,10 @@ window.addEventListener('message', e => {
     case 'voiceNoFfmpeg': {
       _vpSetFfmpegPresent(false);
       const nudge = document.createElement('div'); nudge.className = 'msg ai nudge-msg';
-      if (window.GROM_LOGOS?.default) {
-        const avatar = document.createElement('img'); avatar.src = window.GROM_LOGOS.default;
-        avatar.className = 'nudge-avatar'; nudge.appendChild(avatar);
+      {
+        const avatar = document.createElement('div'); avatar.className = 'nudge-avatar';
+        avatar.innerHTML = window.GROM_HINT_MIC_SVG || (window.GROM_LOGOS?.default ? `<img src="${window.GROM_LOGOS.default}">` : '');
+        if (avatar.innerHTML) nudge.appendChild(avatar);
       }
       const body = document.createElement('div'); body.className = 'msg-body nudge-body';
       body.innerHTML = `Voice input requires <strong>ffmpeg</strong> for audio capture — it wasn't found on this system. Download it automatically (~80 MB, one-time), or install it yourself via <code>winget install ffmpeg</code> / <code>brew install ffmpeg</code> and it will be detected on next use.`;
@@ -1806,6 +1834,37 @@ window.addEventListener('message', e => {
       break;
     }
     case 'fileList': _allFiles = m.files || []; showFilePicker(''); break;
+    case 'popoutOpened': {
+      const banner = document.getElementById('popout-banner');
+      const popoutBtn = document.getElementById('popout-btn');
+      const prompt = document.getElementById('prompt');
+      const inputContainer = document.getElementById('input-container');
+      if (banner) banner.style.display = 'flex';
+      if (popoutBtn) popoutBtn.style.display = 'none';
+      if (prompt) prompt.disabled = true;
+      if (inputContainer) inputContainer.classList.add('popout-active');
+      break;
+    }
+    case 'popoutActive': {
+      _isPopout = true;
+      document.body.classList.add('grom-popout');
+      const popoutBtn = document.getElementById('popout-btn');
+      if (popoutBtn) popoutBtn.style.display = 'none';
+      const pill = document.getElementById('popout-pill');
+      if (pill) pill.style.display = 'inline';
+      break;
+    }
+    case 'popoutClosed': {
+      const banner = document.getElementById('popout-banner');
+      const popoutBtn = document.getElementById('popout-btn');
+      const prompt = document.getElementById('prompt');
+      const inputContainer = document.getElementById('input-container');
+      if (banner) banner.style.display = 'none';
+      if (popoutBtn) popoutBtn.style.display = '';
+      if (prompt) prompt.disabled = false;
+      if (inputContainer) inputContainer.classList.remove('popout-active');
+      break;
+    }
   }
 });
 

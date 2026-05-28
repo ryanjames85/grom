@@ -4,6 +4,25 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.5.2] — 2026-05-27
+
+### New
+
+- **Floating panel** — pop Grom out of the sidebar into a standalone window. Ideal for multi-monitor setups: keep your file tree and editor visible while Grom floats on a second screen. Click the expand arrows button in the header to detach; the sidebar shows a banner and disables input while the floating window is live. Click "Close floating" or close the window to return to the sidebar.
+- **Floating panel persistence** — the floating panel survives VS Code restarts. It reopens automatically and reconnects to session state.
+- **Floating Grom icon** — the floating panel shows a cloud variant of Grom (gold for PLAN, blue for BUILD) so you always know which panel is the live one at a glance.
+- **Mic Grom icon** — Grom's face swaps to a listening variant (with sound waves) on the main logo and mini header icon while voice recording is active. Reverts automatically when recording ends.
+- **Voice in floating panel** — the mic works fully in the floating window. Audio routing follows whichever panel initiated recording; the other panel stays in sync with voice state.
+- **Expanded capability detection** — broader name-based and server-caps detection for vision, tools, and reasoning across Ollama, LM Studio, and OpenAI-compatible providers. Catches models like Qwen3, Gemma 3, Llama 4, Mistral Small 3, and more that don't carry explicit capability suffixes.
+
+### Fixed
+
+- **Floating panel banner not clearing** — closing the floating window's title bar X now correctly sends `popoutClosed` to the sidebar even when the panel webview is already disposed at cleanup time.
+- **Mic broken after floating panel closes** — closing the floating panel now resets voice state to idle in the sidebar and falls back `_voiceReply` to the sidebar webview, preventing a stuck mic state.
+- **Extension host crash on panel dispose** — accessing `panel.webview` inside `onDidDispose` threw "Webview is disposed". All panel webview accesses in cleanup handlers are now wrapped in individual try-catch blocks.
+
+---
+
 ## [0.5.1] — 2026-05-22
 
 ### Fixed

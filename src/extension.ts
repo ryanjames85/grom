@@ -163,6 +163,12 @@ export function activate(context: vscode.ExtensionContext) {
     webviewOptions: { retainContextWhenHidden: true }
   }));
 
+  context.subscriptions.push(vscode.window.registerWebviewPanelSerializer('grom.popout', {
+    async deserializeWebviewPanel(panel: vscode.WebviewPanel) {
+      provider.restorePopout(panel);
+    }
+  }));
+
   const promptWatcher = vscode.workspace.createFileSystemWatcher('**/.grom/**/*.md');
   const _refreshPresets = () => provider.refreshPresets();
   promptWatcher.onDidCreate(_refreshPresets);

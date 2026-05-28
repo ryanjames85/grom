@@ -26,11 +26,20 @@
       default: '{{LOGO_DEFAULT}}',
       building: '{{LOGO_BUILDING}}',
       disconnected: '{{LOGO_DISCONNECTED}}',
-      error: '{{LOGO_ERROR}}'
+      error: '{{LOGO_ERROR}}',
+      micPlan: '{{LOGO_MIC_PLAN_URI}}',
+      micBuild: '{{LOGO_MIC_BUILD_URI}}',
+      floatPlan: '{{LOGO_FLOAT_PLAN_URI}}',
+      floatBuild: '{{LOGO_FLOAT_BUILD_URI}}'
     };
 
     window.GROM_IDLE_SVG = `{{LOGO_INLINE_SVG}}`;
     window.GROM_BUILD_SVG = `{{LOGO_BUILD_SVG}}`;
+    window.GROM_FLOAT_PLAN_SVG = `{{LOGO_FLOAT_PLAN_SVG}}`;
+    window.GROM_FLOAT_BUILD_SVG = `{{LOGO_FLOAT_BUILD_SVG}}`;
+    window.GROM_HINT_MIC_SVG = `{{LOGO_HINT_MIC_SVG}}`;
+    window.GROM_MIC_PLAN_SVG = `{{LOGO_MIC_PLAN_SVG}}`;
+    window.GROM_MIC_BUILD_SVG = `{{LOGO_MIC_BUILD_SVG}}`;
   </script>
 </head>
 <body class="mode-plan">
@@ -53,6 +62,7 @@
       <div class="header-title" id="current-title-container" onclick="window.startEditingTitle()" title="Click to rename this conversation">
         <img id="mini-grom" src="{{LOGO_DEFAULT}}" alt="Grom" width="18" height="18">
         <span id="current-title">Untitled</span>
+        <span id="popout-pill" style="display:none">floating</span>
         <span class="edit-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.818 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg></span>
       </div>
       <div class="header-actions">
@@ -66,6 +76,7 @@
         <button class="icon-btn" onclick="window.popIcon(this);vscode.postMessage({type:'exportChat'})" title="Export chat to Markdown"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></button>
         <button class="icon-btn" onclick="window.popIcon(this);vscode.postMessage({type:'importChat'})" title="Import chat from Markdown"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg></button>
         <button class="icon-btn spin" onclick="window.spinIcon(this);window.openSettings()" title="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
+        <button id="popout-btn" class="icon-btn" onclick="vscode.postMessage({type:'popout'})" title="Float Grom in a separate window"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
       </div>
     </div>
     <div id="search-bar">
@@ -80,6 +91,11 @@
       <span id="api-key-btn" class="tool-icon" onclick="window.setProviderKey()" style="display:none;width:18px;height:18px;font-size:12px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
       <div id="model-select" class="grom-select grom-select-grow" data-tooltip="Select model"></div>
     </div>
+  </div>
+
+  <div id="popout-banner" style="display:none">
+    <span>Grom is floating in a separate window</span>
+    <button onclick="vscode.postMessage({type:'closePopout'})">Close floating</button>
   </div>
 
   <div id="chat-container">
