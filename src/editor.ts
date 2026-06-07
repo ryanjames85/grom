@@ -39,10 +39,23 @@ export async function diffAgentWrite(targetPath: string, newContent: string): Pr
   if (!folders?.length) return;
   const normalised = targetPath.replace(/\\/g, '/').replace(/^\/+/, '');
   const targetUri = vscode.Uri.joinPath(folders[0].uri, normalised);
-  const lang = languageFromPath(normalised);
 
   let existingContent = '';
-  try { existingContent = Buffer.from(await vscode.workspace.fs.readFile(targetUri)).toString('utf8'); } catch {}
+  let lang = languageFromPath(normalised);
+  try {
+    const existingDoc = await vscode.workspace.openTextDocument(targetUri);
+    existingContent = existingDoc.getText();
+    lang = existingDoc.languageId;
+  } catch {
+    // New file — try VS Code's own detection via untitled URI (not shown to user)
+    try {
+      const filename = normalised.split('/').pop() ?? 'file';
+      const tempDoc = await vscode.workspace.openTextDocument(
+        vscode.Uri.from({ scheme: 'untitled', path: filename })
+      );
+      if (tempDoc.languageId !== 'plaintext') { lang = tempDoc.languageId; }
+    } catch {}
+  }
 
   const origDoc = await vscode.workspace.openTextDocument({ content: existingContent, language: lang });
   const proposedDoc = await vscode.workspace.openTextDocument({ content: newContent, language: lang });

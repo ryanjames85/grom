@@ -65,14 +65,54 @@ export function diffLines(original: string[], suggested: string[]): { added: num
   return { added, modified };
 }
 
-/** Maps a file extension to its VS Code language identifier for syntax highlighting in diff views. */
+/** Maps a file extension to its VS Code language identifier for syntax highlighting in diff views.
+ *  Used only for new files — existing files use the open document's languageId directly. */
 export function languageFromPath(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
   const map: Record<string, string> = {
+    // Web
     ts: 'typescript', tsx: 'typescriptreact', js: 'javascript', jsx: 'javascriptreact',
-    py: 'python', go: 'go', rs: 'rust', java: 'java', cs: 'csharp',
-    cpp: 'cpp', c: 'c', rb: 'ruby', php: 'php', swift: 'swift', kt: 'kotlin',
-    md: 'markdown', json: 'json', yaml: 'yaml', yml: 'yaml', html: 'html', css: 'css'
+    mjs: 'javascript', cjs: 'javascript',
+    html: 'html', htm: 'html', css: 'css', scss: 'scss', sass: 'sass', less: 'less',
+    vue: 'vue', svelte: 'svelte', graphql: 'graphql', gql: 'graphql',
+    // Backend / general purpose
+    py: 'python', rb: 'ruby', php: 'php', java: 'java', cs: 'csharp',
+    go: 'go', rs: 'rust', swift: 'swift', kt: 'kotlin', kts: 'kotlin',
+    dart: 'dart', scala: 'scala', groovy: 'groovy', gradle: 'groovy',
+    // Systems
+    c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp',
+    m: 'objective-c', mm: 'objective-cpp',
+    d: 'd', vb: 'vb',
+    // Scripting
+    sh: 'shellscript', bash: 'shellscript', zsh: 'shellscript', fish: 'shellscript',
+    ps1: 'powershell', psm1: 'powershell', psd1: 'powershell',
+    bat: 'bat', cmd: 'bat',
+    lua: 'lua', pl: 'perl', pm: 'perl',
+    r: 'r', jl: 'julia',
+    ex: 'elixir', exs: 'elixir',
+    erl: 'erlang', hrl: 'erlang',
+    hs: 'haskell', lhs: 'haskell',
+    fs: 'fsharp', fsx: 'fsharp', fsi: 'fsharp',
+    ml: 'ocaml', mli: 'ocaml',
+    clj: 'clojure', cljs: 'clojure', cljc: 'clojure',
+    elm: 'elm', purs: 'purescript',
+    nim: 'nim', zig: 'zig', cr: 'crystal',
+    // Config / data
+    json: 'json', jsonc: 'jsonc',
+    yaml: 'yaml', yml: 'yaml',
+    toml: 'toml', xml: 'xml', svg: 'xml', plist: 'xml',
+    md: 'markdown', mdx: 'mdx',
+    sql: 'sql', proto: 'proto',
+    tf: 'terraform', hcl: 'hcl',
+    ini: 'ini', cfg: 'ini', conf: 'ini', properties: 'properties', env: 'dotenv',
+    // Build / infra
+    dockerfile: 'dockerfile', makefile: 'makefile', mk: 'makefile', cmake: 'cmake',
+    // Docs
+    tex: 'latex', bib: 'bibtex', rst: 'restructuredtext',
+    // Shaders
+    glsl: 'glsl', vert: 'glsl', frag: 'glsl', hlsl: 'hlsl', wgsl: 'wgsl',
+    // Misc
+    coffee: 'coffeescript', erb: 'erb',
   };
   return map[ext] || 'plaintext';
 }

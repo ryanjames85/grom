@@ -4,6 +4,25 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.5.3] — 2026-06-07
+
+### Fixed
+
+- **Diff syntax highlighting** — the View Diff button and agent write_file diffs now correctly apply syntax highlighting for all languages. Previously used a hand-rolled extension map that fell back to plain text for anything not in the list (e.g. Dart, Lua, Erlang, OCaml, shaders). Existing files now use VS Code's own language detection directly; new files use an expanded map (~50 languages) with a ghost untitled-URI fallback for user-installed language extensions.
+- **New Chat UI reset** — switching to a new chat mid-request no longer leaves the stop button visible or the thinking state active. The loadSessions handler now cleanly resets all in-flight UI state when called with `userInitiated`.
+- **"Cancelled." in new chat** — aborting a request to switch sessions no longer injects a `*Cancelled.*` chunk into the new empty chat. Agent loop now exposes `silentAbort()` for programmatic session switches.
+- **Session switch lag** — switching sessions no longer blocks on the model config update. The UI updates immediately; the model setting is applied as a fire-and-forget background operation.
+- **Double loadSessions on model switch** — the config-change watcher no longer fires a redundant session reload when the model is changed as part of a session switch (`_suppressNextConfigReload` flag).
+- **Blank duplicate sessions on rapid New Chat** — clicking New Chat on an already-blank untitled session no longer creates a second blank entry.
+- **Future timestamp handling** — session last-modified dates that are ahead of the current time (clock skew, time zone edge cases) now display as "just now" instead of a negative relative time.
+- **_silent flag bleed** — the `silentAbort` flag is now reset at the start of each agent run, preventing a stuck state if a previous run was aborted silently.
+
+### New
+
+- **Session last-modified date** — the session history list now shows a relative timestamp (e.g. "just now", "5m ago", "2h ago", "yesterday") next to each session. Fades on hover to reveal the rename and delete actions.
+
+---
+
 ## [0.5.2] — 2026-05-27
 
 ### New

@@ -1,5 +1,9 @@
 import { expect } from 'chai';
-import { parseComposerResponse, diffLines } from '../composer';
+import * as fs from 'fs';
+import * as path from 'path';
+import { parseComposerResponse, diffLines, languageFromPath } from '../composer';
+
+const editorSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'editor.ts'), 'utf8');
 
 describe('parseComposerResponse', () => {
 
@@ -123,5 +127,136 @@ describe('parseComposerResponse sad path', () => {
   it('does not crash on very large input', () => {
     const big = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n');
     expect(() => parseComposerResponse(big)).to.not.throw();
+  });
+});
+
+describe('languageFromPath', () => {
+  it('returns correct id for core web extensions', () => {
+    expect(languageFromPath('app.ts')).to.equal('typescript');
+    expect(languageFromPath('app.tsx')).to.equal('typescriptreact');
+    expect(languageFromPath('app.js')).to.equal('javascript');
+    expect(languageFromPath('app.jsx')).to.equal('javascriptreact');
+    expect(languageFromPath('index.html')).to.equal('html');
+    expect(languageFromPath('styles.css')).to.equal('css');
+    expect(languageFromPath('styles.scss')).to.equal('scss');
+    expect(languageFromPath('styles.less')).to.equal('less');
+    expect(languageFromPath('App.vue')).to.equal('vue');
+    expect(languageFromPath('App.svelte')).to.equal('svelte');
+  });
+
+  it('returns correct id for backend / general purpose languages', () => {
+    expect(languageFromPath('main.py')).to.equal('python');
+    expect(languageFromPath('main.go')).to.equal('go');
+    expect(languageFromPath('main.rs')).to.equal('rust');
+    expect(languageFromPath('Main.java')).to.equal('java');
+    expect(languageFromPath('Program.cs')).to.equal('csharp');
+    expect(languageFromPath('main.swift')).to.equal('swift');
+    expect(languageFromPath('main.kt')).to.equal('kotlin');
+    expect(languageFromPath('main.dart')).to.equal('dart');
+    expect(languageFromPath('main.scala')).to.equal('scala');
+    expect(languageFromPath('main.rb')).to.equal('ruby');
+    expect(languageFromPath('index.php')).to.equal('php');
+  });
+
+  it('returns correct id for systems languages', () => {
+    expect(languageFromPath('main.c')).to.equal('c');
+    expect(languageFromPath('header.h')).to.equal('c');
+    expect(languageFromPath('main.cpp')).to.equal('cpp');
+    expect(languageFromPath('main.cc')).to.equal('cpp');
+    expect(languageFromPath('main.cxx')).to.equal('cpp');
+    expect(languageFromPath('header.hpp')).to.equal('cpp');
+    expect(languageFromPath('AppDelegate.m')).to.equal('objective-c');
+    expect(languageFromPath('App.mm')).to.equal('objective-cpp');
+  });
+
+  it('returns correct id for scripting languages', () => {
+    expect(languageFromPath('script.sh')).to.equal('shellscript');
+    expect(languageFromPath('script.bash')).to.equal('shellscript');
+    expect(languageFromPath('script.zsh')).to.equal('shellscript');
+    expect(languageFromPath('script.ps1')).to.equal('powershell');
+    expect(languageFromPath('run.bat')).to.equal('bat');
+    expect(languageFromPath('run.cmd')).to.equal('bat');
+    expect(languageFromPath('main.lua')).to.equal('lua');
+    expect(languageFromPath('main.ex')).to.equal('elixir');
+    expect(languageFromPath('main.erl')).to.equal('erlang');
+    expect(languageFromPath('Main.hs')).to.equal('haskell');
+    expect(languageFromPath('Main.fs')).to.equal('fsharp');
+    expect(languageFromPath('core.clj')).to.equal('clojure');
+    expect(languageFromPath('main.ml')).to.equal('ocaml');
+    expect(languageFromPath('Main.elm')).to.equal('elm');
+  });
+
+  it('returns correct id for config and data formats', () => {
+    expect(languageFromPath('config.json')).to.equal('json');
+    expect(languageFromPath('config.jsonc')).to.equal('jsonc');
+    expect(languageFromPath('config.yaml')).to.equal('yaml');
+    expect(languageFromPath('config.yml')).to.equal('yaml');
+    expect(languageFromPath('config.toml')).to.equal('toml');
+    expect(languageFromPath('data.xml')).to.equal('xml');
+    expect(languageFromPath('icon.svg')).to.equal('xml');
+    expect(languageFromPath('README.md')).to.equal('markdown');
+    expect(languageFromPath('schema.proto')).to.equal('proto');
+    expect(languageFromPath('main.tf')).to.equal('terraform');
+    expect(languageFromPath('.env')).to.equal('dotenv');
+    expect(languageFromPath('config.ini')).to.equal('ini');
+  });
+
+  it('returns correct id for build and infra files', () => {
+    expect(languageFromPath('Dockerfile')).to.equal('dockerfile');
+    expect(languageFromPath('Makefile')).to.equal('makefile');
+    expect(languageFromPath('rules.mk')).to.equal('makefile');
+    expect(languageFromPath('CMakeLists.cmake')).to.equal('cmake');
+    expect(languageFromPath('build.gradle')).to.equal('groovy');
+  });
+
+  it('returns correct id for shader files', () => {
+    expect(languageFromPath('shader.glsl')).to.equal('glsl');
+    expect(languageFromPath('shader.vert')).to.equal('glsl');
+    expect(languageFromPath('shader.frag')).to.equal('glsl');
+    expect(languageFromPath('shader.hlsl')).to.equal('hlsl');
+    expect(languageFromPath('shader.wgsl')).to.equal('wgsl');
+  });
+
+  it('returns plaintext for unknown extensions', () => {
+    expect(languageFromPath('file.xyz')).to.equal('plaintext');
+    expect(languageFromPath('file.unknown')).to.equal('plaintext');
+    expect(languageFromPath('noextension')).to.equal('plaintext');
+  });
+
+  it('is case-insensitive for extensions', () => {
+    expect(languageFromPath('main.TS')).to.equal('typescript');
+    expect(languageFromPath('main.PY')).to.equal('python');
+    expect(languageFromPath('main.CPP')).to.equal('cpp');
+  });
+
+  it('uses the final extension segment for paths with multiple dots', () => {
+    expect(languageFromPath('src/app.test.ts')).to.equal('typescript');
+    expect(languageFromPath('src/app.spec.js')).to.equal('javascript');
+  });
+});
+
+describe('diffAgentWrite — language detection layers', () => {
+  it('layer 1: uses openTextDocument(targetUri) for existing files', () => {
+    expect(editorSrc).to.include('openTextDocument(targetUri)');
+    expect(editorSrc).to.include('lang = existingDoc.languageId');
+  });
+
+  it('layer 2: falls back to languageFromPath for new files', () => {
+    expect(editorSrc).to.include('let lang = languageFromPath(normalised)');
+  });
+
+  it('layer 3: ghost untitled URI detection for unknown extensions on new files', () => {
+    expect(editorSrc).to.include("scheme: 'untitled'");
+    expect(editorSrc).to.include("if (tempDoc.languageId !== 'plaintext')");
+  });
+
+  it('ghost URI uses filename only (no directory path)', () => {
+    expect(editorSrc).to.include("normalised.split('/').pop() ?? 'file'");
+  });
+
+  it('diffCode uses editor.document.languageId directly (no map needed)', () => {
+    const diffCodeFn = editorSrc.slice(editorSrc.indexOf('async function diffCode'));
+    expect(diffCodeFn).to.include('editor.document.languageId');
+    expect(diffCodeFn).to.not.include('languageFromPath');
   });
 });

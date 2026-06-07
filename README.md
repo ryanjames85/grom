@@ -121,7 +121,7 @@ Select code, press `Ctrl+Shift+I`, describe what you want. Grom rewrites it and 
 
 Press `Ctrl+Shift+O` or type `/compose`. Describe changes across your codebase. Review per-file or apply everything at once. Undo the whole run with one click.
 
-Every code block in compose format gets a **💾 Save** button — opens a diff showing exactly what will change.
+Every code block in compose format gets a **💾 Save** button — opens a syntax-highlighted diff showing exactly what will change.
 
 ### Agentic Loop
 
@@ -208,6 +208,7 @@ Open it with the brain icon in the header.
 ### Conversations
 
 - Multiple chat sessions, persistent across restarts
+- **Session dates** — the history list shows a relative last-modified timestamp (e.g. "5m ago", "yesterday") next to each session
 - **Prompt history** — up/down arrow in the input cycles your previously sent messages
 - `/compact` trims long histories — a divider marks exactly where the cut was made
 - Export any conversation as `.md`, import it back to continue
