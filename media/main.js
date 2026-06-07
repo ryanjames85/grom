@@ -337,6 +337,21 @@ window.popIcon = (el) => { el.classList.remove('clicked'); void el.offsetWidth; 
 window.spinIcon = (el) => { const svg = el.querySelector('svg'); if (!svg) return; svg.classList.remove('spinning'); void svg.offsetWidth; svg.classList.add('spinning'); svg.addEventListener('animationend', () => svg.classList.remove('spinning'), { once: true }); };
 window.compactSession = () => vscode.postMessage({ type: 'compactSession' });
 
+function _relativeTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days}d ago`;
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
 function wireSessionListClicks() {
   const list = document.getElementById('session-list');
   if (!list) return;
@@ -375,7 +390,7 @@ function wireSessionListClicks() {
     // Don't switch session if a rename is in progress
     if (_cancelActiveRename) return;
     const item = ev.target.closest('[data-session-id]');
-    if (item) vscode.postMessage({ type: 'switchSession', sessionId: item.dataset.sessionId });
+    if (item) { console.log('[grom] switchSession click:', item.dataset.sessionId); vscode.postMessage({ type: 'switchSession', sessionId: item.dataset.sessionId }); }
   };
 }
 window.setProvider = (v) => { if (v.startsWith('custom:')) { const [, url, fmt] = v.split(':'); vscode.postMessage({ type: 'changeProvider', providerId: 'custom', url, useOllamaFormat: fmt === '1' }); } else { vscode.postMessage({ type: 'changeProvider', providerId: v }); } };
@@ -1366,10 +1381,7 @@ window.addEventListener('message', e => {
         const safeTitle = escapeHtml(s.title);
         return `<div class="session-item ${s.id === m.currentSessionId ? 'active' : ''}" data-session-id="${s.id}" title="Resume this conversation">
             <div class="session-title">${safeTitle}</div>
-            <div class="session-actions">
-              <div class="session-rename" data-rename-id="${s.id}" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></div>
-              <div class="session-delete" data-delete-id="${s.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></div>
-            </div>
+            <div class="session-meta"><span class="session-date">${_relativeTime(s.lastModified)}</span><div class="session-actions"><div class="session-rename" data-rename-id="${s.id}" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></div><div class="session-delete" data-delete-id="${s.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></div></div></div>
         </div>`;
       }).join('');
       wireSessionListClicks();
@@ -1381,9 +1393,15 @@ window.addEventListener('message', e => {
           titleContainer.onclick = window.startEditingTitle;
       }
 
-      // Don't reset the chat container if a request is in-flight — the in-flight message
-      // and thinking dots are not yet in session history so a reload would wipe them.
-      if (currentAiDiv) break;
+      // Don't reset the chat container if a request is in-flight due to a background reload
+      // (reconnect, title update etc). But always reset for explicit user-initiated session
+      // switches/creates — otherwise the old chat stays visible after New Chat is clicked.
+      if (currentAiDiv && !m.userInitiated) break;
+      if (currentAiDiv) {
+        currentAiDiv = null; currentAiText = ''; _stopElapsedTimer();
+        sendBtn.style.display = 'flex'; stopBtn.style.display = 'none';
+        document.body.classList.remove('grom-thinking'); updateGromLogo();
+      }
 
       const greeting = m.customGreeting || "Hey. I'm Grom. Ready when you are.";
       const defaultLogoContent = m.customLogo
@@ -1777,10 +1795,7 @@ window.addEventListener('message', e => {
           const safeTitle = escapeHtml(s.title);
           return `<div class="session-item ${s.id === m.currentSessionId ? 'active' : ''}" data-session-id="${s.id}">
             <div class="session-title">${safeTitle}</div>
-            <div class="session-actions">
-              <div class="session-rename" data-rename-id="${s.id}" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></div>
-              <div class="session-delete" data-delete-id="${s.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></div>
-            </div>
+            <div class="session-meta"><span class="session-date">${_relativeTime(s.lastModified)}</span><div class="session-actions"><div class="session-rename" data-rename-id="${s.id}" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg></div><div class="session-delete" data-delete-id="${s.id}" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></div></div></div>
           </div>`;
         }).join('');
       }

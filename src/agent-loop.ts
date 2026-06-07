@@ -52,8 +52,12 @@ export class AgentLoop {
 
   constructor(private readonly deps: AgentLoopDeps) {}
 
-  /** Aborts any in-progress stream. */
+  /** Aborts any in-progress stream, sending *Cancelled.* to the webview. */
   abort() { this._abortController?.abort(); }
+
+  /** Aborts silently — no *Cancelled.* message sent. Use when switching sessions programmatically. */
+  silentAbort() { this._silent = true; this._abortController?.abort(); }
+  private _silent = false;
 
   /** Returns the file snapshots taken before agent writes this turn (path → original content, null = new file). */
   getBackups(): Map<string, string | null> { return this._backups; }
@@ -71,6 +75,7 @@ export class AgentLoop {
     updateUsageDisplay: () => void
   ): Promise<void> {
     this._backups.clear();
+    this._silent = false;
 
     // Web search and slash commands take priority over normal message processing
     const webSearchResult = await resolveWebSearch(rawText);
@@ -190,7 +195,8 @@ export class AgentLoop {
         }
       } catch (e: any) {
         if (e?.name === 'AbortError') {
-          this.deps.postMessage({ type: 'chunk', text: '\n\n*Cancelled.*' });
+          if (!this._silent) { this.deps.postMessage({ type: 'chunk', text: '\n\n*Cancelled.*' }); }
+          this._silent = false;
         } else {
           const msg: string = e.message || String(e);
           const isContextOverflow = /n_keep|n_ctx|context.*(length|size|window)|too many tokens|context_length_exceeded/i.test(msg);

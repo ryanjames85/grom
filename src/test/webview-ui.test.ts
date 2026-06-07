@@ -308,3 +308,70 @@ describe('webview — nudge hide-mic info badge', () => {
       'info badge code appears before the hide-mic label — DOM order may be wrong');
   });
 });
+
+// ── loadSessions — session reset guard ───────────────────────────────────────
+
+describe('webview — loadSessions session reset guard', () => {
+  it('loadSessions guard checks m.userInitiated before skipping reset', () => {
+    expect(js).to.include('m.userInitiated',
+      'loadSessions guard must check m.userInitiated to allow user-initiated resets through');
+  });
+
+  it('guard only skips reset when currentAiDiv is set AND userInitiated is false', () => {
+    expect(js).to.include('currentAiDiv && !m.userInitiated',
+      'guard must require both in-flight request AND non-user-initiated to skip reset');
+  });
+
+  it('guard resets currentAiDiv and currentAiText when userInitiated overrides', () => {
+    expect(js).to.include('currentAiDiv = null; currentAiText =',
+      'loadSessions must clear currentAiDiv and currentAiText when userInitiated forces a reset');
+  });
+
+  it('provider passes userInitiated in loadSessions message', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    expect(provider).to.include('userInitiated,',
+      'provider must pass userInitiated flag in loadSessions message payload');
+  });
+
+  it('provider _loadAllSessions accepts userInitiated parameter', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    expect(provider).to.include('_loadAllSessions(userInitiated = false)',
+      '_loadAllSessions must have userInitiated parameter defaulting to false');
+  });
+
+  it('_createNewSession calls _loadAllSessions with userInitiated true', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    const idx = provider.indexOf('private _createNewSession()');
+    expect(idx).to.not.equal(-1, '_createNewSession method definition not found');
+    const slice = provider.slice(idx, idx + 500);
+    expect(slice).to.include('_loadAllSessions(true)',
+      '_createNewSession must call _loadAllSessions(true) so New Chat always resets the UI');
+  });
+
+  it('_switchSession calls _loadAllSessions with userInitiated true', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    const idx = provider.indexOf('private async _switchSession(');
+    expect(idx).to.not.equal(-1, '_switchSession method definition not found');
+    const slice = provider.slice(idx, idx + 700);
+    expect(slice).to.include('_loadAllSessions(true)',
+      '_switchSession must call _loadAllSessions(true) so switching sessions always resets the UI');
+  });
+
+  it('deleteSession calls _loadAllSessions with userInitiated true', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    const idx = provider.indexOf('this._sessionManager.deleteSession(');
+    expect(idx).to.not.equal(-1, 'deleteSession call not found');
+    const slice = provider.slice(idx, idx + 200);
+    expect(slice).to.include('_loadAllSessions(true)',
+      'deleteSession must call _loadAllSessions(true)');
+  });
+
+  it('refreshPresets stays background (userInitiated false)', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    const idx = provider.indexOf('refreshPresets');
+    expect(idx).to.not.equal(-1, 'refreshPresets not found');
+    const slice = provider.slice(idx, idx + 100);
+    expect(slice).to.not.include('_loadAllSessions(true)',
+      'refreshPresets must NOT pass userInitiated=true — it is a background reload');
+  });
+});

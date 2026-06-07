@@ -175,7 +175,11 @@ body.mode-plan .agent-btn { opacity: 0.35; pointer-events: none; }
 .session-item.active { background: var(--vscode-button-secondaryBackground); border: 1px solid var(--accent); }
 .session-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .session-title-input { flex: 1; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--accent); border-radius: 4px; font-size: 12px; font-family: inherit; padding: 1px 4px; outline: none; min-width: 0; }
-.session-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; }
+.session-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.session-date { font-size: 10px; color: var(--vscode-descriptionForeground); opacity: 0.7; white-space: nowrap; }
+.session-item:hover .session-date { opacity: 0; }
+.session-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; position: absolute; right: 12px; }
+.session-item { position: relative; }
 .session-item:hover .session-actions { opacity: 1; }
 .session-rename, .session-delete { cursor: pointer; opacity: 0.5; padding: 2px; border-radius: 3px; display: flex; }
 .session-rename:hover, .session-delete:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }

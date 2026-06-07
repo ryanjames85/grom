@@ -347,3 +347,143 @@ describe('SessionManager', () => {
     });
   });
 });
+
+// ── session date display ──────────────────────────────────────────────────────
+
+describe('session date display — _relativeTime helper', () => {
+  const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
+
+  it('_relativeTime function is defined', () => {
+    expect(js).to.include('function _relativeTime(',
+      '_relativeTime helper missing from main.js');
+  });
+
+  it('returns "just now" for very recent timestamps', () => {
+    expect(js).to.include("'just now'",
+      '_relativeTime must return "just now" for < 1 minute');
+  });
+
+  it('returns minutes-ago format', () => {
+    expect(js).to.include('m ago`',
+      '_relativeTime must return Xm ago for recent sessions');
+  });
+
+  it('returns hours-ago format', () => {
+    expect(js).to.include('h ago`',
+      '_relativeTime must return Xh ago for same-day sessions');
+  });
+
+  it('returns "yesterday" for 1-day-old sessions', () => {
+    expect(js).to.include("'yesterday'",
+      '_relativeTime must return "yesterday" for 1-day-old sessions');
+  });
+
+  it('returns days-ago format for recent sessions', () => {
+    expect(js).to.include('d ago`',
+      '_relativeTime must return Xd ago for sessions within the week');
+  });
+
+  it('returns a short date for older sessions', () => {
+    expect(js).to.include("'numeric', month: 'short'",
+      '_relativeTime must format older sessions as short date (e.g. "3 Jan")');
+  });
+
+  it('session list template includes _relativeTime call with lastModified', () => {
+    expect(js).to.include('_relativeTime(s.lastModified)',
+      'session list template must call _relativeTime with session lastModified');
+  });
+
+  it('session date is in a .session-date span', () => {
+    expect(js).to.include('class="session-date"',
+      'session date must be wrapped in a .session-date span');
+  });
+
+  it('session date is in a .session-meta container', () => {
+    expect(js).to.include('class="session-meta"',
+      'session date must be inside a .session-meta container');
+  });
+
+  it('both session list renders include the date', () => {
+    const matches = (js.match(/session-date/g) || []).length;
+    expect(matches).to.be.at.least(2,
+      'both session list render paths must include the session date');
+  });
+});
+
+describe('session date display — CSS', () => {
+  const css = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'styles.css'), 'utf8');
+
+  it('.session-date has CSS', () => {
+    expect(css).to.include('.session-date',
+      '.session-date CSS missing');
+  });
+
+  it('.session-meta has CSS', () => {
+    expect(css).to.include('.session-meta',
+      '.session-meta CSS missing');
+  });
+
+    it('.session-date hides on hover', () => {
+    expect(css).to.include('.session-item:hover .session-date',
+      '.session-date must hide on session-item hover to make room for actions');
+  });
+});
+
+// ── edge cases ────────────────────────────────────────────────────────────────
+
+describe('session edge cases', () => {
+  const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
+  const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+
+  it('#3 — _relativeTime handles zero/falsy timestamp gracefully', () => {
+    expect(js).to.include("if (!ts) return ''",
+      '_relativeTime must return empty string for falsy timestamps');
+  });
+
+  it('#3 — _relativeTime handles future timestamps as "just now"', () => {
+    expect(js).to.include("if (mins < 1) return 'just now'",
+      '_relativeTime must return "just now" for future or very recent timestamps');
+  });
+
+  it('#4 — _createNewSession guards against creating a blank duplicate', () => {
+    const idx = provider.indexOf('private _createNewSession()');
+    expect(idx).to.not.equal(-1, '_createNewSession not found');
+    const slice = provider.slice(idx, idx + 400);
+    expect(slice).to.include('history.length === 0',
+      '_createNewSession must check if current session is already empty before creating a new one');
+  });
+
+  it('#4 — _createNewSession reuses existing blank session instead of duplicating', () => {
+    const idx = provider.indexOf('private _createNewSession()');
+    const slice = provider.slice(idx, idx + 400);
+    expect(slice).to.include("title === 'Untitled'",
+      '_createNewSession must check title is Untitled before bailing out');
+  });
+
+  it('#5 — _silent resets at start of every run()', () => {
+    const agentLoop = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'agent-loop.ts'), 'utf8');
+    const runIdx = agentLoop.indexOf('async run(');
+    expect(runIdx).to.not.equal(-1, 'run() method not found in agent-loop.ts');
+    const slice = agentLoop.slice(runIdx, runIdx + 500);
+    expect(slice).to.include('this._silent = false',
+      '_silent flag must be reset at the start of run() to prevent bleed from previous silentAbort');
+  });
+
+  it('#2 — _suppressNextConfigReload flag exists to prevent double loadSessions', () => {
+    expect(provider).to.include('_suppressNextConfigReload',
+      '_suppressNextConfigReload flag must exist to prevent double loadSessions on session switch');
+  });
+
+  it('#2 — config watcher checks _suppressNextConfigReload before calling _loadAllSessions', () => {
+    expect(provider).to.include('if (this._suppressNextConfigReload)',
+      'config watcher must check _suppressNextConfigReload flag');
+  });
+
+  it('#2 — _switchSession sets _suppressNextConfigReload before model update', () => {
+    const idx = provider.indexOf('private async _switchSession(');
+    expect(idx).to.not.equal(-1, '_switchSession not found');
+    const slice = provider.slice(idx, idx + 600);
+    expect(slice).to.include('this._suppressNextConfigReload = true',
+      '_switchSession must suppress the config watcher reload when updating model');
+  });
+});

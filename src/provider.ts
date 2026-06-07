@@ -54,6 +54,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _voice: VoiceManager;
   private _popout?: vscode.WebviewPanel;
   private _voiceReply?: vscode.Webview;
+  private _suppressNextConfigReload = false;
   private _pendingApprovals = new Map<string, (result: 'allow' | 'allowAll' | 'deny') => void>();
   private _isStreaming = false;
   private _detectedContextLength: number | null = null;
@@ -173,7 +174,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       if (e.affectsConfiguration('grom')) {
         this._checkConnection();
         this._updateTheme();
-        this._loadAllSessions();
+        if (this._suppressNextConfigReload) { this._suppressNextConfigReload = false; }
+        else { this._loadAllSessions(); }
         if (e.affectsConfiguration('grom.mcpServers')) {
           this._mcp.initialize().then(() => this._checkConnection());
         }
@@ -655,7 +657,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     this._context.workspaceState.update('lastSessionId', this._sessionManager.getCurrentSessionId());
   }
 
-  private async _loadAllSessions() {
+  private async _loadAllSessions(userInitiated = false) {
     const sessions = this._sessionManager.getSessions();
     const current = this._sessionManager.getCurrentSession();
     const config = vscode.workspace.getConfiguration('grom');
@@ -673,6 +675,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
 
     this._post({
       type: 'loadSessions',
+      userInitiated,
       sessions: Object.values(sessions).sort((a, b) => b.lastModified - a.lastModified),
       currentSessionId: current.id,
       history: current.history,
@@ -735,22 +738,34 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _createNewSession() {
+    const current = this._sessionManager.getCurrentSession();
+    if (!this._isStreaming && current.history.length === 0 && current.title === 'Untitled') {
+      // Current session is already blank — just reload to snap back to it
+      this._loadAllSessions(true);
+      return;
+    }
+    if (this._isStreaming) { this._agentLoop.silentAbort(); }
     const toolsDefault = vscode.workspace.getConfiguration('grom').get<boolean>('toolsEnabledByDefault', false);
     this._sessionManager.createNewSession(toolsDefault);
     this._saveState();
-    this._loadAllSessions();
+    this._loadAllSessions(true);
   }
 
   private async _switchSession(id: string) {
+    if (this._isStreaming) { this._agentLoop.silentAbort(); }
     if (this._sessionManager.switchSession(id)) {
       const session = this._sessionManager.getCurrentSession();
       this._saveState();
+      // Update UI immediately so the chat switches without waiting for async model update.
+      this._loadAllSessions(true);
       if (session.model) {
-        // Config watcher fires _checkConnection + _loadAllSessions when model changes
-        await vscode.workspace.getConfiguration('grom').update('model', session.model, vscode.ConfigurationTarget.Global);
-      } else {
-        this._loadAllSessions();
+        // Suppress the config watcher's loadAllSessions — we already did it above.
+        this._suppressNextConfigReload = true;
+        vscode.workspace.getConfiguration('grom').update('model', session.model, vscode.ConfigurationTarget.Global);
       }
+    } else {
+      console.warn(`[grom] switchSession: session "${id}" not found in state. Known IDs: ${Object.keys(this._sessionManager.getSessions()).join(', ')}`);
+      this._loadAllSessions(true);
     }
   }
 
@@ -760,7 +775,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     this._contextHintSent.delete(id);
     this._docsHintSent.delete(id);
     this._saveState();
-    this._loadAllSessions();
+    this._loadAllSessions(true);
   }
 
   private _compactSession() {
@@ -844,7 +859,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     sessions[id].history = history;
     sessions[id].tokens.input = estimateHistoryTokens(history);
     this._saveState();
-    this._loadAllSessions();
+    this._loadAllSessions(true);
     vscode.window.showInformationMessage(`Imported "${title}" â€” ${history.filter(m => m.role !== 'system').length} messages.`);
   }
 
