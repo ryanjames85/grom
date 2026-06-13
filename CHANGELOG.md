@@ -4,6 +4,35 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.5.4] — 2026-06-13
+
+### New
+
+- **Layered native tool calling** — Ollama models with native tool support (qwen2.5, llama3.1, mistral, etc.) now use structured function calls instead of free-form JSON text, making tool execution reliable regardless of model size. Cloud providers connected via BYOK also benefit. Grom falls back through schema-constrained JSON → plain JSON mode → heuristic parser for older models, so nothing breaks.
+- **API key support for custom providers** — add an `apiKey` field to any `grom.customProviders` entry to connect to any cloud API (e.g. Google Gemini, OpenRouter, Together AI) without a built-in provider entry.
+- **SSRF protection** — `browse_web` and `@url:` now block requests to private/internal network addresses (loopback, RFC-1918, link-local/AWS metadata, IPv6 unique-local). A model cannot be tricked into fetching internal services.
+- **External content labelling** — content fetched via `browse_web`, `@url:`, and `@docs` is now clearly marked as untrusted external source in the model context, reducing prompt injection risk from attacker-controlled web content.
+
+### Fixed
+
+- **Tool denial conversation integrity** — denying a native tool call previously added a malformed assistant message (no `tool_calls` field) that caused OpenAI and Anthropic to reject the next turn. Both the denial and unknown-tool paths now produce properly formed `role:tool` messages.
+- **Windows path tool calls** — commands like `.\setup.ps1` contain `\s` which is invalid JSON. The parser now sanitises unescaped backslashes and retries, so tool calls with Windows paths execute correctly.
+- **Concurrent message safety** — sending a second message while the first was streaming could interleave writes to session history. Messages are now serialised through a promise queue.
+- **Model/provider swap mid-session** — switching models or providers now resets the native tool calling state so the heuristic fallback re-activates for providers that don't support structured calls.
+- **RAG rebuild race** — calling `build(force=true)` while indexing was in progress silently dropped the rebuild. It is now queued and runs immediately after the current build finishes.
+- **Voice rapid toggle** — clicking the mic button twice quickly before ffmpeg had started could leave a silent recording process running. The state is now set before any async operations and rechecked after.
+- **Reindex timer leak** — the 3-second file-change debounce timer was not cancelled on extension deactivation. It is now disposed with the extension.
+- **OpenAI retry heuristic** — the retry-without-tools fallback previously matched any error containing "invalid" or "unknown", which could swallow real server errors (e.g. 503 "Service temporarily invalid"). Now only retries on explicit 400 responses with tool/function in the body.
+- **Tool call ID collision** — Ollama fallback IDs used `Date.now()` (millisecond precision). Replaced with a monotonic counter.
+- **`grom.toolsEnabledByDefault` removed** — dead setting; `grom.agentEnabled` is the global master switch. New sessions still start in PLAN mode with tools off — fast plain chat is the default, ⚡ Tools is opt-in per session as always.
+
+### Security
+
+- **Shell substitution blocked in `run_terminal`** — commands containing `$(...)` or backtick subshell syntax are rejected before execution. Chains like `npm install && npm test` are unaffected; only subshell evaluation is blocked.
+- **MCP tool description sanitisation** — tool names, descriptions, and parameter descriptions from MCP servers are stripped of newlines and quote characters before being embedded in the system prompt, preventing a malicious server from injecting instructions via its metadata.
+
+---
+
 ## [0.5.3] — 2026-06-07
 
 ### Fixed

@@ -60,3 +60,36 @@ export function parseHttpError(raw: string): string {
 
 /** Maximum character length used when truncating descriptions and log snippets. */
 export const TRUNCATE_LENGTH = 200;
+
+/**
+ * Returns true when the URL targets a private/internal network address that
+ * should never be reachable from user-facing fetch calls (SSRF protection).
+ *
+ * Covers loopback, link-local (AWS metadata), RFC-1918 private ranges, and
+ * the IPv6 equivalents. Also blocks file:// and non-http(s) schemes.
+ */
+export function isPrivateUrl(raw: string): boolean {
+  let url: URL;
+  try { url = new URL(raw); } catch { return true; } // unparseable → block
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return true;
+  const h = url.hostname.toLowerCase().replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+
+  // Loopback
+  if (h === 'localhost' || h === '0.0.0.0') return true;
+  if (/^127\./.test(h)) return true;
+  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
+
+  // Link-local (AWS/GCP metadata)
+  if (/^169\.254\./.test(h)) return true;
+  if (/^fe80:/i.test(h)) return true;
+
+  // RFC-1918 private ranges
+  if (/^10\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+
+  // Unique-local IPv6
+  if (/^fc/i.test(h) || /^fd/i.test(h)) return true;
+
+  return false;
+}

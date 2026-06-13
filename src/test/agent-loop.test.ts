@@ -166,7 +166,7 @@ describe('AgentLoop', () => {
 
     clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
       onChunk('Hello from AI');
-      return 'Hello from AI';
+      return { text: 'Hello from AI' };
     });
 
     await loop.run('Hi', undefined, 'plan', session, () => {}, () => {});
@@ -187,11 +187,11 @@ describe('AgentLoop', () => {
     const toolCallJson = '{"tool": "read_file", "args": {"path": "test.ts"}}';
     clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
       onChunk(toolCallJson);
-      return toolCallJson;
+      return { text: toolCallJson };
     });
     clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
       onChunk('I read the file.');
-      return 'I read the file.';
+      return { text: 'I read the file.' };
     });
 
     sinon.stub(mcpParserModule, 'parseToolCall')
@@ -212,11 +212,11 @@ describe('AgentLoop', () => {
 
     clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
       onChunk(toolCallJson);
-      return toolCallJson;
+      return { text: toolCallJson };
     });
     clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
       onChunk('Done.');
-      return 'Done.';
+      return { text: 'Done.' };
     });
 
     await loop.run('Read foo.ts', undefined, 'build', session, () => {}, () => {});
@@ -245,11 +245,11 @@ describe('AgentLoop', () => {
     const toolCallJson = '{"tool": "write_file", "args": {"path": "test.ts", "content": "hi"}}';
     clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
       onChunk(toolCallJson);
-      return toolCallJson;
+      return { text: toolCallJson };
     });
     clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
       onChunk('File written.');
-      return 'File written.';
+      return { text: 'File written.' };
     });
 
     sinon.stub(mcpParserModule, 'parseToolCall')
@@ -274,11 +274,11 @@ describe('AgentLoop', () => {
     const toolCallJson = '{"tool": "write_file", "args": {"path": "test.ts", "content": "hi"}}';
     clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
       onChunk(toolCallJson);
-      return toolCallJson;
+      return { text: toolCallJson };
     });
     clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
       onChunk('Okay, I wont write it.');
-      return 'Okay, I wont write it.';
+      return { text: 'Okay, I wont write it.' };
     });
 
     sinon.stub(mcpParserModule, 'parseToolCall')
@@ -305,15 +305,15 @@ describe('AgentLoop', () => {
     const toolCallJson = '{"tool": "read_file", "args": {"path": "test.ts"}}';
     clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
       onChunk('I should probably use a tool.');
-      return 'I should probably use a tool.';
+      return { text: 'I should probably use a tool.' };
     });
     clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
       onChunk(toolCallJson);
-      return toolCallJson;
+      return { text: toolCallJson };
     });
     clientStub.streamChatWithCallback.onThirdCall().callsFake(async (msgs, onChunk) => {
       onChunk('Done.');
-      return 'Done.';
+      return { text: 'Done.' };
     });
 
     sinon.stub(mcpParserModule, 'parseToolCall')
@@ -357,7 +357,7 @@ describe('AgentLoop', () => {
 
     clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
       onChunk('Done.');
-      return 'Done.';
+      return { text: 'Done.' };
     });
 
     await loop.run('fix @explicitly_mentioned.dart', undefined, 'plan', session, () => {}, () => {});
@@ -374,7 +374,7 @@ describe('AgentLoop', () => {
 
     // Model tries to call a tool (read_file) even though it shouldn't have been told about it
     const toolCallJson = '{"tool": "read_file", "args": {"path": "test.ts"}}';
-    clientStub.streamChatWithCallback.resolves(toolCallJson);
+    clientStub.streamChatWithCallback.resolves({ text: toolCallJson });
 
     await loop.run('Read file', undefined, 'plan', session, () => {}, () => {});
 
@@ -390,7 +390,7 @@ describe('AgentLoop', () => {
 
       clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
         onChunk(toolCallJson);
-        return toolCallJson;
+        return { text: toolCallJson };
       });
 
       await loop.run('Write a file', undefined, 'build', session, () => {}, () => {});
@@ -406,7 +406,7 @@ describe('AgentLoop', () => {
 
       clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
         onChunk(toolCallJson);
-        return toolCallJson;
+        return { text: toolCallJson };
       });
 
       await loop.run('Write a file', undefined, 'plan', session, () => {}, () => {});
@@ -419,7 +419,7 @@ describe('AgentLoop', () => {
 
       clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
         onChunk('Here is my answer in plain text.');
-        return 'Here is my answer in plain text.';
+        return { text: 'Here is my answer in plain text.' };
       });
 
       await loop.run('Say something', undefined, 'build', session, () => {}, () => {});
@@ -433,11 +433,11 @@ describe('AgentLoop', () => {
 
       clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
         onChunk(toolCallJson);
-        return toolCallJson;
+        return { text: toolCallJson };
       });
       clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
         onChunk('Done.');
-        return 'Done.';
+        return { text: 'Done.' };
       });
 
       sinon.stub(mcpParserModule, 'parseToolCall')
@@ -448,6 +448,177 @@ describe('AgentLoop', () => {
 
       expect(deps.postMessage.calledWith(sinon.match({ type: 'toolsOffNudge' }))).to.be.false;
       expect(deps.postMessage.calledWith(sinon.match({ type: 'toolCall' }))).to.be.true;
+    });
+  });
+
+  describe('native tool calling', () => {
+    it('executes tool when streamChatWithCallback returns toolCall (native path)', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const nativeTc = { id: 'call_1', name: 'read_file', args: { path: 'test.ts' } };
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: nativeTc })
+        .onSecondCall().resolves({ text: 'Done.' });
+
+      await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+
+      expect(deps.postMessage.calledWith(sinon.match({ type: 'toolCall', tool: 'read_file' }))).to.be.true;
+      expect(deps.appendTaskLog.calledOnce).to.be.true;
+    });
+
+    it('sets nativeToolsWorked on session after first native tool call', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const nativeTc = { id: 'call_1', name: 'read_file', args: { path: 'test.ts' } };
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: nativeTc })
+        .onSecondCall().resolves({ text: 'Done.' });
+
+      await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+
+      expect(session.nativeToolsWorked).to.be.true;
+    });
+
+    it('uses role:tool feedback messages for native tool calls', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const nativeTc = { id: 'call_1', name: 'read_file', args: { path: 'test.ts' } };
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: nativeTc })
+        .onSecondCall().resolves({ text: 'Done.' });
+
+      await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+
+      const toolResultMsg = session.history.find((m: any) => m.role === 'tool');
+      expect(toolResultMsg).to.exist;
+      expect(toolResultMsg.tool_call_id).to.equal('call_1');
+
+      const assistantMsg = session.history.find((m: any) => m.role === 'assistant' && m.tool_calls);
+      expect(assistantMsg).to.exist;
+      expect(assistantMsg.tool_calls[0].function.name).to.equal('read_file');
+    });
+
+    it('falls back to heuristic parser when native returns no toolCall', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const toolCallJson = '{"tool":"read_file","args":{"path":"test.ts"}}';
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: toolCallJson })
+        .onSecondCall().resolves({ text: 'Done.' });
+
+      sinon.stub(mcpParserModule, 'parseToolCall')
+        .onFirstCall().returns({ tool: 'read_file', args: { path: 'test.ts' }, raw: toolCallJson })
+        .onSecondCall().returns(null);
+
+      await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+
+      expect(deps.postMessage.calledWith(sinon.match({ type: 'toolCall', tool: 'read_file' }))).to.be.true;
+    });
+
+    it('skips system prompt injection when nativeToolsWorked is true', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true, nativeToolsWorked: true };
+      const nativeTc = { id: 'call_2', name: 'read_file', args: { path: 'foo.ts' } };
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: nativeTc })
+        .onSecondCall().resolves({ text: 'Done.' });
+
+      const buildToolSystemPromptStub = sinon.stub(mcpParserModule, 'buildToolSystemPrompt').returns('TOOL_PROMPT');
+
+      await loop.run('Read foo.ts', undefined, 'build', session, () => {}, () => {});
+
+      // buildToolSystemPrompt should not have been called since nativeToolsWorked is true
+      expect(buildToolSystemPromptStub.called).to.be.false;
+    });
+
+    it('heuristic path uses role:user feedback messages (not role:tool)', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const toolCallJson = '{"tool":"read_file","args":{"path":"test.ts"}}';
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: toolCallJson })
+        .onSecondCall().resolves({ text: 'Done.' });
+
+      sinon.stub(mcpParserModule, 'parseToolCall')
+        .onFirstCall().returns({ tool: 'read_file', args: { path: 'test.ts' }, raw: toolCallJson })
+        .onSecondCall().returns(null);
+
+      await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+
+      const toolRoleMsg = session.history.find((m: any) => m.role === 'tool');
+      expect(toolRoleMsg).to.be.undefined;
+      const userFeedback = session.history.find((m: any) => m.role === 'user' && m.content?.includes('returned'));
+      expect(userFeedback).to.exist;
+    });
+  });
+
+  describe('denial and unknown-tool feedback format', () => {
+    it('native denial passes role:assistant with tool_calls and role:tool into the next round', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const nativeTc = { id: 'call_deny', name: 'write_file', args: { path: 'test.ts', content: 'hi' } };
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: nativeTc })
+        .onSecondCall().resolves({ text: 'Okay, I will not write it.' });
+
+      deps.requestApproval.resolves('deny');
+
+      await loop.run('Write file', undefined, 'build', session, () => {}, () => {});
+
+      // Feedback is passed into the NEXT round's messages, not persisted to session.history.
+      // Check the messages array received by the second streamChatWithCallback call.
+      const secondCallMsgs: any[] = clientStub.streamChatWithCallback.secondCall.args[0];
+
+      const assistantMsg = secondCallMsgs.find((m: any) => m.role === 'assistant' && m.tool_calls);
+      expect(assistantMsg).to.exist;
+      expect(assistantMsg.tool_calls[0].function.name).to.equal('write_file');
+      expect(assistantMsg.tool_calls[0].id).to.equal('call_deny');
+
+      const toolMsg = secondCallMsgs.find((m: any) => m.role === 'tool');
+      expect(toolMsg).to.exist;
+      expect(toolMsg.tool_call_id).to.equal('call_deny');
+      expect(toolMsg.content).to.include('denied');
+    });
+
+    it('heuristic denial passes role:assistant and role:user into next round (no role:tool)', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const toolCallJson = '{"tool":"write_file","args":{"path":"test.ts","content":"hi"}}';
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: toolCallJson })
+        .onSecondCall().resolves({ text: 'Okay.' });
+
+      sinon.stub(mcpParserModule, 'parseToolCall')
+        .onFirstCall().returns({ tool: 'write_file', args: { path: 'test.ts', content: 'hi' }, raw: toolCallJson })
+        .onSecondCall().returns(null);
+
+      deps.requestApproval.resolves('deny');
+
+      await loop.run('Write file', undefined, 'build', session, () => {}, () => {});
+
+      const secondCallMsgs: any[] = clientStub.streamChatWithCallback.secondCall.args[0];
+      expect(secondCallMsgs.find((m: any) => m.role === 'tool')).to.be.undefined;
+      const userDenial = secondCallMsgs.find((m: any) => m.role === 'user' && m.content?.includes('denied'));
+      expect(userDenial).to.exist;
+    });
+
+    it('native unknown-tool feedback passes role:tool with tool_call_id into next round', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const unknownTc = { id: 'call_unknown', name: 'nonexistent_tool', args: {} };
+
+      // Two rounds of unknown tool → consecutiveNoOp hits 2 → loop breaks
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: unknownTc })
+        .onSecondCall().resolves({ text: '', toolCall: unknownTc })
+        .resolves({ text: 'I cannot help.' });
+
+      await loop.run('Do something', undefined, 'build', session, () => {}, () => {});
+
+      // The second round's messages should include the role:tool feedback from the first unknown-tool round
+      const secondCallMsgs: any[] = clientStub.streamChatWithCallback.secondCall.args[0];
+      const toolFeedback = secondCallMsgs.find((m: any) => m.role === 'tool' && m.content?.includes('does not exist'));
+      expect(toolFeedback).to.exist;
+      expect(toolFeedback.tool_call_id).to.equal('call_unknown');
     });
   });
 });

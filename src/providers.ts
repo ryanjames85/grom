@@ -18,9 +18,12 @@ export type AuthType = 'bearer' | 'x-api-key' | 'none';
 export type ProviderFormat = 'ollama' | 'openai' | 'anthropic';
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
-  images?: string[]; // base64-encoded image data
+  images?: string[];        // base64-encoded image data
+  tool_call_id?: string;    // set on role:'tool' messages (native tool result feedback)
+  /** OpenAI-format tool_calls — set on the assistant message that triggered the tool call */
+  tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
 }
 
 export interface ModelCapabilities {
@@ -29,10 +32,27 @@ export interface ModelCapabilities {
   tools: boolean;
 }
 
+/** A tool definition forwarded to the provider when native tool calling is available. */
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, any>; // JSON Schema object
+}
+
+/** Returned by streamChat. toolCall is populated when the provider handled the call natively. */
+export interface ToolCallResult {
+  text: string;
+  toolCall?: { id: string; name: string; args: Record<string, any> };
+}
+
+// Monotonic counter for tool call IDs — avoids Date.now() collisions on rapid sequential calls
+let _toolCallSeq = 0;
+function nextToolCallId(prefix: string): string { return `${prefix}-${++_toolCallSeq}`; }
+
 export interface ILLMProvider {
   getModels(signal?: AbortSignal): Promise<string[]>;
   getCapabilities(model: string, signal?: AbortSignal): Promise<ModelCapabilities>;
-  streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean): Promise<string>;
+  streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean, tools?: ToolDefinition[]): Promise<ToolCallResult>;
   chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string>;
 }
 
@@ -76,22 +96,30 @@ export class OllamaProvider implements ILLMProvider {
     } catch { return { vision: false, reasoning: false, tools: false }; }
   }
 
-  async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean): Promise<string> {
-    const ollamaMessages = messages.map(msg => ({
-      role: msg.role, content: msg.content,
-      ...(msg.images?.length ? { images: msg.images } : {})
-    }));
-    const res = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: ollamaMessages, stream: true, ...(jsonMode ? { format: 'json' } : {}) }),
-      signal
+  async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean, tools?: ToolDefinition[]): Promise<ToolCallResult> {
+    const ollamaMessages = messages.map(msg => {
+      const base: any = { role: msg.role, content: msg.content };
+      if (msg.images?.length) base.images = msg.images;
+      if (msg.tool_calls) base.tool_calls = msg.tool_calls;
+      return base;
     });
+
+    const body: any = { model, messages: ollamaMessages, stream: true };
+    if (jsonMode) body.format = 'json';
+    // Layer 2: pass tools array — Ollama supports OpenAI-style tool calling for capable models
+    if (tools?.length) {
+      body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
+    }
+
+    const res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
     if (!res.ok) throw new Error(parseHttpError(await res.text()));
-    if (!res.body) return '';
+    if (!res.body) return { text: '' };
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '', buffer = '';
+    let nativeToolCall: ToolCallResult['toolCall'] | undefined;
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -100,17 +128,26 @@ export class OllamaProvider implements ILLMProvider {
       buffer = lines.pop() || '';
       for (const line of lines) {
         if (!line.trim()) continue;
-        try { const j = JSON.parse(line); if (j.message?.content) { onChunk(j.message.content); fullText += j.message.content; } } catch {}
+        try {
+          const j = JSON.parse(line);
+          if (j.message?.content) { onChunk(j.message.content); fullText += j.message.content; }
+          // Layer 2: Ollama returns tool_calls as objects with function.arguments already parsed
+          if (j.message?.tool_calls?.length && !nativeToolCall) {
+            const tc = j.message.tool_calls[0];
+            nativeToolCall = {
+              id: nextToolCallId('ollama'),
+              name: tc.function?.name || '',
+              args: tc.function?.arguments || {}
+            };
+          }
+        } catch {}
       }
     }
-    return fullText;
+    return { text: fullText, toolCall: nativeToolCall };
   }
 
   async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
-    const ollamaMessages = messages.map(msg => ({
-      role: msg.role, content: msg.content,
-      ...(msg.images?.length ? { images: msg.images } : {})
-    }));
+    const ollamaMessages = messages.map(msg => ({ role: msg.role, content: msg.content, ...(msg.images?.length ? { images: msg.images } : {}) }));
     const res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: ollamaMessages, stream: false }), signal });
     if (!res.ok) throw new Error(parseHttpError(await res.text()));
     const data: any = await res.json();
@@ -204,23 +241,57 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     } catch { return nameBased; }
   }
 
-  async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, _jsonMode?: boolean): Promise<string> {
-    const formattedMessages = messages.map(msg =>
-      msg.images?.length
-        ? { role: msg.role, content: [{ type: 'text', text: msg.content }, ...msg.images.map(img => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${img}` } }))] }
-        : msg
-    );
-    const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...this.authHeader },
-      body: JSON.stringify({ model, messages: formattedMessages, stream: true }),
-      signal
+  async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, _jsonMode?: boolean, tools?: ToolDefinition[]): Promise<ToolCallResult> {
+    const formattedMessages = messages.map(msg => {
+      if (msg.role === 'tool') {
+        // Native tool result — OpenAI format. tool_call_id is required; a missing one means
+        // a bug in the calling code (buildFeedback always sets it from nativeTc.id).
+        if (!msg.tool_call_id) throw new Error('tool_call_id is required on role:tool messages');
+        return { role: 'tool', content: msg.content, tool_call_id: msg.tool_call_id };
+      }
+      if (msg.tool_calls) {
+        // Assistant message that triggered a tool call — must include tool_calls array
+        return { role: msg.role, content: msg.content, tool_calls: msg.tool_calls };
+      }
+      if (msg.images?.length) {
+        return { role: msg.role, content: [{ type: 'text', text: msg.content }, ...msg.images.map(img => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${img}` } }))] };
+      }
+      return { role: msg.role, content: msg.content };
     });
-    if (!res.ok) throw new Error(parseHttpError(await res.text()));
-    if (!res.body) return '';
+
+    const body: any = { model, messages: formattedMessages, stream: true };
+    // Layer 1: send tools array — provider returns structured tool_calls instead of free-form text
+    if (tools?.length) {
+      body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
+    }
+
+    let res = await fetch(`${this.baseUrl}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...this.authHeader }, body: JSON.stringify(body), signal });
+    // If the server rejected the request and tools were included, retry without them.
+    // Some older/custom OpenAI-compat servers return 400 on unknown fields — this prevents regression.
+    if (!res.ok && body.tools) {
+      const errText = await res.text();
+      const lower = errText.toLowerCase();
+      // Only retry without tools on explicit 400s that mention tools/functions — not auth, quota, or generic errors.
+      // Broad keywords like 'unknown'/'invalid' would swallow real server errors (e.g. 503 "Service temporarily invalid").
+      const isToolRejection = res.status === 400 && (lower.includes('tool') || lower.includes('function'));
+      if (isToolRejection) {
+        delete body.tools;
+        res = await fetch(`${this.baseUrl}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...this.authHeader }, body: JSON.stringify(body), signal });
+        if (!res.ok) throw new Error(parseHttpError(await res.text()));
+      } else {
+        throw new Error(parseHttpError(errText));
+      }
+    } else if (!res.ok) {
+      throw new Error(parseHttpError(await res.text()));
+    }
+    if (!res.body) return { text: '' };
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '', buffer = '';
+    // Accumulate tool_call deltas — arguments stream in chunks that must be concatenated
+    const accTC = new Map<number, { id: string; name: string; args: string }>();
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -232,10 +303,35 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         if (!clean.startsWith('data: ')) continue;
         const jsonStr = clean.slice(6).trim();
         if (jsonStr === '[DONE]') continue;
-        try { const j = JSON.parse(jsonStr); const c = j.choices?.[0]?.delta?.content; if (c) { onChunk(c); fullText += c; } } catch {}
+        try {
+          const j = JSON.parse(jsonStr);
+          const delta = j.choices?.[0]?.delta;
+          if (delta?.content) { onChunk(delta.content); fullText += delta.content; }
+          // Layer 1: accumulate streaming tool_calls deltas
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx: number = tc.index ?? 0;
+              if (!accTC.has(idx)) accTC.set(idx, { id: '', name: '', args: '' });
+              const entry = accTC.get(idx)!;
+              if (tc.id) entry.id = tc.id;
+              if (tc.function?.name) entry.name += tc.function.name;
+              if (tc.function?.arguments) entry.args += tc.function.arguments;
+            }
+          }
+        } catch {}
       }
     }
-    return fullText;
+
+    // If any tool_calls were accumulated, return the first one as a native tool call
+    if (accTC.size > 0) {
+      const first = accTC.get(0)!;
+      try {
+        const args = JSON.parse(first.args || '{}');
+        return { text: fullText, toolCall: { id: first.id || nextToolCallId('call'), name: first.name, args } };
+      } catch { /* malformed args — fall through to text path so heuristic parser gets a chance */ }
+    }
+
+    return { text: fullText };
   }
 
   async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
@@ -288,32 +384,47 @@ export class AnthropicProvider implements ILLMProvider {
     };
   }
 
-  async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal): Promise<string> {
+  async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, _jsonMode?: boolean, tools?: ToolDefinition[]): Promise<ToolCallResult> {
     const system = messages.find(m => m.role === 'system')?.content;
-    const body: any = {
-      model,
-      max_tokens: 8096,
-      messages: messages.filter(m => m.role !== 'system').map(msg =>
-        msg.images?.length
-          ? { role: msg.role, content: [{ type: 'text', text: msg.content }, ...msg.images.map(img => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: img } }))] }
-          : { role: msg.role, content: msg.content }
-      ),
-      stream: true
-    };
-    if (system) body.system = system;
 
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...this.authHeader },
-      body: JSON.stringify(body),
-      signal
+    // Convert messages to Anthropic format — tool results use content arrays, not role:'tool'
+    const anthropicMessages = messages.filter(m => m.role !== 'system').map(msg => {
+      if (msg.role === 'tool') {
+        // Anthropic tool results must be role:'user' with a tool_result content block
+        return { role: 'user', content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id || '', content: msg.content }] };
+      }
+      if (msg.tool_calls) {
+        // Assistant message that triggered a tool call — wrap in content array with tool_use block
+        return {
+          role: 'assistant',
+          content: msg.tool_calls.map(tc => ({
+            type: 'tool_use', id: tc.id, name: tc.function.name,
+            input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })()
+          }))
+        };
+      }
+      if (msg.images?.length) {
+        return { role: msg.role, content: [{ type: 'text', text: msg.content }, ...msg.images.map(img => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: img } }))] };
+      }
+      return { role: msg.role, content: msg.content };
     });
+
+    const body: any = { model, max_tokens: 8096, messages: anthropicMessages, stream: true };
+    if (system) body.system = system;
+    // Layer 1 (Anthropic native): tools use input_schema instead of parameters
+    if (tools?.length) {
+      body.tools = tools.map(t => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
+    }
+
+    const res = await fetch(`${this.baseUrl}/v1/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...this.authHeader }, body: JSON.stringify(body), signal });
     if (!res.ok) throw new Error(parseHttpError(await res.text()));
-    if (!res.body) return '';
+    if (!res.body) return { text: '' };
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '', buffer = '';
+    let toolUse: { id: string; name: string; inputJson: string } | undefined;
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -326,28 +437,38 @@ export class AnthropicProvider implements ILLMProvider {
         try {
           const j = JSON.parse(clean.slice(6));
           if (j.type === 'content_block_delta' && j.delta?.type === 'text_delta') { onChunk(j.delta.text); fullText += j.delta.text; }
+          // Layer 1 (Anthropic): tool_use blocks arrive as content_block_start/delta/stop
+          if (j.type === 'content_block_start' && j.content_block?.type === 'tool_use') {
+            toolUse = { id: j.content_block.id, name: j.content_block.name, inputJson: '' };
+          }
+          if (j.type === 'content_block_delta' && j.delta?.type === 'input_json_delta' && toolUse) {
+            toolUse.inputJson += j.delta.partial_json || '';
+          }
         } catch {}
       }
     }
-    return fullText;
+
+    if (toolUse) {
+      try {
+        const args = JSON.parse(toolUse.inputJson || '{}');
+        return { text: fullText, toolCall: { id: toolUse.id, name: toolUse.name, args } };
+      } catch {}
+    }
+    return { text: fullText };
   }
 
   async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
     const system = messages.find(m => m.role === 'system')?.content;
     const body: any = {
-      model,
-      max_tokens: 8096,
-      messages: messages.filter(m => m.role !== 'system').map(msg => ({ role: msg.role, content: msg.content })),
-      stream: false
+      model, max_tokens: 8096, stream: false,
+      messages: messages.filter(m => m.role !== 'system').map(msg => {
+        if (msg.role === 'tool') return { role: 'user', content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id || '', content: msg.content }] };
+        if (msg.tool_calls) return { role: 'assistant', content: msg.tool_calls.map(tc => ({ type: 'tool_use', id: tc.id, name: tc.function.name, input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })() })) };
+        return { role: msg.role, content: msg.content };
+      })
     };
     if (system) body.system = system;
-
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...this.authHeader },
-      body: JSON.stringify(body),
-      signal
-    });
+    const res = await fetch(`${this.baseUrl}/v1/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...this.authHeader }, body: JSON.stringify(body), signal });
     if (!res.ok) throw new Error(parseHttpError(await res.text()));
     const data: any = await res.json();
     return data.content?.[0]?.text || '';

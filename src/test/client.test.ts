@@ -427,7 +427,7 @@ describe('LocalLLMClient', () => {
     const lines = [JSON.stringify({ message: { content: 'done' } }) + '\n'];
     fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
     const result = await client.streamChatWithCallback([], () => {});
-    expect(result).to.equal('done');
+    expect(result.text).to.equal('done');
   });
 
   it('throws when Ollama stream returns non-ok', async () => {
@@ -529,7 +529,7 @@ describe('LocalLLMClient', () => {
     const client = new LocalLLMClient('http://localhost:11434', 'llama3', true);
     fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
     const result = await client.streamChatWithCallback([], () => {});
-    expect(result).to.equal('');
+    expect(result.text).to.equal('');
   });
 
   it('handles malformed JSON chunks gracefully (does not throw)', async () => {
@@ -548,7 +548,7 @@ describe('LocalLLMClient', () => {
     ];
     fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
     const result = await client.streamChatWithCallback([], () => {});
-    expect(result).to.equal('');
+    expect(result.text).to.equal('');
   });
 
   it('returns empty array from getAvailableModels when response has no models field', async () => {
@@ -593,6 +593,122 @@ describe('LocalLLMClient', () => {
       await client.getAvailableModels();
       const headers = fetchStub.lastCall.args[1].headers;
       expect(headers['Authorization']).to.be.undefined;
+    });
+  });
+
+  // --- Native tool calling ---
+
+  describe('native tool calling — OpenAI-compat', () => {
+    const makeToolCallSSE = (name: string, args: Record<string, any>) => [
+      'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_abc', type: 'function', function: { name, arguments: '' } }] } }] }) + '\n',
+      'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }] } }] }) + '\n',
+      'data: [DONE]\n',
+    ];
+
+    it('returns toolCall when SSE contains tool_calls delta', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(makeToolCallSSE('read_file', { path: 'foo.ts' })) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'reads a file', inputSchema: {} }]);
+      expect(result.toolCall).to.exist;
+      expect(result.toolCall!.name).to.equal('read_file');
+      expect(result.toolCall!.args).to.deep.equal({ path: 'foo.ts' });
+      expect(result.toolCall!.id).to.equal('call_abc');
+    });
+
+    it('sends tools array in request body', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      const tools = [{ name: 'read_file', description: 'read', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }];
+      await client.streamChatWithCallback([], () => {}, undefined, false, tools);
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.tools).to.be.an('array').with.lengthOf(1);
+      expect(body.tools[0].type).to.equal('function');
+      expect(body.tools[0].function.name).to.equal('read_file');
+    });
+
+    it('returns no toolCall when SSE has only content', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false);
+      const lines = ['data: ' + JSON.stringify({ choices: [{ delta: { content: 'Hello' } }] }) + '\n', 'data: [DONE]\n'];
+      fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(result.toolCall).to.be.undefined;
+      expect(result.text).to.equal('Hello');
+    });
+
+    it('retries without tools on 400 rejection', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false);
+      fetchStub.onFirstCall().resolves({ ok: false, status: 400, text: async () => 'unknown field: tools' } as any);
+      fetchStub.onSecondCall().resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(fetchStub.callCount).to.equal(2);
+      const retryBody = JSON.parse(fetchStub.secondCall.args[1].body);
+      expect(retryBody.tools).to.be.undefined;
+      expect(result.text).to.equal('');
+    });
+
+    it('does NOT retry on 401 auth error', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false);
+      fetchStub.resolves({ ok: false, status: 401, text: async () => 'unauthorized' } as any);
+      try {
+        await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+        expect.fail('should have thrown');
+      } catch (e: any) {
+        expect(fetchStub.callCount).to.equal(1);
+        expect(e.message).to.include('unauthorized');
+      }
+    });
+
+    it('accumulates chunked tool_call arguments', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false);
+      const lines = [
+        'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'write_file', arguments: '{"pat' } }] } }] }) + '\n',
+        'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'h":"foo.ts"}' } }] } }] }) + '\n',
+        'data: [DONE]\n',
+      ];
+      fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
+      const result = await client.streamChatWithCallback([], () => {});
+      expect(result.toolCall!.args).to.deep.equal({ path: 'foo.ts' });
+    });
+
+    it('formats role:tool messages with tool_call_id', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gpt-4', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      const messages: any[] = [{ role: 'tool', content: 'file contents', tool_call_id: 'call_abc' }];
+      await client.streamChatWithCallback(messages, () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.messages[0].role).to.equal('tool');
+      expect(body.messages[0].tool_call_id).to.equal('call_abc');
+    });
+  });
+
+  describe('native tool calling — Ollama', () => {
+    it('returns toolCall when response has message.tool_calls', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder', true);
+      const chunk = JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'read_file', arguments: { path: 'test.ts' } } }] } }) + '\n';
+      fetchStub.resolves({ ok: true, body: makeStreamBody([chunk]) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(result.toolCall).to.exist;
+      expect(result.toolCall!.name).to.equal('read_file');
+      expect(result.toolCall!.args).to.deep.equal({ path: 'test.ts' });
+    });
+
+    it('sends tools array in Ollama request body', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder', true);
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      const tools = [{ name: 'read_file', description: 'r', inputSchema: { type: 'object' } }];
+      await client.streamChatWithCallback([], () => {}, undefined, false, tools);
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.tools).to.be.an('array').with.lengthOf(1);
+      expect(body.tools[0].function.name).to.equal('read_file');
+    });
+
+    it('returns text with no toolCall when model answers in prose', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'llama3', true);
+      const chunk = JSON.stringify({ message: { content: 'Here is my answer.' } }) + '\n';
+      fetchStub.resolves({ ok: true, body: makeStreamBody([chunk]) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(result.toolCall).to.be.undefined;
+      expect(result.text).to.equal('Here is my answer.');
     });
   });
 
@@ -673,7 +789,7 @@ describe('LocalLLMClient', () => {
       const chunks: string[] = [];
       const result = await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], (c) => chunks.push(c));
       expect(chunks).to.deep.equal(['Hello', ' world']);
-      expect(result).to.equal('Hello world');
+      expect(result.text).to.equal('Hello world');
     });
 
     it('ignores non-text-delta SSE events', async () => {
@@ -728,6 +844,50 @@ describe('LocalLLMClient', () => {
       } catch (e: any) {
         expect(e.message).to.include('invalid api key');
       }
+    });
+
+    it('returns toolCall from tool_use SSE blocks', async () => {
+      const client = anthropicClient();
+      const lines = [
+        'data: ' + JSON.stringify({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_01', name: 'read_file', input: {} } }) + '\n',
+        'data: ' + JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":' } }) + '\n',
+        'data: ' + JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"foo.ts"}' } }) + '\n',
+        'data: ' + JSON.stringify({ type: 'content_block_stop', index: 1 }) + '\n',
+      ];
+      fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
+      const result = await client.streamChatWithCallback([{ role: 'user', content: 'read foo' }], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(result.toolCall).to.exist;
+      expect(result.toolCall!.id).to.equal('toolu_01');
+      expect(result.toolCall!.name).to.equal('read_file');
+      expect(result.toolCall!.args).to.deep.equal({ path: 'foo.ts' });
+    });
+
+    it('sends tools with input_schema in Anthropic format', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      const tools = [{ name: 'read_file', description: 'read a file', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }];
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, tools);
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.tools).to.be.an('array').with.lengthOf(1);
+      expect(body.tools[0].name).to.equal('read_file');
+      expect(body.tools[0].input_schema).to.deep.equal(tools[0].inputSchema);
+      expect(body.tools[0].parameters).to.be.undefined;
+    });
+
+    it('converts role:tool messages to Anthropic tool_result format', async () => {
+      const client = anthropicClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      const messages: any[] = [
+        { role: 'user', content: 'run something' },
+        { role: 'tool', content: 'file contents here', tool_call_id: 'toolu_01' },
+      ];
+      await client.streamChatWithCallback(messages, () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const toolResult = body.messages.find((m: any) => m.role === 'user' && Array.isArray(m.content));
+      expect(toolResult).to.exist;
+      expect(toolResult.content[0].type).to.equal('tool_result');
+      expect(toolResult.content[0].tool_use_id).to.equal('toolu_01');
+      expect(toolResult.content[0].content).to.equal('file contents here');
     });
 
     it('throws on non-ok chat response', async () => {

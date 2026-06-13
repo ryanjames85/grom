@@ -47,12 +47,13 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
   (text) => {
     const fence = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
     if (!fence) return null;
-    try {
-      const obj = JSON.parse(fence[1].trim());
-      const name = obj.tool ?? obj.name ?? obj.function;
-      const args = obj.args ?? obj.arguments ?? obj.parameters ?? obj.input ?? {};
-      if (typeof name === 'string' && name.length > 0) return { tool: name, args: args || {}, raw: fence[0] };
-    } catch {}
+    const raw = fence[1].trim();
+    const tryParse = (s: string) => { try { return JSON.parse(s); } catch { return null; } };
+    const obj = tryParse(raw) ?? tryParse(raw.replace(/\\(?!["\\/bfnrtu])/g, '\\\\'));
+    if (!obj) return null;
+    const name = obj.tool ?? obj.name ?? obj.function;
+    const args = obj.args ?? obj.arguments ?? obj.parameters ?? obj.input ?? {};
+    if (typeof name === 'string' && name.length > 0) return { tool: name, args: args || {}, raw: fence[0] };
     return null;
   },
 
@@ -195,7 +196,14 @@ export function extractJsonObjects(text: string): any[] {
       if (c === '}') { depth--; if (depth === 0) break; }
     }
     if (depth === 0) {
-      try { results.push(JSON.parse(text.slice(i, j + 1))); } catch {}
+      const slice = text.slice(i, j + 1);
+      try {
+        results.push(JSON.parse(slice));
+      } catch {
+        // Models on Windows often emit unescaped backslashes in paths (e.g. ".\setup.ps1").
+        // \s, \., etc. are invalid JSON escape sequences — sanitise and retry once.
+        try { results.push(JSON.parse(slice.replace(/\\(?!["\\/bfnrtu])/g, '\\\\'))); } catch {}
+      }
     }
     i = j + 1;
   }
@@ -207,6 +215,15 @@ export function extractJsonObjects(text: string): any[] {
  * Appended to the existing system message so the model knows the tool list and output format.
  * Returns an empty string when no tools are available so the model isn't confused.
  */
+/** Strips characters from MCP-server-supplied strings that could break prompt structure. */
+function sanitiseField(raw: string, maxLen = 200): string {
+  return (raw ?? '')
+    .slice(0, maxLen)
+    .replace(/[\r\n]+/g, ' ')   // newlines can escape the bullet-point format
+    .replace(/[`"']/g, '')       // quote chars used in prompt-injection patterns
+    .trim();
+}
+
 export function buildToolSystemPrompt(tools: McpTool[]): string {
   if (tools.length === 0) return '';
   const list = tools.map(t => {
@@ -214,9 +231,9 @@ export function buildToolSystemPrompt(tools: McpTool[]): string {
     const required: string[] = t.inputSchema?.required ?? [];
     const params = Object.entries(props).map(([k, v]: [string, any]) => {
       const req = required.includes(k) ? ' (required)' : ' (optional)';
-      return `    - ${k}${req}: ${v.description || v.type || 'any'}`;
+      return `    - ${sanitiseField(k, 40)}${req}: ${sanitiseField(v.description || v.type || 'any', 100)}`;
     }).join('\n');
-    return `• ${t.name}\n  ${t.description}${params ? '\n  Parameters:\n' + params : ''}`;
+    return `• ${sanitiseField(t.name, 60)}\n  ${sanitiseField(t.description)}${params ? '\n  Parameters:\n' + params : ''}`;
   }).join('\n\n');
 
   return `\n\n---\nYOU HAVE TOOLS AVAILABLE. When a task requires fetching data, reading files, or any action a tool can perform, you MUST call it — do not guess or make up results.\n\nTo call a tool, output ONLY a JSON object in this exact format (nothing else on that turn):\n{"tool":"<tool_name>","args":{"param":"value"}}\n\nAvailable tools:\n${list}\n\nAfter you receive the tool result, continue your response. If no tool is needed, respond normally.`;

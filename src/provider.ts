@@ -57,6 +57,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _suppressNextConfigReload = false;
   private _pendingApprovals = new Map<string, (result: 'allow' | 'allowAll' | 'deny') => void>();
   private _isStreaming = false;
+  // Promise chain that serialises _handleChat calls — new messages wait for the previous
+  // one to finish rather than running concurrently and corrupting session history.
+  private _chatQueue: Promise<void> = Promise.resolve();
   private _detectedContextLength: number | null = null;
   private _contextHintSent = new Set<string>(); // session IDs that have already received a context hint
   private _docsHintSent = new Set<string>();   // session IDs that have already received the @docs hint
@@ -74,11 +77,11 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     const initialSessions = this._context.workspaceState.get<Record<string, ChatSession>>('sessions', {
       'default': { id: 'default', title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled: false }
     });
-    // Migration: sessions persisted before v0.3.7 have no agentEnabled field.
-    // Only sessions with actual history had tools active; empty sessions get the new default-off.
+    // Migration: sessions persisted before agentEnabled existed get it defaulted to false (tools off).
+    // Plain chat stays the default; user enables ⚡ Tools per session when they want it.
     for (const session of Object.values(initialSessions)) {
       if (session.agentEnabled === undefined) {
-        session.agentEnabled = (session.history?.length ?? 0) > 0;
+        session.agentEnabled = false;
       }
     }
     const lastSessionId = this._context.workspaceState.get<string>('lastSessionId', 'default');
@@ -228,7 +231,12 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             if (ph.length > 50) ph.shift();
             void this._context.globalState.update('promptHistory', ph);
           }
-          await this._handleChat(data.text, data.images, data.mode);
+          // Serialise through the queue — if a previous message is still streaming,
+          // this one waits for it to fully complete before starting. Prevents two
+          // concurrent runs from interleaving writes to session.history.
+          this._chatQueue = this._chatQueue.then(() =>
+            this._handleChat(data.text, data.images, data.mode)
+          );
           break;
         }
         case 'abort': this._agentLoop.abort(); break;
@@ -460,12 +468,16 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           reply.postMessage({ type: 'fileList', files: allFiles });
           break;
         }
-        case 'changeModel':
+        case 'changeModel': {
           await vscode.workspace.getConfiguration('grom').update('model', data.model, vscode.ConfigurationTarget.Global);
-          this._sessionManager.getCurrentSession().model = data.model;
+          const sess = this._sessionManager.getCurrentSession();
+          sess.model = data.model;
+          // Reset native tool calling cache — the new model may not support it
+          sess.nativeToolsWorked = false;
           this._saveState();
           await this._checkConnection();
           break;
+        }
         case 'changeProvider': {
           const cfg = vscode.workspace.getConfiguration('grom');
           let newUrl: string;
@@ -534,6 +546,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           }
           await cfg.update('useOllamaFormat', isOllama, vscode.ConfigurationTarget.Global);
           await cfg.update('apiUrl', newUrl, vscode.ConfigurationTarget.Global);
+          // Clear native tool calling cache — the new provider may behave differently
+          const current = this._sessionManager.getCurrentSession();
+          if (current) { current.nativeToolsWorked = false; this._saveState(); }
           await this._checkConnection(newUrl, data.model || 'qwen2.5-coder', isOllama);
           break;
         }
@@ -740,13 +755,11 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _createNewSession() {
     const current = this._sessionManager.getCurrentSession();
     if (!this._isStreaming && current.history.length === 0 && current.title === 'Untitled') {
-      // Current session is already blank — just reload to snap back to it
       this._loadAllSessions(true);
       return;
     }
     if (this._isStreaming) { this._agentLoop.silentAbort(); }
-    const toolsDefault = vscode.workspace.getConfiguration('grom').get<boolean>('toolsEnabledByDefault', false);
-    this._sessionManager.createNewSession(toolsDefault);
+    this._sessionManager.createNewSession();
     this._saveState();
     this._loadAllSessions(true);
   }
@@ -770,8 +783,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _deleteSession(id: string) {
-    const toolsDefault = vscode.workspace.getConfiguration('grom').get<boolean>('toolsEnabledByDefault', false);
-    this._sessionManager.deleteSession(id, toolsDefault);
+    this._sessionManager.deleteSession(id);
     this._contextHintSent.delete(id);
     this._docsHintSent.delete(id);
     this._saveState();

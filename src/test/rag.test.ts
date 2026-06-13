@@ -580,4 +580,70 @@ describe('RagIndex incremental re-indexing', () => {
       sinon.restore();
     }
   });
+
+  it('force=true during active build is queued and executed after current build finishes', async () => {
+    // Use an embedding config so build() has an await point — creates a real async gap
+    // where the second build() call arrives before the first completes.
+    const fetchStub = sinon.stub(global, 'fetch' as any);
+    fetchStub.resolves({ ok: true, json: async () => ({ embeddings: [[0.1, 0.2, 0.3]] }) });
+    try {
+      const idx = new RagIndex();
+      const embConfig = { model: 'nomic-embed-text', apiUrl: 'http://localhost:11434' };
+      const firstFiles = [{ path: 'a.ts', content: 'function alphaHandler(req: Request) { return req.body; }' }];
+      const secondFiles = [{ path: 'b.ts', content: 'function betaProcessor(input: string) { return input.trim(); }' }];
+
+      // Start first build — it awaits _embedChunks internally, creating the async gap
+      const first = idx.build(firstFiles, embConfig);
+      // Fire force rebuild immediately while first is suspended at await
+      idx.build(secondFiles, undefined, true);
+
+      // await first also waits for the queued rebuild (it's awaited inside the finally block)
+      await first;
+
+      expect(idx.query('betaProcessor')).to.include('b.ts');
+    } finally {
+      sinon.restore();
+    }
+  });
+
+  it('sets _pendingRebuild when force=true arrives while _indexing is true', () => {
+    const idx = new RagIndex();
+    const files = [{ path: 'b.ts', content: 'function beta() {}' }];
+
+    // Simulate active build by setting the flag directly
+    (idx as any)._indexing = true;
+    idx.build(files, undefined, true); // returns immediately but queues
+
+    expect((idx as any)._pendingRebuild).to.not.be.null;
+    expect((idx as any)._pendingRebuild.files[0].path).to.equal('b.ts');
+
+    (idx as any)._indexing = false; // clean up
+  });
+
+  it('only the last queued force rebuild runs (not stale ones)', async () => {
+    const fetchStub = sinon.stub(global, 'fetch' as any);
+    fetchStub.resolves({ ok: true, json: async () => ({ embeddings: [[0.1, 0.2, 0.3]] }) });
+    try {
+      const idx = new RagIndex();
+      const embConfig = { model: 'nomic-embed-text', apiUrl: 'http://localhost:11434' };
+      const firstFiles = [{ path: 'a.ts', content: 'function alphaHandler(req: Request) { return req.body; }' }];
+      // Unique gibberish tokens — no shared subwords between the two files so BM25 scores
+      // are exactly zero for the wrong file after the rebuild.
+      const staleFiles = [{ path: 'stale.ts', content: 'const XQPZBF42 = "xqpzbf42 vhglnw unique sentinel value"' }];
+      const latestFiles = [{ path: 'latest.ts', content: 'const RMDKJW99 = "rmdkjw99 tnspxv unique sentinel value"' }];
+
+      const first = idx.build(firstFiles, embConfig);
+      idx.build(staleFiles, undefined, true);   // queued, will be overwritten
+      idx.build(latestFiles, undefined, true);  // overwrites the stale pending entry
+
+      await first;
+
+      // 'rmdkjw99' only exists in latest.ts — should be indexed
+      expect(idx.query('rmdkjw99')).to.include('latest.ts');
+      // 'xqpzbf42' only exists in stale.ts — should NOT be indexed after latest rebuild
+      expect(idx.query('xqpzbf42')).to.equal('');
+    } finally {
+      sinon.restore();
+    }
+  });
 });

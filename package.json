@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Local-first agent harness for VS Code. Bring your own LLM — no cloud, no account, no telemetry. Your model, your machine, your rules.",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -376,11 +376,6 @@
           "type": "boolean",
           "default": true,
           "description": "Master switch for the agentic loop. When off, the ⚡ Tools toggle has no effect and no tools are ever injected. Disable to lock Grom to plain chat globally."
-        },
-        "grom.toolsEnabledByDefault": {
-          "type": "boolean",
-          "default": false,
-          "description": "Start every new session with ⚡ Tools enabled. Useful if you always work in agent mode and don't want to toggle it manually each time. Individual sessions can still override this."
         },
         "grom.agentMaxIterations": {
           "type": "number",

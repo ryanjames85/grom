@@ -46,8 +46,8 @@ His antenna tells you what's happening before you read a word:
 | ![Idle](resources/grom-idle.png) | Eyes closed, thought bubble *(animated)* | Idle — keeps model in VRAM; shows error count if active file has issues |
 | <img src="resources/grom-float-plan.png" width="140" alt="Float PLAN"> | Gold, riding a cloud | Floating window — PLAN mode detached from the sidebar |
 | <img src="resources/grom-float-build.png" width="140" alt="Float BUILD"> | Blue, riding a cloud | Floating window — BUILD mode detached from the sidebar |
-| <img src="resources/grom-mic-plan.png" width="80" alt="Mic PLAN"> | Gold, sound waves | Voice recording active — PLAN mode listening |
-| <img src="resources/grom-mic-build.png" width="80" alt="Mic BUILD"> | Blue, sound waves | Voice recording active — BUILD mode listening |
+| <img src="resources/grom-mic-plan.png" width="80" alt="Mic PLAN"> | Gold, mic icon | Voice recording active — PLAN mode listening |
+| <img src="resources/grom-mic-build.png" width="80" alt="Mic BUILD"> | Blue, mic icon | Voice recording active — BUILD mode listening |
 
 ---
 
@@ -137,7 +137,7 @@ Enable **⚡ Tools** in the toolbar (BUILD mode only) and Grom doesn't just repl
 | `run_terminal` | Run a shell command and return its output |
 | `browse_web` | Fetch a live web page and return its text content |
 
-> **Note on model size:** Tool call accuracy scales with model size. 32B+ models call tools reliably. Smaller models (1.5B–7B) occasionally write prose instead of a tool call. Grom handles this by re-prompting once when it detects prose where a tool call was expected, and enables structured JSON mode after the first tool use. For complex agentic tasks, 14B+ is significantly more reliable.
+> **Note on model size:** Tool call accuracy scales with model size. 32B+ local models call tools reliably. Smaller models (1.5B–7B) occasionally write prose instead of a tool call — Grom handles this by re-prompting once and enabling structured JSON mode after the first tool use. For complex agentic tasks, 14B+ is significantly more reliable. Capable Ollama models (qwen2.5, llama3.1, mistral) also support native structured tool calls — Grom detects this automatically and uses it when available.
 
 ### Documentation Sources
 
@@ -306,7 +306,6 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.robotAnimations` | Enable Grom's animations | `true` |
 | `grom.theme` | UI theme: Grom, Cyberpunk, Classic, High Contrast | `Grom` |
 | `grom.agentEnabled` | Master switch — disables tools globally when off | `true` |
-| `grom.toolsEnabledByDefault` | Start every new session with ⚡ Tools already on | `false` |
 | `grom.agentMaxIterations` | Max tool-call rounds per task | `20` |
 | `grom.fontSize` | Chat panel font size: `small`, `medium`, `large` | `medium` |
 | `grom.debugLogging` | Write diagnostics to the Grom Output channel | `false` |
@@ -341,12 +340,15 @@ OpenAI and Anthropic are built-in — select them from the provider dropdown. Us
 
 API keys are **never stored in settings files**. Grom prompts for a key the first time you select a provider that needs one, then stores it securely in the OS keychain (Windows Credential Manager / macOS Keychain / libsecret on Linux). Click the lock icon next to the provider dropdown at any time to update or clear a key.
 
+For custom providers you can also set an `apiKey` field directly in `grom.customProviders` — convenient if you manage settings declaratively, but keep that file out of source control.
+
 ```json
 [
   { "name": "OpenRouter", "url": "https://openrouter.ai/api" },
   { "name": "Together",   "url": "https://api.together.xyz" },
   { "name": "Local (no key)", "url": "http://127.0.0.1:8080", "authType": "none" },
-  { "name": "Claude proxy",   "url": "https://my-proxy.example.com", "providerFormat": "anthropic" }
+  { "name": "Claude proxy",   "url": "https://my-proxy.example.com", "providerFormat": "anthropic" },
+  { "name": "My Gemini",  "url": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKey": "AIza..." }
 ]
 ```
 
@@ -357,6 +359,7 @@ For most cloud providers, `name` and `url` are all you need. Optional fields:
 | `providerFormat` | `openai`, `anthropic` | `openai` | Only for a self-hosted Claude-compatible proxy |
 | `authType` | `bearer`, `x-api-key`, `none` | `bearer` | Set to `none` for keyless local servers |
 | `useOllamaFormat` | `true`, `false` | `false` | Only for servers using Ollama's `/api/chat` format |
+| `apiKey` | string | *(none)* | API key for cloud endpoints not in the built-in provider list |
 
 ### MCP Servers
 

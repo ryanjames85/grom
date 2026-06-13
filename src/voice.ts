@@ -263,9 +263,14 @@ export class VoiceManager {
   }
 
   private async _start() {
+    // Set state immediately — acts as a lock so a rapid second toggle() call sees 'recording'
+    // and calls _stop() instead of spawning a second ffmpeg process.
+    this._setState('recording');
+
     const ffmpegPath = findFfmpeg(this._context.globalStorageUri.fsPath);
     console.log('[grom voice] _start, ffmpegPath:', ffmpegPath);
     if (!ffmpegPath) {
+      this._setState('idle');
       this._post({ type: 'voiceNoFfmpeg' });
       return;
     }
@@ -274,19 +279,20 @@ export class VoiceManager {
     this._sentPcmLength = 0;
     resetDeviceCache();
 
-    const args = [
-      ...(await captureArgs(ffmpegPath)),
-      '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1',
-    ];
+    const captureArgList = await captureArgs(ffmpegPath);
+    // If _stop() was called during the async captureArgs() gap, bail — state is already 'idle'
+    if (this._state !== 'recording') return;
+
+    const args = [...captureArgList, '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1'];
 
     try {
       this._proc = cp.spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (e: any) {
+      this._setState('idle');
       this._post({ type: 'voiceError', message: `Failed to start ffmpeg: ${e.message}` });
       return;
     }
 
-    this._setState('recording');
     this._post({ type: 'voiceAudioStart' }); // tell webview to reset accumulator + start pipeline load
 
     // Auto-stop after 30s to avoid very long ONNX inference jobs freezing the UI

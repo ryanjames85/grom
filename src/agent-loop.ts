@@ -18,7 +18,7 @@
  */
 
 import * as vscode from 'vscode';
-import { LocalLLMClient, ChatMessage } from './client';
+import { LocalLLMClient, ChatMessage, ToolDefinition } from './client';
 import { McpManager, parseToolCall, buildToolSystemPrompt } from './mcp';
 import { BUILTIN_TOOLS, isBuiltinTool, executeBuiltinTool } from './builtin-tools';
 import { parseComposerResponse, applyComposerPatches } from './editor';
@@ -181,7 +181,7 @@ export class AgentLoop {
     // Simple stream — no tools configured, or plan mode (tools suppressed)
     if (!allTools.length || mode === 'plan') {
       try {
-        const fullText = await this._client.streamChatWithCallback(messagesForApi, (chunk) => {
+        const { text: fullText } = await this._client.streamChatWithCallback(messagesForApi, (chunk) => {
           this.deps.postMessage({ type: 'chunk', text: chunk });
         }, this._abortController.signal);
         if (isCompose) {
@@ -212,11 +212,39 @@ export class AgentLoop {
     // Agentic loop — tools available
     try {
       let toolMessages = [...messagesForApi];
-      const toolSuffix = buildToolSystemPrompt(allTools);
-      if (toolMessages[0]?.role === 'system') {
-        toolMessages[0] = { ...toolMessages[0], content: toolMessages[0].content + toolSuffix };
-      } else {
-        toolMessages = [{ role: 'system', content: toolSuffix.trimStart() }, ...toolMessages];
+
+      /**
+       * Builds the two-message feedback pair to append after a tool call outcome
+       * (denial, unknown tool, or successful execution).
+       * Native path: assistant message carries tool_calls + feedback as role:'tool'
+       * so the conversation stays valid for OpenAI / Anthropic / Ollama native APIs.
+       * Heuristic path: plain assistant + user messages (existing behaviour).
+       */
+      const buildFeedback = (
+        tc: { id: string; name: string; args: Record<string, any> } | undefined,
+        assistantText: string,
+        feedbackContent: string
+      ): [ChatMessage, ChatMessage] => {
+        if (tc) {
+          return [
+            { role: 'assistant', content: assistantText, tool_calls: [{ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) } }] },
+            { role: 'tool', content: feedbackContent, tool_call_id: tc.id }
+          ];
+        }
+        return [
+          { role: 'assistant', content: assistantText },
+          { role: 'user', content: feedbackContent }
+        ];
+      };
+      // Only inject text-based tool instructions when native tool calling hasn't been confirmed for
+      // this session. When native works, the provider handles tool descriptions via the tools array.
+      if (!session.nativeToolsWorked) {
+        const toolSuffix = buildToolSystemPrompt(allTools);
+        if (toolMessages[0]?.role === 'system') {
+          toolMessages[0] = { ...toolMessages[0], content: toolMessages[0].content + toolSuffix };
+        } else {
+          toolMessages = [{ role: 'system', content: toolSuffix.trimStart() }, ...toolMessages];
+        }
       }
 
       const MAX_ROUNDS = config.get<number>('agentMaxIterations', 20);
@@ -228,8 +256,13 @@ export class AgentLoop {
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (this._abortController.signal.aborted) break;
 
-        const { fullText, proseStreamed } = await this._streamWithToolDetection(toolMessages, toolCallMade);
-        const parsed = parseToolCall(fullText);
+        const result = await this._streamWithToolDetection(toolMessages, toolCallMade, allTools as ToolDefinition[]);
+        const fullText = result.text;
+        // Native tool call (Layer 1/2) takes priority; fall back to heuristic parser (Layer 5)
+        const nativeTc = result.toolCall;
+        const parsed = nativeTc
+          ? { tool: nativeTc.name, args: nativeTc.args, raw: '' }
+          : parseToolCall(fullText);
 
         if (!parsed) {
           // Model wrote prose without calling a tool — nudge it once, but ONLY on the very first
@@ -258,10 +291,7 @@ export class AgentLoop {
         if (!toolKnown) {
           consecutiveNoOp++;
           if (consecutiveNoOp >= 2) break;
-          toolMessages = [...toolMessages,
-            { role: 'assistant', content: fullText },
-            { role: 'user', content: `Tool "${parsed.tool}" does not exist. Available: ${allTools.map(t => t.name).join(', ')}. Try again or answer without tools.` }
-          ];
+          toolMessages = [...toolMessages, ...buildFeedback(nativeTc, fullText, `Tool "${parsed.tool}" does not exist. Available: ${allTools.map(t => t.name).join(', ')}. Try again or answer without tools.`)];
           continue;
         }
         consecutiveNoOp = 0;
@@ -276,10 +306,7 @@ export class AgentLoop {
           if (signal.aborted) break;
           if (decision === 'allowAll') { trustAll = true; }
           if (decision === 'deny') {
-            toolMessages = [...toolMessages,
-              { role: 'assistant', content: fullText },
-              { role: 'user', content: `The user denied \`${parsed.tool}\`. Do not retry this action. Ask the user what they'd like to do instead, or try a different approach.` }
-            ];
+            toolMessages = [...toolMessages, ...buildFeedback(nativeTc, fullText, `The user denied \`${parsed.tool}\`. Do not retry this action. Ask the user what they'd like to do instead, or try a different approach.`)];
             this.deps.postMessage({ type: 'toolDenied', tool: parsed.tool });
             continue;
           }
@@ -301,17 +328,30 @@ export class AgentLoop {
         toolCallMade = true;
 
         // Update permanent history so follow-up turns have context of what was done
-        session.history.push({ role: 'assistant', content: fullText });
-        session.history.push({ role: 'user', content: `Tool \`${parsed.tool}\` returned:\n\`\`\`\n${rawResult}\n\`\`\`` });
+        if (nativeTc) {
+          // Native path: use proper role:'tool' feedback so the provider's conversation format stays valid
+          session.nativeToolsWorked = true;
+          const assistantMsg: ChatMessage = {
+            role: 'assistant', content: fullText,
+            tool_calls: [{ id: nativeTc.id, type: 'function', function: { name: nativeTc.name, arguments: JSON.stringify(nativeTc.args) } }]
+          };
+          const toolResultMsg: ChatMessage = { role: 'tool', content: rawResult, tool_call_id: nativeTc.id };
+          session.history.push(assistantMsg);
+          session.history.push(toolResultMsg);
+          toolMessages = [...toolMessages, assistantMsg, toolResultMsg];
+        } else {
+          // Heuristic path: wrap result in a user message so any model can understand it
+          session.history.push({ role: 'assistant', content: fullText });
+          session.history.push({ role: 'user', content: `Tool \`${parsed.tool}\` returned:\n\`\`\`\n${rawResult}\n\`\`\`` });
+          toolMessages = [...toolMessages,
+            { role: 'assistant', content: fullText },
+            { role: 'user', content: `Tool \`${parsed.tool}\` returned:\n\`\`\`\n${rawResult}\n\`\`\`` }
+          ];
+        }
         session.tokens.output += fullText.length / 4;
         session.tokens.input += rawResult.length / 4;
         saveState();
         updateUsageDisplay();
-
-        toolMessages = [...toolMessages,
-          { role: 'assistant', content: fullText },
-          { role: 'user', content: `Tool \`${parsed.tool}\` returned:\n\`\`\`\n${rawResult}\n\`\`\`` }
-        ];
       }
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
@@ -336,13 +376,14 @@ export class AgentLoop {
    */
   private async _streamWithToolDetection(
     messages: ChatMessage[],
-    jsonMode = false
-  ): Promise<{ fullText: string; proseStreamed: boolean }> {
+    jsonMode = false,
+    tools?: ToolDefinition[]
+  ): Promise<{ text: string; toolCall?: { id: string; name: string; args: Record<string, any> }; proseStreamed: boolean }> {
     let inThink = false;
     let proseStreamed = false;
     let accumulatedText = '';
 
-    const fullText = await this._client!.streamChatWithCallback(messages, (chunk) => {
+    const result = await this._client!.streamChatWithCallback(messages, (chunk) => {
       accumulatedText += chunk;
       if (jsonMode) return; // mid-task: suppress all streaming
 
@@ -353,9 +394,9 @@ export class AgentLoop {
         proseStreamed = true;
         if (accumulatedText.includes('</think>')) inThink = false;
       }
-    }, this._abortController?.signal, jsonMode);
+    }, this._abortController?.signal, jsonMode, tools);
 
-    return { fullText, proseStreamed };
+    return { text: result.text, toolCall: result.toolCall, proseStreamed };
   }
 }
 

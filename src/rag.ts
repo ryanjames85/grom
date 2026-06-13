@@ -78,6 +78,9 @@ export class RagIndex {
   private _fileHashes: Map<string, string> = new Map();
   // Set when an embedding model is configured but all embedding attempts fail
   private _embeddingFailed = false;
+  // Set when build(force=true) arrives while a build is already running.
+  // The in-progress build checks this on completion and re-runs immediately.
+  private _pendingRebuild: { files: RagFile[]; embConfig?: EmbeddingConfig } | null = null;
 
   /**
    * @param _onProgress Optional callback invoked with status messages during indexing.
@@ -105,7 +108,11 @@ export class RagIndex {
    * failed endpoints. Pass force=true to reset the cache when switching providers.
    */
   async build(files: RagFile[], embConfig?: EmbeddingConfig, force = false): Promise<void> {
-    if (this._indexing) return;
+    if (this._indexing) {
+      // Queue the rebuild — the current build will pick it up when it finishes
+      if (force) this._pendingRebuild = { files, embConfig };
+      return;
+    }
 
     // Invalidate endpoint cache and dimension guard when the provider config changes
     if (embConfig && (embConfig.apiUrl !== this._embConfig?.apiUrl || embConfig.model !== this._embConfig?.model)) {
@@ -141,6 +148,12 @@ export class RagIndex {
       this._onProgress?.(this._progressLabel());
     } finally {
       this._indexing = false;
+      // If a force rebuild was requested while we were busy, run it now
+      const pending = this._pendingRebuild;
+      if (pending) {
+        this._pendingRebuild = null;
+        await this.build(pending.files, pending.embConfig, true);
+      }
     }
   }
 

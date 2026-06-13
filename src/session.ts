@@ -34,6 +34,8 @@ export interface ChatSession {
   systemPrompt?: string;
   taskLog?: TaskLogEntry[];
   model?: string;
+  /** Set to true once native tool calling (Layer 1/2) succeeds for this session. Skips heuristic system prompt injection on subsequent rounds. */
+  nativeToolsWorked?: boolean;
 }
 
 export class SessionManager {
@@ -70,7 +72,9 @@ export class SessionManager {
   /** Creates a new empty session, switches to it, and returns its ID. */
   createNewSession(agentEnabled = false) {
     const id = Date.now().toString();
-    this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled };
+    // Tools start off so plain chat is fast — user enables ⚡ Tools per session when needed.
+    // mode stays 'plan' regardless of agentEnabled; the user switches to BUILD when they want it.
+    this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled: false };
     this.currentSessionId = id;
     return id;
   }

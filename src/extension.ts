@@ -117,6 +117,10 @@ export function activate(context: vscode.ExtensionContext) {
   fileWatcher.onDidDelete(_scheduleReindex);
   fileWatcher.onDidChange(_scheduleReindex);
   context.subscriptions.push(fileWatcher);
+  // Clear any pending reindex timer on deactivation — prevents the callback firing
+  // against a disposed context if a file change triggered the 3-second debounce
+  // right before the extension was deactivated.
+  context.subscriptions.push({ dispose: () => clearTimeout(_reindexTimer) });
 
   context.subscriptions.push(vscode.commands.registerCommand('grom.reindex', () => {
     buildRag(true);

@@ -8,8 +8,8 @@
  * don't need to change their import paths.
  */
 
-export { AuthType, ProviderFormat, ChatMessage, ModelCapabilities, ILLMProvider } from './providers';
-import { AuthType, ProviderFormat, ChatMessage, ModelCapabilities, createProvider } from './providers';
+export { AuthType, ProviderFormat, ChatMessage, ModelCapabilities, ILLMProvider, ToolDefinition, ToolCallResult } from './providers';
+import { AuthType, ProviderFormat, ChatMessage, ModelCapabilities, ToolDefinition, createProvider } from './providers';
 
 export class LocalLLMClient {
   private provider: import('./providers').ILLMProvider;
@@ -32,8 +32,8 @@ export class LocalLLMClient {
     return this.provider.chat(this.model, messages, signal);
   }
 
-  async streamChatWithCallback(messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean): Promise<string> {
-    return this.provider.streamChat(this.model, messages, onChunk, signal, jsonMode);
+  async streamChatWithCallback(messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean, tools?: ToolDefinition[]): Promise<import('./providers').ToolCallResult> {
+    return this.provider.streamChat(this.model, messages, onChunk, signal, jsonMode, tools);
   }
 }
 
