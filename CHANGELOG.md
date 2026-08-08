@@ -4,6 +4,40 @@ All notable changes to Grom are documented here.
 
 ---
 
+## [0.5.5] — 2026-08-08
+
+### New
+
+- **Tools and vision icons now reflect your model's actual capabilities** — detection is significantly more accurate for Ollama and LM Studio users. Grom now reads capability data directly from the provider rather than guessing from the model name alone. Ollama models with a function-calling chat template are detected correctly; LM Studio reports explicit `vision` and `tool_calls` flags per model when available. A long-standing bug where nearly every Ollama model was incorrectly shown as tool-capable (causing confused routing for models that don't support it) is fixed.
+- **`grom.modelCapabilities` setting** — if detection still gets it wrong for your model, you can pin it. Add a partial model name as a key with the capabilities you want: `{ "my-model": { "tools": true, "vision": false } }`. Takes precedence over everything else.
+
+### Improved
+
+- **Tools off means fast, conversational replies** — with the Tools toggle off, Grom no longer queries the RAG index before sending your message. The codebase embedding step only runs when tools are on, keeping conversational responses instant regardless of workspace size.
+- **MCP tools available immediately on startup** — MCP servers previously only registered their tools after a settings change or provider switch. Switching providers away and back was the common workaround. Tools are now available as soon as the servers finish connecting — no manual intervention needed.
+- **Provider switching gives immediate feedback** — changing providers while a connection check was already running produced no visible response until the check completed. Grom now shows "Connecting…" the moment you switch and correctly waits for the new connection before updating the status.
+- **Context window indicator now accurate for all Ollama model families** — Gemma, Mistral, Phi, and other non-Llama models always showed 8,192 tokens regardless of their actual context window. Grom now reads the architecture-specific key each model reports (`gemma.context_length`, `mistral.context_length`, etc.) so the circle and auto-compact threshold are both correct.
+- **Active file stays in context while typing in the input box** — when the input box gained focus, VS Code fired a "no active editor" event and the file context pill disappeared mid-message. The file stays attached now.
+- **Agent tells you when it hits its round limit** — reaching the maximum number of tool-call rounds previously ended silently with no explanation. Grom now posts a message so you know to continue manually.
+- **`@url` mentions report HTTP errors** — a 404 or 403 from a fetched URL was silently swallowed. Grom now includes the HTTP status in the context so the model can reason about it.
+- **`read_file` on binary files returns a clear error** — reading images, compiled artifacts, or `.wasm` files previously sent garbled UTF-8 to the model. Now returns a clear "binary file" message instead.
+- **`run_terminal` gives a clear error when no workspace is open** — previously ran the command in the VS Code install directory if no folder was open, producing silently wrong results.
+
+### Fixed
+
+- **LM Studio model dropdown no longer shows embedding models or unloaded models** — the model list previously included all installed models regardless of type or load state (embedding models, unloaded LLMs). Only loaded chat/vision models now appear.
+- **Compacted sessions no longer fail on LM Studio and strict local models** — sessions with compacted history sent two system messages to the model (the main prompt and the compact marker). Qwen3, Gemma4, Mistral, and other models with strict Jinja chat templates rejected this with a 400 error. All system messages are now merged into one before sending to any OpenAI-compatible provider.
+- **Ollama models without tool support no longer appear blind** — two related bugs caused Gemma and similar models to lose RAG and file context when tool calling was enabled. The capability probe incorrectly flagged nearly every Ollama model as tool-capable (matching `parameter_size` as `"parameter"`), so tool definitions were sent to models whose templates don't support them. When Ollama rejected the request there was no retry path. Detection is now accurate and a retry-without-tools fallback is in place.
+- **Gemma4 and strict-JSON models no longer error mid-stream** — Ollama can return a 200 OK then stream `{"error":"..."}` when a model emits malformed tool-call JSON. This was swallowed silently, leaving the model blind. Grom now detects in-stream errors and retries without tools automatically.
+- **Stopping a response mid-tool-call no longer breaks the next message** — aborting during a tool call left an orphaned assistant message and tool result in history with no following user message. Providers like Anthropic and OpenAI reject this shape, causing the next turn to fail. Orphaned tail messages are now trimmed on abort.
+- **`/compact` and auto-compact work reliably on long sessions** — the structured summary step could silently fail when history was very long, falling back to a bare cut marker. The extraction now stays within a safe token budget, preserving decisions, open files, and next steps.
+- **`/memorise` on long sessions** — same silent failure as above. Fixed with the same budget cap.
+- **Context window resets immediately on model or provider switch** — the previous model's detected context size was carried over on switch, so the indicator could show the wrong value until the next probe. It now resets the moment you switch.
+- **Anthropic streaming no longer drops the final chunk** — the last content block from Claude was occasionally lost because the buffer was not flushed after the stream loop.
+- **Claude 3/4 capability detection corrected** — claude-2 and claude-instant were incorrectly flagged as vision-capable. claude-opus-4, claude-sonnet-4, and claude-haiku-4 were not flagged as reasoning-capable. Both corrected.
+
+---
+
 ## [0.5.4] — 2026-06-13
 
 ### New

@@ -23,10 +23,10 @@ import { McpManager, parseToolCall, buildToolSystemPrompt } from './mcp';
 import { BUILTIN_TOOLS, isBuiltinTool, executeBuiltinTool } from './builtin-tools';
 import { parseComposerResponse, applyComposerPatches } from './editor';
 import { findRelevantContext, resolveMentions, resolveWebSearch, resolveSlashCommand } from './context';
-import { RagIndex } from './rag';
+import { RagIndex, ConversationRag } from './rag';
 import { DocsIndex } from './docs-index';
 import { ChatSession } from './session';
-import { estimateHistoryTokens, getNonSystemMessages } from './utils';
+import { estimateHistoryTokens, getNonSystemMessages, isCompactMarker, COMPACT_EXTRACTION_PROMPT, buildExtractionInput } from './utils';
 
 /** Tools that modify state and require user approval before execution. */
 const DESTRUCTIVE_TOOLS = new Set(['write_file', 'delete_file', 'run_terminal']);
@@ -43,6 +43,12 @@ export interface AgentLoopDeps {
   appendTaskLog: (sessionId: string, tool: string, args: Record<string, any>, result: string) => void;
   /** Returns the user's persistent memory string. */
   getMemory: () => string;
+  /** Returns the auto-detected context window size from the provider, or null if not yet known. */
+  getContextLength?: () => number | null;
+  /** Returns the last text editor that had focus before the webview took over, so file context survives typing in the input box. */
+  getActiveEditor?: () => vscode.TextEditor | undefined;
+  /** Resolves the API key and wire format for the active provider from SecretStorage. */
+  resolveProviderConfig?: (url: string, useOllama: boolean) => Promise<{ key: string | undefined; authType: import('./providers').AuthType; providerFormat: import('./providers').ProviderFormat }>;
 }
 
 export class AgentLoop {
@@ -102,8 +108,9 @@ export class AgentLoop {
     const fallbackLangModels = config.get<Record<string, string>>('languageModels', {});
     const model = chatLangModels[activeLang] || fallbackLangModels[activeLang] || baseModel;
     const useOllamaFormat = config.get<boolean>('useOllamaFormat') || false;
-    const apiKey = config.get<string>('apiKey', '');
-    this._client = new LocalLLMClient(apiUrl, model, useOllamaFormat, apiKey || undefined);
+    const resolved = await this.deps.resolveProviderConfig?.(apiUrl, useOllamaFormat);
+    const apiKey = resolved?.key ?? (config.get<string>('apiKey', '') || undefined);
+    this._client = new LocalLLMClient(apiUrl, model, useOllamaFormat, apiKey, resolved?.authType, resolved?.providerFormat);
 
     // Assemble context from RAG, @ mentions, and the active file
     const autoFiles = new Set<string>();
@@ -111,7 +118,7 @@ export class AgentLoop {
     const manualFiles = new Set<string>();
     const manualContext = await resolveMentions(text, manualFiles, this.deps.docs);
     const allUsedFiles = new Set([...autoFiles, ...manualFiles]);
-    const editor = vscode.window.activeTextEditor;
+    const editor = this.deps.getActiveEditor?.() ?? vscode.window.activeTextEditor;
     let activeFileContext = '';
     if (editor) {
       const name = editor.document.fileName.split(/[\\\/]/).pop() || '';
@@ -128,44 +135,79 @@ export class AgentLoop {
     const buildInstructions = 'You are in BUILD mode. Use tools to read files, write code, and execute tasks. Prefer action over explanation. IMPORTANT: before modifying or appending to an existing file, always call read_file first to get its current content — never assume you know what is already in the file.';
     const modeInstructions = mode === 'build' ? buildInstructions : planInstructions;
 
-    // Inject or patch system prompt every turn
+    // Inject or patch system prompt. Only write when content changes — keeping the system
+    // message identical between turns lets local runtimes (Ollama, LM Studio, llama.cpp)
+    // reuse the KV-cache prefix without any provider-specific API parameter.
     const memory = this.deps.getMemory();
     const memorySection = memory.trim() ? `\n\nUSER MEMORY:\n${memory.trim()}` : '';
     const customSection = session.systemPrompt?.trim() ? `\n\nSESSION INSTRUCTIONS:\n${session.systemPrompt.trim()}` : '';
-    const sysIdx = session.history.findIndex(m => m.role === 'system' && m.content !== '__compacted__');
+    const sysIdx = session.history.findIndex(m => m.role === 'system' && !isCompactMarker(m));
     if (sysIdx === -1) {
-      // No system message — inject at front (handles new sessions and old corrupted sessions)
       session.history.unshift({ role: 'system', content: modeInstructions + memorySection + customSection });
     } else {
-      // Patch mode instructions when user switches modes mid-session
       const sys = session.history[sysIdx];
       const stripped = sys.content.replace(/^(You are in (PLAN|BUILD) mode\..*?(?=\n\n|$))/s, '').trimStart();
-      session.history[sysIdx] = { ...sys, content: modeInstructions + (stripped ? '\n\n' + stripped : '') };
+      const newContent = modeInstructions + (stripped ? '\n\n' + stripped : '');
+      if (newContent !== sys.content) {
+        session.history[sysIdx] = { ...sys, content: newContent };
+      }
     }
 
-    const ragContext = this.deps.rag?.isIndexed() ? await this.deps.rag.queryAsync(text) : '';
-    const contextPrompt = `CONTEXT:\n${ragContext ? `CODEBASE:\n${ragContext}\n\n` : ''}${autoContext}\n${manualContext}\n${activeFileContext}\n\nUSER: ${text}`;
+    const toolsOn = config.get<boolean>('agentEnabled', true) && (session.agentEnabled ?? false);
+    const ragContext = (toolsOn && this.deps.rag?.isIndexed()) ? await this.deps.rag.queryAsync(text) : '';
+    // Retrieve relevant earlier turns — gives the model access to compacted history via BM25
+    const convRag = new ConversationRag();
+    convRag.build(session.history);
+    const convContext = convRag.query(text);
+    const contextPrompt = `CONTEXT:\n${ragContext ? `CODEBASE:\n${ragContext}\n\n` : ''}${convContext ? `EARLIER CONVERSATION (relevant):\n${convContext}\n\n` : ''}${autoContext}\n${manualContext}\n${activeFileContext}\n\nUSER: ${text}`;
     // Strip any empty-content messages — they cause jinja template errors on some models (e.g. gemma-4)
     let messagesForApi: ChatMessage[] = ([...session.history, { role: 'user' as const, content: contextPrompt, images }])
-      .filter(m => m.content.trim().length > 0);
+      // Keep role:'tool' messages even if empty — removing them orphans the preceding tool_calls
+      // assistant message, which is a hard validation error for OpenAI and Anthropic.
+      .filter(m => m.role === 'tool' || m.content.trim().length > 0);
 
-    // Auto-compact the stored session history if over 90% of the context window
+    // Auto-compact the stored session history when context fills up.
+    // Threshold is lower for local providers (VRAM constrained) and even lower when recent
+    // turns are large (heavy tool output / file reads accelerate KV-cache overflow).
+    const isLocal = useOllamaFormat || apiUrl.includes('127.0.0.1') || apiUrl.includes('localhost');
+    const recentMsgs = getNonSystemMessages(session.history).slice(-6);
+    const avgRecentTokens = recentMsgs.length
+      ? recentMsgs.reduce((s, m) => s + m.content.length / 4, 0) / recentMsgs.length
+      : 0;
+    const isHeavySession = avgRecentTokens > 600;
+    const compactThreshold = isLocal ? (isHeavySession ? 0.55 : 0.65) : 0.82;
     const pricing = config.get<Record<string, any>>('modelPricing') || {};
     const modelKey = Object.keys(pricing).find(k => model.toLowerCase().includes(k.toLowerCase()));
     const p = modelKey ? pricing[modelKey] : { context: 8192 };
-    const limit = (p.context || 8192) * 0.9;
+    // Use the same context length source as the display so compact fires at the same % the user sees.
+    const detectedCtx = this.deps.getContextLength?.() ?? null;
+    const limit = (detectedCtx ?? p.context ?? 8192) * compactThreshold;
     const estimatedTokens = JSON.stringify(messagesForApi).length / 4;
-    if (estimatedTokens > limit && session.history.length > 3) {
-      // Compact the real session history so the next turn starts fresh
-      const sys = session.history.find(m => m.role === 'system' && m.content !== '__compacted__');
+    if (estimatedTokens > limit && getNonSystemMessages(session.history).length > 3) {
+      this.deps.postMessage({ type: 'compacting' });
+      // Extract a structured summary of the messages about to be trimmed so the model
+      // can reconstruct context from typed facts rather than losing it entirely.
+      const toTrim = getNonSystemMessages(session.history).slice(0, -4);
+      let compactSummary = '';
+      if (toTrim.length > 0 && this._client) {
+        try {
+          const convText = buildExtractionInput(toTrim);
+          compactSummary = await this._client.chat(
+            [{ role: 'system', content: COMPACT_EXTRACTION_PROMPT }, { role: 'user', content: convText }],
+            AbortSignal.timeout(20000)
+          );
+        } catch { /* fall back to plain marker if extraction times out or fails */ }
+      }
+      const sys = session.history.find(m => m.role === 'system' && !isCompactMarker(m));
       const lastMessages = getNonSystemMessages(session.history).slice(-4);
-      const marker: ChatMessage = { role: 'system', content: '__compacted__' };
+      const markerContent = compactSummary ? `__compacted__\n\n${compactSummary}` : '__compacted__';
+      const marker: ChatMessage = { role: 'system', content: markerContent };
       session.history = sys ? [sys, marker, ...lastMessages] : [marker, ...lastMessages];
       session.tokens.input = estimateHistoryTokens(session.history);
       session.tokens.output = 0;
       messagesForApi = [...session.history, { role: 'user', content: contextPrompt, images }];
-      this.deps.postMessage({ type: 'compacting' });
       saveState();
+      this.deps.postMessage({ type: 'compacted' });
     }
     session.history.push({ role: 'user', content: rawText, images });
     saveState();
@@ -252,12 +294,17 @@ export class AgentLoop {
       let toolCallMade = false;
       let repromptsLeft = 1;
       let trustAll = false;
+      let hitMaxRounds = false;
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
+        if (round === MAX_ROUNDS - 1) hitMaxRounds = true;
         if (this._abortController.signal.aborted) break;
 
         const result = await this._streamWithToolDetection(toolMessages, toolCallMade, allTools as ToolDefinition[]);
         const fullText = result.text;
+        // If the provider dropped tools mid-session (e.g. Ollama 500 on malformed tool JSON),
+        // reset nativeToolsWorked so heuristic instructions are re-injected next turn.
+        if (result.toolsDropped) session.nativeToolsWorked = false;
         // Native tool call (Layer 1/2) takes priority; fall back to heuristic parser (Layer 5)
         const nativeTc = result.toolCall;
         const parsed = nativeTc
@@ -290,7 +337,10 @@ export class AgentLoop {
         const toolKnown = isBuiltinTool(parsed.tool) || mcpTools.some(t => t.name === parsed.tool);
         if (!toolKnown) {
           consecutiveNoOp++;
-          if (consecutiveNoOp >= 2) break;
+          if (consecutiveNoOp >= 2) {
+            this.deps.postMessage({ type: 'chunk', text: '\n\n*Agent called an unknown tool repeatedly and could not complete the task. Try rephrasing your request.*' });
+            break;
+          }
           toolMessages = [...toolMessages, ...buildFeedback(nativeTc, fullText, `Tool "${parsed.tool}" does not exist. Available: ${allTools.map(t => t.name).join(', ')}. Try again or answer without tools.`)];
           continue;
         }
@@ -353,7 +403,20 @@ export class AgentLoop {
         saveState();
         updateUsageDisplay();
       }
+      if (hitMaxRounds) {
+        this.deps.postMessage({ type: 'chunk', text: `\n\n*Agent reached the maximum number of tool-call rounds (${MAX_ROUNDS}). Review the results and continue if needed.*` });
+      }
     } catch (e: any) {
+      // On abort, trim any trailing assistant/tool message pairs that have no following user
+      // message — they were committed mid-loop and would cause a validation error next turn.
+      if (e?.name === 'AbortError') {
+        while (session.history.length > 0) {
+          const last = session.history[session.history.length - 1];
+          if (last.role === 'tool' || last.role === 'assistant') {
+            session.history.pop();
+          } else break;
+        }
+      }
       if (e?.name !== 'AbortError') {
         const msg: string = e.message || String(e);
         const isContextOverflow = /n_keep|n_ctx|context.*(length|size|window)|too many tokens|context_length_exceeded/i.test(msg);
@@ -378,7 +441,7 @@ export class AgentLoop {
     messages: ChatMessage[],
     jsonMode = false,
     tools?: ToolDefinition[]
-  ): Promise<{ text: string; toolCall?: { id: string; name: string; args: Record<string, any> }; proseStreamed: boolean }> {
+  ): Promise<{ text: string; toolCall?: { id: string; name: string; args: Record<string, any> }; proseStreamed: boolean; toolsDropped?: boolean }> {
     let inThink = false;
     let proseStreamed = false;
     let accumulatedText = '';
@@ -390,13 +453,13 @@ export class AgentLoop {
       // Stream thinking tokens live so the user can see the model is working
       if (!inThink && accumulatedText.includes('<think>')) inThink = true;
       if (inThink) {
-        this.deps.postMessage({ type: 'chunk', text: accumulatedText });
+        this.deps.postMessage({ type: 'chunk', text: chunk });
         proseStreamed = true;
         if (accumulatedText.includes('</think>')) inThink = false;
       }
     }, this._abortController?.signal, jsonMode, tools);
 
-    return { text: result.text, toolCall: result.toolCall, proseStreamed };
+    return { text: result.text, toolCall: result.toolCall, proseStreamed, toolsDropped: result.toolsDropped };
   }
 }
 

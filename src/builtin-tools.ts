@@ -134,6 +134,7 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
       try {
         const bytes = await vscode.workspace.fs.readFile(p.uri);
         let text = Buffer.from(bytes).toString('utf8');
+        if (text.includes('\0')) return `Error: ${args.path} is a binary file and cannot be read as text.`;
         if ((args.path as string).endsWith('.ipynb')) {
           try {
             const nb = JSON.parse(text);
@@ -247,9 +248,10 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
       // We show the terminal but don't send text to it to avoid double-execution.
       const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Grom Agent');
       terminal.show(true);
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!cwd) return 'Error: No workspace folder open.';
       return new Promise((resolve) => {
         const { exec } = require('child_process') as typeof import('child_process');
-        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         exec(command, { cwd, timeout: 30000, maxBuffer: 200000 }, (err, stdout, stderr) => {
           const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
           const result = combined.slice(0, 6000) || (err ? `Process exited with code ${err.code}` : 'Command completed with no output');

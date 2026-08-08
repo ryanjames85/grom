@@ -57,7 +57,7 @@ His antenna tells you what's happening before you read a word:
 
 **BUILD mode** — focused blue. Grom is direct and implementation-ready. Write code, fix bugs, ship things.
 
-**⚡ Tools** — a toggle in the toolbar, only available in BUILD mode. Off by default so plain chat stays fast. When off the button is muted; when on it fills solid with the accent colour — no ambiguity. Turn it on when you want Grom to read and write files, run terminal commands, and call MCP tools. Each session remembers its own Tools state.
+**⚡ Tools** — a toggle in the toolbar, only available in BUILD mode. Off by default so plain chat stays fast. When off, Grom skips codebase indexing and RAG queries entirely — replies are instant regardless of workspace size. When on it fills solid with the accent colour — no ambiguity. Turn it on when you want Grom to read and write files, run terminal commands, call MCP tools, and search your codebase for context. Each session remembers its own Tools state.
 
 The UI colour shifts with the mode. So does Grom's personality.
 
@@ -85,6 +85,8 @@ Grom works with local servers out of the box — no account, no key. Cloud provi
 **Custom providers** — add any OpenAI-compatible endpoint or Anthropic-compatible proxy via `grom.customProviders`. Gemini, OpenRouter, Together AI, and most other cloud APIs work out of the box. See [Adding a Custom Provider](#adding-a-custom-provider) below.
 
 Switch providers and models without leaving the panel. Each session remembers its own model — switching sessions restores it automatically. Grom detects model capabilities automatically — vision, tool use, and reasoning models each show their own icon. Vision models (llava, qwen2-vl, etc.) can receive images via the `+` button or paste.
+
+Capability detection reads directly from your provider where possible — chat template inspection for Ollama, explicit capability fields from LM Studio — so the icons reflect what your model can actually do rather than guessing from its name. If detection gets it wrong for a particular model, `grom.modelCapabilities` lets you override it.
 
 ### Knows What You're Working On
 
@@ -139,6 +141,8 @@ Enable **⚡ Tools** in the toolbar (BUILD mode only) and Grom doesn't just repl
 
 > **Note on model size:** Tool call accuracy scales with model size. 32B+ local models call tools reliably. Smaller models (1.5B–7B) occasionally write prose instead of a tool call — Grom handles this by re-prompting once and enabling structured JSON mode after the first tool use. For complex agentic tasks, 14B+ is significantly more reliable. Capable Ollama models (qwen2.5, llama3.1, mistral) also support native structured tool calls — Grom detects this automatically and uses it when available.
 
+When the agent reaches its round limit (`grom.agentMaxIterations`, default 20), Grom tells you in the chat so you know to review and continue manually rather than wondering why it stopped.
+
 ### Documentation Sources
 
 Index web documentation so you can reference it with `@docs` in any message. Grom crawls the URLs you configure, strips the HTML, and builds a searchable index — no copy-pasting docs into context. Any HTTP/HTTPS URL works, including local dev servers (`http://localhost:3000/docs`).
@@ -191,7 +195,7 @@ Pop Grom out of the sidebar into a standalone window — useful for multi-monito
 
 ### MCP Tool Use
 
-Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server and Grom's model can call its tools during chat. Tool calls stream live with a badge showing which tool is running. Configure via `grom.mcpServers`.
+Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server and Grom's model can call its tools during chat. Tool calls stream live with a badge showing which tool is running. MCP tools are available as soon as the servers connect — no restart or provider switch needed. Configure via `grom.mcpServers`.
 
 ### Grom Memory
 
@@ -310,6 +314,7 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.fontSize` | Chat panel font size: `small`, `medium`, `large` | `medium` |
 | `grom.debugLogging` | Write diagnostics to the Grom Output channel | `false` |
 | `grom.hints` | Show in-chat hint cards (e.g. context window full warning) | `true` |
+| `grom.modelCapabilities` | Per-model capability overrides: `{ "model-name": { "tools": true, "vision": false } }`. Overrides auto-detection. | `{}` |
 | `grom.modelPricing` | Per-model token pricing and context window size overrides | `{}` |
 | `grom.docSources` | Documentation sources available via `@docs` | `[]` |
 | `grom.presets` | Custom prompt presets shown in the `/` menu | `[]` |
@@ -379,7 +384,7 @@ For most cloud providers, `name` and `url` are all you need. Optional fields:
 
 The radial circle in the toolbar shows how full your context window is. Hover it to see the exact token count and window size. When it fills up, `/compact` trims old messages — Grom marks the cut point so you always know what's been removed.
 
-Set the exact context window size for your model via `grom.modelPricing` for an accurate reading.
+Grom reads the context window size directly from your model — including architecture-specific keys for Gemma, Mistral, Phi, and other non-Llama families — so the circle and auto-compact threshold are accurate without any manual configuration. Set `grom.modelPricing` to pin a size for a specific model if needed.
 
 ---
 

@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Local-first agent harness for VS Code. Bring your own LLM — no cloud, no account, no telemetry. Your model, your machine, your rules.",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -299,6 +299,11 @@
           "type": "boolean",
           "default": true,
           "description": "Whether to use Ollama's /api/chat format. Uncheck for LM Studio / OpenAI-style APIs."
+        },
+        "grom.modelCapabilities": {
+          "type": "object",
+          "default": {},
+          "description": "Per-model capability overrides. Keys are partial model names (case-insensitive). Values are objects with optional 'tools', 'vision', and 'reasoning' booleans. Example: { \"my-model\": { \"tools\": true, \"vision\": false } }. Overrides auto-detection."
         },
         "grom.modelPricing": {
           "type": "object",

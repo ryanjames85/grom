@@ -95,6 +95,14 @@ describe('Builtin Tools', () => {
       expect(result).to.include('Path traversal or absolute paths not allowed');
     });
 
+    it('returns error for binary files containing null bytes', async () => {
+      const binaryContent = Buffer.concat([Buffer.from('some text'), Buffer.from([0x00, 0x01, 0x02])]);
+      vscode.workspace.fs.readFile.resolves(binaryContent);
+      const result = await executeBuiltinTool('read_file', { path: 'image.png' });
+      expect(result).to.include('binary file');
+      expect(result).to.include('Error');
+    });
+
     it('truncates large files', async () => {
       const largeContent = 'a'.repeat(25000);
       vscode.workspace.fs.readFile.resolves(Buffer.from(largeContent));
@@ -202,6 +210,15 @@ describe('Builtin Tools', () => {
       const result = await executeBuiltinTool('run_terminal', { command: 'echo `id`' });
       expect(result).to.include('Error');
       expect(result).to.include('shell substitution');
+      expect(execStub.called).to.be.false;
+    });
+
+    it('returns error when no workspace folder is open', async () => {
+      const original = vscode.workspace.workspaceFolders;
+      vscode.workspace.workspaceFolders = undefined;
+      const result = await executeBuiltinTool('run_terminal', { command: 'ls' });
+      vscode.workspace.workspaceFolders = original;
+      expect(result).to.include('No workspace folder open');
       expect(execStub.called).to.be.false;
     });
 

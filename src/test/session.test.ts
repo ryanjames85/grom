@@ -1,5 +1,6 @@
 import { expect } from 'chai';
 import { SessionManager } from '../session';
+import { isCompactMarker } from '../utils';
 
 const makeManager = (overrides: Record<string, any> = {}) => {
   const sessions = {
@@ -219,6 +220,66 @@ describe('SessionManager', () => {
       expect(mgr.compactSession('ghost')).to.be.false;
     });
 
+    it('embeds an extraction summary in the compact marker when provided', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'system', content: 'You are helpful.' },
+        ...Array.from({ length: 8 }, (_, i) => ({
+          role: i % 2 === 0 ? 'user' : 'assistant' as any,
+          content: `msg ${i}`
+        }))
+      ];
+      const summary = 'decisions: chose SQLite\nconstraints: no ORM';
+      mgr.compactSession('default', summary);
+      const marker = mgr.getCurrentSession().history.find(m => isCompactMarker(m));
+      expect(marker).to.exist;
+      expect(marker!.content).to.include('decisions: chose SQLite');
+      expect(marker!.content).to.include('constraints: no ORM');
+    });
+
+    it('compact marker with summary still starts with __compacted__', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = Array.from({ length: 8 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant' as any, content: `msg ${i}`
+      }));
+      mgr.compactSession('default', 'decisions: TypeScript');
+      const marker = mgr.getCurrentSession().history.find(isCompactMarker);
+      expect(marker!.content.startsWith('__compacted__')).to.be.true;
+    });
+
+    it('uses plain __compacted__ marker when no summary provided', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = Array.from({ length: 8 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant' as any, content: `msg ${i}`
+      }));
+      mgr.compactSession('default');
+      const marker = mgr.getCurrentSession().history.find(isCompactMarker);
+      expect(marker!.content).to.equal('__compacted__');
+    });
+
+    it('isCompactMarker detects marker with summary', () => {
+      const marker = { role: 'system' as const, content: '__compacted__\n\ndecisions: used Redis' };
+      expect(isCompactMarker(marker)).to.be.true;
+    });
+
+    it('returns false when history has only system messages (no real chat content)', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'system', content: '__compacted__\n\ndecisions: used SQLite' },
+      ];
+      expect(mgr.compactSession('default')).to.be.false;
+    });
+
+    it('returns false when history has only one non-system message', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'user', content: 'hello' },
+      ];
+      expect(mgr.compactSession('default')).to.be.false;
+    });
+
     it('returns false when history is already compacted (only marker + 4 messages)', () => {
       const mgr = makeManager();
       mgr.getSessions()['default'].history = [
@@ -273,6 +334,19 @@ describe('SessionManager', () => {
       (mgr as any).setSystemPrompt('default', 'new system');
       const h = mgr.getCurrentSession().history;
       expect(h.find((m: any) => m.content === '__compacted__')).to.exist;
+    });
+
+    it('preserves compact marker with embedded summary when setting system prompt', () => {
+      const mgr = makeManager();
+      mgr.getSessions()['default'].history = [
+        { role: 'system', content: '__compacted__\n\ndecisions: SQLite, no ORM' },
+        { role: 'user', content: 'hi' },
+      ];
+      (mgr as any).setSystemPrompt('default', 'new system');
+      const h = mgr.getCurrentSession().history;
+      const found = h.find((m: any) => isCompactMarker(m));
+      expect(found).to.exist;
+      expect(found!.content).to.include('SQLite');
     });
 
     it('does nothing for unknown session id', () => {

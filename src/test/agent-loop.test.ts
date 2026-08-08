@@ -498,6 +498,23 @@ describe('AgentLoop', () => {
       expect(assistantMsg.tool_calls[0].function.name).to.equal('read_file');
     });
 
+    it('trims orphaned assistant and tool messages from history on abort', async () => {
+      const session: any = { id: 's-abort', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const nativeTc = { id: 'call_1', name: 'read_file', args: { path: 'test.ts' } };
+
+      const abortErr = new Error('aborted'); abortErr.name = 'AbortError';
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: nativeTc })
+        .onSecondCall().rejects(abortErr);
+
+      await loop.run('Do something', undefined, 'build', session, () => {}, () => {});
+
+      const roles = session.history.map((m: any) => m.role);
+      expect(roles).to.not.include('assistant');
+      expect(roles).to.not.include('tool');
+      expect(roles).to.include('user');
+    });
+
     it('falls back to heuristic parser when native returns no toolCall', async () => {
       const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
       const toolCallJson = '{"tool":"read_file","args":{"path":"test.ts"}}';
@@ -619,6 +636,43 @@ describe('AgentLoop', () => {
       const toolFeedback = secondCallMsgs.find((m: any) => m.role === 'tool' && m.content?.includes('does not exist'));
       expect(toolFeedback).to.exist;
       expect(toolFeedback.tool_call_id).to.equal('call_unknown');
+    });
+
+    it('posts user-visible message when consecutiveNoOp limit is reached', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const unknownTc = { id: 'call_unk', name: 'no_such_tool', args: {} };
+
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: unknownTc })
+        .onSecondCall().resolves({ text: '', toolCall: unknownTc })
+        .resolves({ text: 'Okay.' });
+
+      await loop.run('Do something', undefined, 'build', session, () => {}, () => {});
+
+      const chunks = deps.postMessage.getCalls()
+        .filter(c => c.args[0]?.type === 'chunk')
+        .map(c => c.args[0].text as string);
+      expect(chunks.some(t => t.includes('unknown tool') || t.includes('could not complete'))).to.be.true;
+    });
+  });
+
+  describe('MAX_ROUNDS exhaustion', () => {
+    it('posts user-visible message when MAX_ROUNDS is hit', async () => {
+      // Override agentMaxIterations to 2 for speed
+      vscodeMock.workspace.getConfiguration.returns({ get: (key, def) => key === 'agentMaxIterations' ? 2 : def });
+
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      const nativeTc = { id: 'call_1', name: 'read_file', args: { path: 'test.ts' } };
+
+      // Always return a tool call so the loop never exits normally
+      clientStub.streamChatWithCallback.resolves({ text: '', toolCall: nativeTc });
+
+      await loop.run('Keep looping', undefined, 'build', session, () => {}, () => {});
+
+      const chunks = deps.postMessage.getCalls()
+        .filter(c => c.args[0]?.type === 'chunk')
+        .map(c => c.args[0].text as string);
+      expect(chunks.some(t => t.includes('maximum number') || t.includes('maximum'))).to.be.true;
     });
   });
 });

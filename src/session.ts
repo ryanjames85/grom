@@ -14,7 +14,7 @@
  */
 
 import { ChatMessage } from './client';
-import { estimateHistoryTokens, getNonSystemMessages } from './utils';
+import { estimateHistoryTokens, getNonSystemMessages, isCompactMarker } from './utils';
 
 export interface TaskLogEntry {
   ts: number;
@@ -109,16 +109,19 @@ export class SessionManager {
 
   /**
    * Trims a long session history down to the system message + last 4 messages,
-   * inserting a '__compacted__' marker so the UI can show where the cut was made.
-   * Returns false if the session is too short to need compaction (≤3 messages).
+   * inserting a compact marker so the UI can show where the cut was made.
+   * When an extracted summary is provided it is embedded in the marker so the
+   * model can reconstruct context from typed facts rather than losing it entirely.
+   * Returns false if the session is too short to need compaction (≤ 2 messages).
    */
-  compactSession(sessionId: string): boolean {
+  compactSession(sessionId: string, summary?: string): boolean {
     const s = this.sessions[sessionId];
-    if (!s || s.history.length <= 2) return false;
+    if (!s || getNonSystemMessages(s.history).length <= 2) return false;
 
-    const systemMessage = s.history.find(m => m.role === 'system' && m.content !== '__compacted__');
+    const systemMessage = s.history.find(m => m.role === 'system' && !isCompactMarker(m));
     const lastMessages = getNonSystemMessages(s.history).slice(-4);
-    const marker: ChatMessage = { role: 'system', content: '__compacted__' };
+    const markerContent = summary ? `__compacted__\n\n${summary}` : '__compacted__';
+    const marker: ChatMessage = { role: 'system', content: markerContent };
     s.history = systemMessage ? [systemMessage, marker, ...lastMessages] : [marker, ...lastMessages];
     s.tokens.input = estimateHistoryTokens(s.history);
     s.tokens.output = 0;
@@ -130,7 +133,7 @@ export class SessionManager {
   trimLastExchange(sessionId: string): string | null {
     const s = this.sessions[sessionId];
     if (!s) { return null; }
-    const nonSystem = s.history.filter(m => m.role !== 'system' || m.content === '__compacted__');
+    const nonSystem = s.history.filter(m => m.role !== 'system' || isCompactMarker(m));
     const lastUserIdx = [...s.history].map((m, i) => ({ m, i })).reverse().find(({ m }) => m.role === 'user')?.i;
     if (lastUserIdx === undefined) { return null; }
     const text = s.history[lastUserIdx].content;
@@ -166,7 +169,7 @@ export class SessionManager {
   setSystemPrompt(sessionId: string, prompt: string) {
     if (this.sessions[sessionId]) {
       this.sessions[sessionId].systemPrompt = prompt;
-      this.sessions[sessionId].history = this.sessions[sessionId].history.filter(m => m.role !== 'system' || m.content === '__compacted__');
+      this.sessions[sessionId].history = this.sessions[sessionId].history.filter(m => m.role !== 'system' || isCompactMarker(m));
     }
   }
 

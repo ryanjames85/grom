@@ -318,18 +318,34 @@ describe('LocalLLMClient', () => {
       expect(caps.tools).to.be.true;
     });
 
-    it('detects tools via parameter_size field (contains "parameter")', async () => {
+    it('detects tools via chat template containing {% if tools %} block', async () => {
       const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder:7b', true);
-      fetchStub.resolves(ollamaShowResponse({ details: { parameter_size: '7B', family: 'qwen2' } }));
+      fetchStub.resolves(ollamaShowResponse({ template: '{%- if tools %}\n<|im_start|>system\n...' }));
       const caps = await client.getCapabilities();
       expect(caps.tools).to.be.true;
+    });
+
+    it('detects tools via model_info chat template (tokenizer.ggml.chat_template)', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'phi-4:14b', true);
+      fetchStub.resolves(ollamaShowResponse({ model_info: { 'tokenizer.ggml.chat_template': '{% for tool in tools %}...' } }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('does NOT detect tools when response only contains "parameter" in parameter_size', async () => {
+      // Regression guard: parameter_size is present in every model's /api/show response
+      // and should not be treated as evidence of tool support.
+      const client = new LocalLLMClient('http://localhost:11434', 'some-base-model:7b', true);
+      fetchStub.resolves(ollamaShowResponse({ details: { parameter_size: '7B', family: 'llama' } }));
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.false;
     });
 
     it('retries with :latest suffix when first /api/show fails for untagged model', async () => {
       const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5-coder', true);
       fetchStub
         .onFirstCall().resolves({ ok: false } as any)
-        .onSecondCall().resolves(ollamaShowResponse({ details: { parameter_size: '7B' } }));
+        .onSecondCall().resolves(ollamaShowResponse({ model_info: { 'general.tags': ['tools'] }, details: { parameter_size: '7B' } }));
       const caps = await client.getCapabilities();
       expect(fetchStub.callCount).to.equal(2);
       expect(fetchStub.secondCall.args[1].body).to.include(':latest');
@@ -365,6 +381,60 @@ describe('LocalLLMClient', () => {
       expect(url).to.include('/api/show');
       expect(opts.method).to.equal('POST');
       expect(JSON.parse(opts.body).name).to.equal('llama3.1:8b');
+    });
+  });
+
+  // --- LM Studio /api/v0/models capability detection ---
+
+  describe('OpenAI-compat getCapabilities — LM Studio v0 API', () => {
+    it('uses explicit tool_calls boolean from /api/v0/models when getModels was called first', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen2.5-7b', false);
+      const v0Response = { data: [{ id: 'qwen2.5-7b', capabilities: { vision: false, tool_calls: true } }] };
+      fetchStub.resolves({ ok: true, json: async () => v0Response } as any);
+      await client.getAvailableModels();   // triggers v0 probe, caches result
+      const caps = await client.getCapabilities(); // consumes cache — no extra fetch
+      expect(caps.tools).to.be.true;
+      expect(caps.vision).to.be.false;
+      // Only 1 fetch total (v0 probe in getModels; getCapabilities consumed cache)
+      expect(fetchStub.callCount).to.equal(1);
+    });
+
+    it('v0 vision=true overrides name-based vision=false', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'plain-text-model', false);
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [{ id: 'plain-text-model', capabilities: { vision: true, tool_calls: false } }] }) } as any);
+      await client.getAvailableModels();
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+      expect(caps.tools).to.be.false;
+    });
+
+    it('falls through to /v1/models when v0 endpoint returns no models', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'some-model', false);
+      fetchStub
+        .onFirstCall().resolves({ ok: true, json: async () => ({ data: [] }) } as any)   // v0 empty
+        .onSecondCall().resolves({ ok: true, json: async () => ({ data: [{ id: 'some-model', capabilities: { tool_calls: true } }] }) } as any); // v1
+      await client.getAvailableModels();
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('falls through to /v1/models when v0 endpoint returns non-ok', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'my-model', false);
+      fetchStub
+        .onFirstCall().resolves({ ok: false } as any)   // v0 fails
+        .onSecondCall().resolves({ ok: true, json: async () => ({ data: [{ id: 'my-model', capabilities: { tool_calls: true } }] }) } as any); // v1
+      await client.getAvailableModels();
+      const caps = await client.getCapabilities();
+      expect(caps.tools).to.be.true;
+    });
+
+    it('uses name-based detection when v0 entry has no boolean caps', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen2.5-coder:7b', false);
+      fetchStub.resolves({ ok: true, json: async () => ({ data: [{ id: 'qwen2.5-coder:7b' }] }) } as any);
+      await client.getAvailableModels();
+      const caps = await client.getCapabilities();
+      // No explicit caps → falls to name-based; qwen2.5 is in the tools list
+      expect(caps.tools).to.be.true;
     });
   });
 
@@ -428,6 +498,24 @@ describe('LocalLLMClient', () => {
     fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
     const result = await client.streamChatWithCallback([], () => {});
     expect(result.text).to.equal('done');
+  });
+
+  it('merges multiple Ollama system messages into one and strips __compacted__ sentinel', async () => {
+    const client = new LocalLLMClient('http://localhost:11434', 'gemma3:4b', true);
+    const lines = [JSON.stringify({ message: { content: 'ok' } }) + '\n'];
+    fetchStub.resolves({ ok: true, body: makeStreamBody(lines) } as any);
+    const messages: any[] = [
+      { role: 'system', content: 'You are in BUILD mode.' },
+      { role: 'system', content: '__compacted__\n\ndecisions: use TypeScript' },
+      { role: 'user', content: 'hello' },
+    ];
+    await client.streamChatWithCallback(messages, () => {});
+    const body = JSON.parse(fetchStub.lastCall.args[1].body);
+    const systemMsgs = body.messages.filter((m: any) => m.role === 'system');
+    expect(systemMsgs).to.have.length(1);
+    expect(systemMsgs[0].content).to.include('BUILD mode');
+    expect(systemMsgs[0].content).to.include('decisions: use TypeScript');
+    expect(systemMsgs[0].content).not.to.include('__compacted__');
   });
 
   it('throws when Ollama stream returns non-ok', async () => {
@@ -710,6 +798,102 @@ describe('LocalLLMClient', () => {
       expect(result.toolCall).to.be.undefined;
       expect(result.text).to.equal('Here is my answer.');
     });
+
+    it('strips tool_call_id is preserved on role:tool messages through normaliseForOllama', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5', true);
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      const messages: any[] = [
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] },
+        { role: 'tool', content: 'file contents', tool_call_id: 'call_1' },
+      ];
+      await client.streamChatWithCallback(messages, () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const toolMsg = body.messages.find((m: any) => m.role === 'tool');
+      expect(toolMsg.tool_call_id).to.equal('call_1');
+    });
+
+    it('deserialises tool_calls arguments to object for Ollama (not JSON string)', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen2.5', true);
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      const messages: any[] = [
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] },
+      ];
+      await client.streamChatWithCallback(messages, () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const assistantMsg = body.messages.find((m: any) => m.role === 'assistant');
+      const args = assistantMsg.tool_calls[0].function.arguments;
+      expect(args).to.deep.equal({ path: 'a.ts' });
+    });
+
+    it('retries without tools when Ollama streams a 200 with {"error":"..."} in the body', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'gemma4:latest', true);
+      const errorLine = JSON.stringify({ error: "Value looks like object, but can't find closing '}' symbol" }) + '\n';
+      fetchStub.onFirstCall().resolves({ ok: true, body: makeStreamBody([errorLine]) } as any);
+      const chunk = JSON.stringify({ message: { content: 'Here is the file.' } }) + '\n';
+      fetchStub.onSecondCall().resolves({ ok: true, body: makeStreamBody([chunk]) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(fetchStub.callCount).to.equal(2);
+      expect(result.text).to.equal('Here is the file.');
+      expect(result.toolsDropped).to.be.true;
+    });
+
+    it('returns toolsDropped:true after 500 retry', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'gemma4:latest', true);
+      fetchStub.onFirstCall().resolves({ ok: false, status: 500, text: async () => "can't find closing '}'" } as any);
+      const chunk = JSON.stringify({ message: { content: 'ok' } }) + '\n';
+      fetchStub.onSecondCall().resolves({ ok: true, body: makeStreamBody([chunk]) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(result.toolsDropped).to.be.true;
+    });
+
+    it('retries without tools on Ollama 400 (unsupported model)', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'gemma3:4b', true);
+      fetchStub.onFirstCall().resolves({ ok: false, status: 400, text: async () => 'model does not support tools' } as any);
+      const chunk = JSON.stringify({ message: { content: 'ok' } }) + '\n';
+      fetchStub.onSecondCall().resolves({ ok: true, body: makeStreamBody([chunk]) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(fetchStub.callCount).to.equal(2);
+      expect(JSON.parse(fetchStub.secondCall.args[1].body).tools).to.be.undefined;
+      expect(result.text).to.equal('ok');
+    });
+
+    it('retries without tools on Ollama 500 with malformed tool call JSON (e.g. gemma4)', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'gemma4:latest', true);
+      fetchStub.onFirstCall().resolves({ ok: false, status: 500, text: async () => "Value looks like object, but can't find closing '}' symbol" } as any);
+      const chunk = JSON.stringify({ message: { content: 'done' } }) + '\n';
+      fetchStub.onSecondCall().resolves({ ok: true, body: makeStreamBody([chunk]) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(fetchStub.callCount).to.equal(2);
+      expect(JSON.parse(fetchStub.secondCall.args[1].body).tools).to.be.undefined;
+      expect(result.text).to.equal('done');
+    });
+
+    it('does NOT retry on Ollama 500 unrelated to tools', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'llama3', true);
+      fetchStub.resolves({ ok: false, status: 500, text: async () => 'CUDA out of memory' } as any);
+      try {
+        await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+        expect.fail('should have thrown');
+      } catch (e: any) {
+        expect(e.message).to.include('CUDA out of memory');
+        expect(fetchStub.callCount).to.equal(1);
+      }
+    });
+
+    it('OpenAI-compat returns toolsDropped:true when tool_call arguments are malformed JSON', async () => {
+      // Provider streams tool_calls with invalid JSON arguments — the catch block should
+      // signal toolsDropped so the agent loop resets nativeToolsWorked.
+      const client = new LocalLLMClient('http://localhost:1234', 'llama3', false);
+      const badArgsSSE = [
+        'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_bad', type: 'function', function: { name: 'read_file', arguments: '' } }] } }] }) + '\n',
+        'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{{invalid json' } }] } }] }) + '\n',
+        'data: [DONE]\n',
+      ];
+      fetchStub.resolves({ ok: true, body: makeStreamBody(badArgsSSE) } as any);
+      const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
+      expect(result.toolCall).to.be.undefined;
+      expect(result.toolsDropped).to.be.true;
+    });
   });
 
   // --- Anthropic provider ---
@@ -747,6 +931,60 @@ describe('LocalLLMClient', () => {
       const caps = await client.getCapabilities();
       expect(caps.vision).to.be.true;
       expect(caps.tools).to.be.true;
+    });
+
+    it('claude-2 has no vision and no reasoning', async () => {
+      const client = new LocalLLMClient('https://api.anthropic.com', 'claude-2', false, 'sk-ant-key', undefined, 'anthropic');
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.false;
+      expect(caps.reasoning).to.be.false;
+      expect(caps.tools).to.be.true;
+    });
+
+    it('claude-instant has no vision and no reasoning', async () => {
+      const client = new LocalLLMClient('https://api.anthropic.com', 'claude-instant-1.2', false, 'sk-ant-key', undefined, 'anthropic');
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.false;
+      expect(caps.reasoning).to.be.false;
+    });
+
+    it('claude-opus-4 has vision and reasoning', async () => {
+      const client = new LocalLLMClient('https://api.anthropic.com', 'claude-opus-4-5', false, 'sk-ant-key', undefined, 'anthropic');
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+      expect(caps.reasoning).to.be.true;
+    });
+
+    it('claude-sonnet-4 has vision and reasoning', async () => {
+      const client = new LocalLLMClient('https://api.anthropic.com', 'claude-sonnet-4-5', false, 'sk-ant-key', undefined, 'anthropic');
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+      expect(caps.reasoning).to.be.true;
+    });
+
+    it('claude-haiku-4 has vision and reasoning', async () => {
+      const client = new LocalLLMClient('https://api.anthropic.com', 'claude-haiku-4-5-20251001', false, 'sk-ant-key', undefined, 'anthropic');
+      const caps = await client.getCapabilities();
+      expect(caps.vision).to.be.true;
+      expect(caps.reasoning).to.be.true;
+    });
+
+    it('claude-3-7-sonnet has reasoning (extended thinking)', async () => {
+      const client = new LocalLLMClient('https://api.anthropic.com', 'claude-3-7-sonnet-20250219', false, 'sk-ant-key', undefined, 'anthropic');
+      const caps = await client.getCapabilities();
+      expect(caps.reasoning).to.be.true;
+      expect(caps.vision).to.be.true;
+    });
+
+    it('processes final chunk that arrives without a trailing newline', async () => {
+      const client = anthropicClient();
+      const firstLine = 'data: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } }) + '\n';
+      const lastLine  = 'data: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ' world' } }); // no trailing \n
+      fetchStub.resolves({ ok: true, body: makeStreamBody([firstLine, lastLine]) } as any);
+      const chunks: string[] = [];
+      const result = await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], (c) => chunks.push(c));
+      expect(chunks).to.deep.equal(['Hello', ' world']);
+      expect(result.text).to.equal('Hello world');
     });
 
     it('posts to /v1/messages not /v1/chat/completions', async () => {
@@ -918,6 +1156,16 @@ describe('fetchContextLength', () => {
   it('reads llama.context_length from /api/show model_info', async () => {
     fetchStub.resolves(showOk({ model_info: { 'llama.context_length': 131072 } }));
     expect(await fetchContextLength('http://localhost:11434', 'gemma4')).to.equal(131072);
+  });
+
+  it('reads gemma.context_length from /api/show model_info (architecture-specific key)', async () => {
+    fetchStub.resolves(showOk({ model_info: { 'gemma.context_length': 131072 } }));
+    expect(await fetchContextLength('http://localhost:11434', 'gemma4:latest')).to.equal(131072);
+  });
+
+  it('reads mistral.context_length from /api/show model_info', async () => {
+    fetchStub.resolves(showOk({ model_info: { 'mistral.context_length': 32768 } }));
+    expect(await fetchContextLength('http://localhost:11434', 'mistral:7b')).to.equal(32768);
   });
 
   it('reads context_length (alternate key) from /api/show model_info', async () => {

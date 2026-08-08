@@ -7,6 +7,55 @@
 
 import { ChatMessage } from './client';
 
+/** Returns true for the compact-marker system messages inserted by compactSession(). */
+export function isCompactMarker(m: ChatMessage): boolean {
+  return m.role === 'system' && m.content.startsWith('__compacted__');
+}
+
+/**
+ * System prompt used when extracting a structured summary of messages that are about
+ * to be trimmed during compaction. Produces typed arrays the model can reconstruct
+ * context from, rather than lossy prose — keeps exact file paths, function names, and
+ * error messages verbatim.
+ */
+export const COMPACT_EXTRACTION_PROMPT =
+  `You are compacting conversation history that is being trimmed to save context space. Extract the key facts from the messages below into a terse structured block. Preserve exact file paths, function names, and error messages verbatim.
+
+Format:
+decisions: <architectural decisions made and why>
+constraints: <rules, non-negotiables, requirements>
+openFiles: <files actively worked on and their purpose>
+openQuestions: <unresolved questions or blockers>
+recentErrors: <errors or stack traces mentioned>
+nextSteps: <what was about to happen next>
+
+Omit any section that has nothing to report. Output ONLY the structured block, no preamble or explanation.`;
+
+/**
+ * Builds a compact extraction input from a list of messages, staying within a
+ * token budget. Takes messages from the END (most recent context first) so the
+ * model receives the most relevant decisions even when history is very long.
+ * Each message is truncated to maxCharsPerMsg before the budget check.
+ */
+export function buildExtractionInput(
+  messages: ChatMessage[],
+  budgetTokens = 3000,
+  maxCharsPerMsg = 600
+): string {
+  const lines: string[] = [];
+  let usedTokens = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const label = m.role === 'user' ? 'User' : 'Assistant';
+    const text = `${label}: ${m.content.slice(0, maxCharsPerMsg)}`;
+    const cost = Math.ceil(text.length / 4);
+    if (usedTokens > 0 && usedTokens + cost > budgetTokens) break;
+    lines.unshift(text);
+    usedTokens += cost;
+  }
+  return lines.join('\n\n');
+}
+
 /** Estimates token count from raw text using the ~4 chars/token heuristic. */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -16,7 +65,12 @@ export function estimateTokens(text: string): number {
 export function estimateHistoryTokens(history: ChatMessage[]): number {
   return history
     .filter(m => m.role !== 'system')
-    .reduce((sum, m) => sum + estimateTokens(m.content), 0);
+    .reduce((sum, m) => {
+      let t = estimateTokens(m.content);
+      if (m.tool_calls) t += m.tool_calls.reduce((s, tc) => s + estimateTokens(tc.function.arguments), 0);
+      if (m.images) t += m.images.reduce((s, img) => s + Math.ceil(img.length / 4), 0);
+      return sum + t;
+    }, 0);
 }
 
 /** Returns all messages in a history that are not system messages. */

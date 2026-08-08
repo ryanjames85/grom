@@ -43,6 +43,9 @@ export interface ToolDefinition {
 export interface ToolCallResult {
   text: string;
   toolCall?: { id: string; name: string; args: Record<string, any> };
+  /** True when tools were sent but stripped before a retry (model rejected them). The agent loop
+   *  uses this to reset nativeToolsWorked so heuristic instructions are re-injected next turn. */
+  toolsDropped?: boolean;
 }
 
 // Monotonic counter for tool call IDs — avoids Date.now() collisions on rapid sequential calls
@@ -62,6 +65,65 @@ function parseHttpError(raw: string): string {
 }
 
 // ── Ollama ────────────────────────────────────────────────────────────────────
+
+/**
+ * Merges multiple system messages into a single leading one and strips __compacted__
+ * sentinels so only the human-readable summary reaches the model. Many Jinja chat
+ * templates (Qwen3, Llama-3, Mistral, …) reject or silently drop extra system turns.
+ * Returns ChatMessage[] so it can be used by any provider before format conversion.
+ */
+function mergeSystemMessages(messages: ChatMessage[]): ChatMessage[] {
+  const systemParts: string[] = [];
+  const rest: ChatMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      const content = msg.content.startsWith('__compacted__')
+        ? msg.content.replace(/^__compacted__\n*/, '').trim()
+        : msg.content.trim();
+      if (content) systemParts.push(content);
+    } else {
+      rest.push(msg);
+    }
+  }
+  if (systemParts.length === 0) return rest;
+  return [{ role: 'system', content: systemParts.join('\n\n') }, ...rest];
+}
+
+/**
+ * Merges all system messages into a single leading system message before sending
+ * to Ollama. Most model jinja templates only expect one system message and silently
+ * drop or mishandle extras. Compact markers (__compacted__\n\nsummary) have their
+ * sentinel stripped so only the human-readable summary reaches the model.
+ */
+function normaliseForOllama(messages: ChatMessage[]): any[] {
+  const merged = mergeSystemMessages(messages);
+  const rest: any[] = [];
+
+  for (const msg of merged) {
+    if (msg.role === 'system') {
+      rest.push({ role: 'system', content: msg.content });
+      continue;
+    }
+    {
+      const base: any = { role: msg.role, content: msg.content };
+      if (msg.images?.length) base.images = msg.images;
+      if (msg.tool_call_id) base.tool_call_id = msg.tool_call_id;
+      if (msg.tool_calls) {
+        // Ollama expects arguments as a parsed object; internally they're stored as JSON strings.
+        base.tool_calls = msg.tool_calls.map(tc => ({
+          ...tc,
+          function: {
+            ...tc.function,
+            arguments: (() => { try { return JSON.parse(tc.function.arguments); } catch { return tc.function.arguments; } })()
+          }
+        }));
+      }
+      rest.push(base);
+    }
+  }
+
+  return rest;
+}
 
 export class OllamaProvider implements ILLMProvider {
   private baseUrl: string;
@@ -83,42 +145,94 @@ export class OllamaProvider implements ILLMProvider {
       }
       if (!res.ok) return { vision: false, reasoning: false, tools: false };
       const rawInfo = await res.json();
-      const infoStr = JSON.stringify(rawInfo).toLowerCase();
       const details = rawInfo.details || {};
       const families = (details.families || []).map((f: string) => f.toLowerCase());
-      
+
+      // Tier 1: explicit GGUF metadata tags (Ollama 0.4+). Most reliable source.
+      const modelInfo = rawInfo.model_info || {};
+      const tags: string[] = (modelInfo['general.tags'] || []).map((t: string) => t.toLowerCase());
+
+      // Tier 2: chat template inspection. The template is always present in /api/show and
+      // contains tool conditionals ({% if tools %}) for models trained for function calling.
+      const template: string = modelInfo['tokenizer.ggml.chat_template'] || rawInfo.template || '';
+      const templateHasTools = /\{%-?\s*if\s+tools\b|\{%-?\s*for\s+\w+\s+in\s+tools\b/i.test(template);
+
+      // Tier 3: narrow keyword scan. Only scan the raw JSON string — but NOT for 'parameter'
+      // which appears in every model's parameters section and produced false positives.
+      const infoStr = JSON.stringify(rawInfo).toLowerCase();
+
       return {
-        vision: infoStr.includes('projector') || infoStr.includes('vision') || infoStr.includes('vlm') || infoStr.includes('multimodal') || families.some((f: string) => f.includes('mllm') || f.includes('vision') || f.includes('clip') || f.includes('vlm')),
-        reasoning: infoStr.includes('think') || infoStr.includes('reasoning') || model.toLowerCase().includes('r1'),
-        // Tools: look for explicit tool support or common architecture keywords
-        tools: infoStr.includes('"tools"') || infoStr.includes('"functions"') || infoStr.includes('parameter')
+        vision: tags.some(t => ['vision', 'vlm', 'multimodal', 'mllm', 'clip'].includes(t)) ||
+          families.some((f: string) => f.includes('vision') || f.includes('clip') || f.includes('vlm') || f.includes('mllm')) ||
+          infoStr.includes('projector') || infoStr.includes('vision') || infoStr.includes('vlm'),
+        reasoning: tags.some(t => ['reasoning', 'thinking'].includes(t)) ||
+          infoStr.includes('reasoning') || model.toLowerCase().includes('r1'),
+        tools: tags.some(t => t === 'tools' || t === 'function-calling') ||
+          templateHasTools ||
+          infoStr.includes('"tools"') || infoStr.includes('"function_call"')
       };
     } catch { return { vision: false, reasoning: false, tools: false }; }
   }
 
   async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, jsonMode?: boolean, tools?: ToolDefinition[]): Promise<ToolCallResult> {
-    const ollamaMessages = messages.map(msg => {
-      const base: any = { role: msg.role, content: msg.content };
-      if (msg.images?.length) base.images = msg.images;
-      if (msg.tool_calls) base.tool_calls = msg.tool_calls;
-      return base;
-    });
+    const ollamaMessages = normaliseForOllama(messages);
 
     const body: any = { model, messages: ollamaMessages, stream: true };
     if (jsonMode) body.format = 'json';
     // Layer 2: pass tools array — Ollama supports OpenAI-style tool calling for capable models
     if (tools?.length) {
-      body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
+      body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: { type: 'object', ...t.inputSchema } } }));
     }
+    const hadTools = !!body.tools;
 
-    const res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-    if (!res.ok) throw new Error(parseHttpError(await res.text()));
+    let res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+    // If the model can't handle tools (400 = unsupported, 500 = malformed tool call JSON from
+    // the model), retry without them so the heuristic parser handles it instead.
+    if (!res.ok && body.tools) {
+      const errText = await res.text();
+      const lower = errText.toLowerCase();
+      const isToolRelated = res.status === 400 ||
+        (res.status === 500 && (lower.includes('tool') || lower.includes('function') || lower.includes('closing') || lower.includes('json')));
+      if (isToolRelated) {
+        delete body.tools;
+        res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+        if (!res.ok) throw new Error(parseHttpError(await res.text()));
+        // Signal to the agent loop that native tools failed so it can re-enable heuristic mode.
+        if (!res.body) return { text: '', toolsDropped: true };
+      } else {
+        throw new Error(parseHttpError(errText));
+      }
+    } else if (!res.ok) {
+      throw new Error(parseHttpError(await res.text()));
+    }
     if (!res.body) return { text: '' };
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '', buffer = '';
     let nativeToolCall: ToolCallResult['toolCall'] | undefined;
+    let streamError: string | undefined;
+
+    const parseOllamaLine = (line: string) => {
+      if (!line.trim()) return;
+      try {
+        const j = JSON.parse(line);
+        // Ollama can return 200 then stream {"error":"..."} when the model emits malformed JSON.
+        if (j.error && !j.message) { streamError = j.error; return; }
+        if (j.message?.content) { onChunk(j.message.content); fullText += j.message.content; }
+        if (j.message?.tool_calls?.length && !nativeToolCall) {
+          const tc = j.message.tool_calls[0];
+          const rawArgs = tc.function?.arguments;
+          nativeToolCall = {
+            id: nextToolCallId('ollama'),
+            name: tc.function?.name || '',
+            args: typeof rawArgs === 'string'
+              ? (() => { try { return JSON.parse(rawArgs); } catch { return {}; } })()
+              : (rawArgs || {})
+          };
+        }
+      } catch {}
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -126,28 +240,24 @@ export class OllamaProvider implements ILLMProvider {
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const j = JSON.parse(line);
-          if (j.message?.content) { onChunk(j.message.content); fullText += j.message.content; }
-          // Layer 2: Ollama returns tool_calls as objects with function.arguments already parsed
-          if (j.message?.tool_calls?.length && !nativeToolCall) {
-            const tc = j.message.tool_calls[0];
-            nativeToolCall = {
-              id: nextToolCallId('ollama'),
-              name: tc.function?.name || '',
-              args: tc.function?.arguments || {}
-            };
-          }
-        } catch {}
-      }
+      for (const line of lines) parseOllamaLine(line);
     }
-    return { text: fullText, toolCall: nativeToolCall };
+    if (buffer.trim()) parseOllamaLine(buffer);
+
+    // Stream completed with an in-body error (e.g. malformed tool call JSON from the model).
+    // Ollama returns 200 then streams {"error":"..."} — our !res.ok check misses this.
+    // Only retry if nothing was chunked to the UI yet (avoids duplicating already-rendered content).
+    if (streamError && hadTools && !nativeToolCall && !fullText) {
+      delete body.tools;
+      return { ...(await this.streamChat(model, messages, onChunk, signal, jsonMode)), toolsDropped: true };
+    }
+    if (streamError && !fullText && !nativeToolCall) throw new Error(streamError);
+
+    return { text: fullText, toolCall: nativeToolCall, toolsDropped: !body.tools && hadTools };
   }
 
   async chat(model: string, messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
-    const ollamaMessages = messages.map(msg => ({ role: msg.role, content: msg.content, ...(msg.images?.length ? { images: msg.images } : {}) }));
+    const ollamaMessages = normaliseForOllama(messages);
     const res = await fetch(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages: ollamaMessages, stream: false }), signal });
     if (!res.ok) throw new Error(parseHttpError(await res.text()));
     const data: any = await res.json();
@@ -162,6 +272,8 @@ export class OpenAICompatibleProvider implements ILLMProvider {
   private authHeader: Record<string, string>;
   // Cached from last getModels() call — consumed once by getCapabilities() to avoid a second fetch.
   private _lastModelsRaw: any = null;
+  // True when _lastModelsRaw came from /api/v0/models (LM Studio) with explicit capability fields.
+  private _lastModelsRawIsV0 = false;
 
   constructor(baseUrl: string, apiKey?: string, authType: AuthType = 'bearer') {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -171,6 +283,22 @@ export class OpenAICompatibleProvider implements ILLMProvider {
   }
 
   async getModels(signal?: AbortSignal): Promise<string[]> {
+    // Prefer LM Studio's /api/v0/models (0.3.5+) — it returns explicit boolean capability fields
+    // per model, making getCapabilities() much more accurate. Falls through silently for any
+    // server that doesn't implement this endpoint.
+    try {
+      const v0Res = await fetch(`${this.baseUrl}/api/v0/models`, { headers: this.authHeader, signal });
+      if (v0Res.ok) {
+        const v0Data: any = await v0Res.json();
+        const chatModels = (v0Data.data ?? []).filter((m: any) => m.type !== 'embeddings' && m.state !== 'not-loaded');
+        if (chatModels.length > 0) {
+          this._lastModelsRaw = { ...v0Data, data: chatModels };
+          this._lastModelsRawIsV0 = true;
+          return chatModels.map((m: any) => m.id);
+        }
+      }
+    } catch {}
+    this._lastModelsRawIsV0 = false;
     const res = await fetch(`${this.baseUrl}/v1/models`, { headers: this.authHeader, signal });
     if (!res.ok) throw new Error(`Provider error: ${res.statusText}`);
     const data: any = await res.json();
@@ -216,19 +344,40 @@ export class OpenAICompatibleProvider implements ILLMProvider {
       ].some(k => shortName.includes(k))
     };
     try {
-      // Reuse data from the preceding getModels() call if available — avoids a second network request.
+      // Consume the cache set by getModels(). If getModels() was called first (normal flow),
+      // this avoids any additional network request. If not, fetch fresh.
       const cached = this._lastModelsRaw;
+      const cachedIsV0 = this._lastModelsRawIsV0;
       this._lastModelsRaw = null;
+      this._lastModelsRawIsV0 = false;
       const data: any = cached || await (async () => {
+        // No cache — try v0 (LM Studio), fall through to v1 for other servers.
+        try {
+          const v0Res = await fetch(`${this.baseUrl}/api/v0/models`, { headers: this.authHeader, signal: signal ?? AbortSignal.timeout(3000) });
+          if (v0Res.ok) { const d: any = await v0Res.json(); if (d.data?.length > 0) return { data: d.data, _isV0: true }; }
+        } catch {}
         const res = await fetch(`${this.baseUrl}/v1/models`, { headers: this.authHeader, signal });
-        return res.ok ? res.json() : null;
+        return res.ok ? await res.json() : null;
       })();
       if (!data) return nameBased;
-      const entry = data.data?.find((e: any) => e.id === model || e.id === shortName);
+
+      const isV0 = cachedIsV0 || !!(data._isV0);
+      const entry = data.data?.find((e: any) => e.id === model || e.id === shortName || (isV0 && e.path === model));
       if (!entry) return nameBased;
+
       const caps = entry.capabilities || {};
       const info = JSON.stringify(entry).toLowerCase();
-      // Only trust server-reported tool caps when the entry has explicit capability fields.
+
+      // When the entry has explicit LM Studio v0 boolean caps, trust them over heuristics.
+      if (isV0 && (typeof caps.vision === 'boolean' || typeof caps.tool_calls === 'boolean' || typeof caps.tools === 'boolean')) {
+        return {
+          vision: typeof caps.vision === 'boolean' ? caps.vision : (info.includes('vision') || info.includes('vlm') || nameBased.vision),
+          reasoning: typeof caps.reasoning === 'boolean' ? caps.reasoning : (info.includes('reasoning') || nameBased.reasoning),
+          tools: typeof caps.tool_calls === 'boolean' ? caps.tool_calls : (typeof caps.tools === 'boolean' ? caps.tools : nameBased.tools)
+        };
+      }
+
+      // /v1/models path: only trust server-reported tool caps when the entry has explicit capability fields.
       // This prevents servers returning minimal model info from silently disabling tool detection.
       const hasExplicitCaps = Object.keys(caps).length > 0;
       // tool_calls is LM Studio's field name; tool_use / function_calling are used by other servers.
@@ -242,7 +391,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
   }
 
   async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, _jsonMode?: boolean, tools?: ToolDefinition[]): Promise<ToolCallResult> {
-    const formattedMessages = messages.map(msg => {
+    const formattedMessages = mergeSystemMessages(messages).map(msg => {
       if (msg.role === 'tool') {
         // Native tool result — OpenAI format. tool_call_id is required; a missing one means
         // a bug in the calling code (buildFeedback always sets it from nativeTc.id).
@@ -262,8 +411,9 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     const body: any = { model, messages: formattedMessages, stream: true };
     // Layer 1: send tools array — provider returns structured tool_calls instead of free-form text
     if (tools?.length) {
-      body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
+      body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: { type: 'object', ...t.inputSchema } } }));
     }
+    const hadTools = !!body.tools;
 
     let res = await fetch(`${this.baseUrl}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...this.authHeader }, body: JSON.stringify(body), signal });
     // If the server rejected the request and tools were included, retry without them.
@@ -306,8 +456,8 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         try {
           const j = JSON.parse(jsonStr);
           const delta = j.choices?.[0]?.delta;
-          if (delta?.content) { onChunk(delta.content); fullText += delta.content; }
-          // Layer 1: accumulate streaming tool_calls deltas
+          if (delta?.content != null && delta.content !== '') { onChunk(delta.content); fullText += delta.content; }
+          // Layer 1: accumulate streaming tool_calls deltas (current format)
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
               const idx: number = tc.index ?? 0;
@@ -317,6 +467,13 @@ export class OpenAICompatibleProvider implements ILLMProvider {
               if (tc.function?.name) entry.name += tc.function.name;
               if (tc.function?.arguments) entry.args += tc.function.arguments;
             }
+          }
+          // Legacy function_call format (older OpenAI-compat providers: LocalAI, Jan, older llama.cpp)
+          if (delta?.function_call) {
+            if (!accTC.has(0)) accTC.set(0, { id: '', name: '', args: '' });
+            const entry = accTC.get(0)!;
+            if (delta.function_call.name) entry.name += delta.function_call.name;
+            if (delta.function_call.arguments) entry.args += delta.function_call.arguments;
           }
         } catch {}
       }
@@ -328,7 +485,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
       try {
         const args = JSON.parse(first.args || '{}');
         return { text: fullText, toolCall: { id: first.id || nextToolCallId('call'), name: first.name, args } };
-      } catch { /* malformed args — fall through to text path so heuristic parser gets a chance */ }
+      } catch { return { text: fullText, toolsDropped: hadTools }; }
     }
 
     return { text: fullText };
@@ -377,11 +534,11 @@ export class AnthropicProvider implements ILLMProvider {
 
   async getCapabilities(model: string): Promise<ModelCapabilities> {
     const m = model.toLowerCase();
-    return {
-      vision: m.includes('claude'),
-      reasoning: m.includes('claude-3-7') || m.includes('opus-4'),
-      tools: m.includes('claude')
-    };
+    // claude-2 and claude-instant have no vision; claude-3+ and claude-4+ do
+    const hasVision = (m.includes('claude-3') || m.includes('claude-4') || m.includes('claude-sonnet') || m.includes('claude-haiku') || m.includes('claude-opus')) && !m.includes('claude-2') && !m.includes('claude-instant');
+    // Extended thinking: claude-3-7-sonnet and all claude-4 models (opus-4, sonnet-4, haiku-4)
+    const hasReasoning = m.includes('claude-3-7') || m.includes('opus-4') || m.includes('sonnet-4') || m.includes('haiku-4');
+    return { vision: hasVision, reasoning: hasReasoning, tools: m.includes('claude') };
   }
 
   async streamChat(model: string, messages: ChatMessage[], onChunk: (chunk: string) => void, signal?: AbortSignal, _jsonMode?: boolean, tools?: ToolDefinition[]): Promise<ToolCallResult> {
@@ -394,13 +551,15 @@ export class AnthropicProvider implements ILLMProvider {
         return { role: 'user', content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id || '', content: msg.content }] };
       }
       if (msg.tool_calls) {
-        // Assistant message that triggered a tool call — wrap in content array with tool_use block
+        // Assistant message that triggered a tool call — include any prose text before the tool_use block.
+        // Anthropic requires a text block when content is non-empty; omitting it causes a validation error.
+        const toolUseBlocks = msg.tool_calls.map(tc => ({
+          type: 'tool_use', id: tc.id, name: tc.function.name,
+          input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })()
+        }));
         return {
           role: 'assistant',
-          content: msg.tool_calls.map(tc => ({
-            type: 'tool_use', id: tc.id, name: tc.function.name,
-            input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })()
-          }))
+          content: msg.content ? [{ type: 'text', text: msg.content }, ...toolUseBlocks] : toolUseBlocks
         };
       }
       if (msg.images?.length) {
@@ -438,7 +597,22 @@ export class AnthropicProvider implements ILLMProvider {
           const j = JSON.parse(clean.slice(6));
           if (j.type === 'content_block_delta' && j.delta?.type === 'text_delta') { onChunk(j.delta.text); fullText += j.delta.text; }
           // Layer 1 (Anthropic): tool_use blocks arrive as content_block_start/delta/stop
-          if (j.type === 'content_block_start' && j.content_block?.type === 'tool_use') {
+          if (j.type === 'content_block_start' && j.content_block?.type === 'tool_use' && !toolUse) {
+            toolUse = { id: j.content_block.id, name: j.content_block.name, inputJson: '' };
+          }
+          if (j.type === 'content_block_delta' && j.delta?.type === 'input_json_delta' && toolUse) {
+            toolUse.inputJson += j.delta.partial_json || '';
+          }
+        } catch {}
+      }
+    }
+    if (buffer.trim()) {
+      const clean = buffer.trim();
+      if (clean.startsWith('data: ')) {
+        try {
+          const j = JSON.parse(clean.slice(6));
+          if (j.type === 'content_block_delta' && j.delta?.type === 'text_delta') { onChunk(j.delta.text); fullText += j.delta.text; }
+          if (j.type === 'content_block_start' && j.content_block?.type === 'tool_use' && !toolUse) {
             toolUse = { id: j.content_block.id, name: j.content_block.name, inputJson: '' };
           }
           if (j.type === 'content_block_delta' && j.delta?.type === 'input_json_delta' && toolUse) {
@@ -463,7 +637,7 @@ export class AnthropicProvider implements ILLMProvider {
       model, max_tokens: 8096, stream: false,
       messages: messages.filter(m => m.role !== 'system').map(msg => {
         if (msg.role === 'tool') return { role: 'user', content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id || '', content: msg.content }] };
-        if (msg.tool_calls) return { role: 'assistant', content: msg.tool_calls.map(tc => ({ type: 'tool_use', id: tc.id, name: tc.function.name, input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })() })) };
+        if (msg.tool_calls) { const tb = msg.tool_calls.map(tc => ({ type: 'tool_use', id: tc.id, name: tc.function.name, input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })() })); return { role: 'assistant', content: msg.content ? [{ type: 'text', text: msg.content }, ...tb] : tb }; }
         return { role: msg.role, content: msg.content };
       })
     };

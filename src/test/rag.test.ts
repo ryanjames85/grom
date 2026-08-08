@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import * as sinon from 'sinon';
-import { RagIndex, RagFile } from '../rag';
+import { RagIndex, RagFile, ConversationRag } from '../rag';
 
 (global as any).vscode = {
   workspace: {
@@ -645,5 +645,135 @@ describe('RagIndex incremental re-indexing', () => {
     } finally {
       sinon.restore();
     }
+  });
+});
+
+// ── ConversationRag ───────────────────────────────────────────────────────────
+
+describe('ConversationRag', () => {
+  const makeHistory = (turns: Array<[string, string]>) =>
+    turns.map(([role, content]) => ({ role, content }));
+
+  it('returns empty string when history is empty', () => {
+    const rag = new ConversationRag();
+    rag.build([]);
+    expect(rag.query('anything')).to.equal('');
+  });
+
+  it('returns empty string when all turns are system messages', () => {
+    const rag = new ConversationRag();
+    rag.build([{ role: 'system', content: 'You are helpful.' }]);
+    expect(rag.query('anything')).to.equal('');
+  });
+
+  it('returns empty string when history has fewer turns than excludeLast', () => {
+    const rag = new ConversationRag();
+    rag.build(makeHistory([['user', 'hello'], ['assistant', 'hi'], ['user', 'how are you']]));
+    // default excludeLast=4, only 3 turns — all excluded
+    expect(rag.query('hello')).to.equal('');
+  });
+
+  it('returns empty string when query terms appear only in excluded recent turns, not in candidates', () => {
+    const rag = new ConversationRag();
+    // excludeLast=1 → only index 0 is a candidate; index 1 is excluded
+    // The candidate has no overlap with the query; the excluded turn does — so nothing is returned
+    rag.build(makeHistory([
+      ['user', 'setting up the project structure and folders'],
+      ['assistant', 'TypeScript compiler configuration for this session'],
+    ]));
+    // 'TypeScript compiler' only appears in the excluded (most recent) turn
+    expect(rag.query('TypeScript compiler configuration', 1, 1)).to.equal('');
+  });
+
+  it('retrieves a relevant earlier turn by keyword match', () => {
+    const rag = new ConversationRag();
+    rag.build(makeHistory([
+      ['user', 'we decided to use SQLite for the database with WAL mode'],
+      ['assistant', 'good choice, SQLite WAL mode works well for this use case'],
+      ['user', 'what about the authentication layer'],
+      ['assistant', 'we should use JWT tokens'],
+      ['user', 'current question about something else'],
+    ]));
+    const result = rag.query('SQLite WAL database', 1, 1);
+    expect(result).to.include('SQLite');
+  });
+
+  it('excludes the most recent N turns (default 4)', () => {
+    const rag = new ConversationRag();
+    rag.build(makeHistory([
+      ['user', 'early message about SQLite database schema'],
+      ['assistant', 'early reply about schema'],
+      ['user', 'second message SQLite'],
+      ['assistant', 'second reply SQLite'],
+      ['user', 'third SQLite'],   // these 4 are recent
+      ['assistant', 'third reply'],
+      ['user', 'fourth SQLite'],
+      ['assistant', 'fourth reply'],
+    ]));
+    // With default excludeLast=4, the last 4 turns are excluded from retrieval
+    // So only the first 4 turns are candidates
+    const result = rag.query('SQLite database schema', 2, 4);
+    expect(result).to.include('[User (earlier)]');
+    expect(result).to.include('early message');
+  });
+
+  it('labels user turns as "User (earlier)" and assistant turns as "Assistant (earlier)"', () => {
+    const rag = new ConversationRag();
+    rag.build(makeHistory([
+      ['user', 'we are using TypeScript and React for the frontend project'],
+      ['assistant', 'TypeScript with React is a great combination for frontend'],
+      ['user', 'current question'],
+    ]));
+    const result = rag.query('TypeScript React frontend', 2, 1);
+    expect(result).to.satisfy((r: string) =>
+      r.includes('[User (earlier)]') || r.includes('[Assistant (earlier)]')
+    );
+  });
+
+  it('truncates very long turns to 500 characters in the result', () => {
+    const longContent = 'important keyword ' + 'padding '.repeat(200);
+    const rag = new ConversationRag();
+    rag.build(makeHistory([
+      ['user', longContent],
+      ['assistant', 'short reply'],
+      ['user', 'current message'],
+    ]));
+    const result = rag.query('important keyword', 1, 1);
+    expect(result).to.include('important keyword');
+    // Total result string should be well under the untruncated length
+    expect(result.length).to.be.lessThan(longContent.length);
+    // The ellipsis marker signals truncation occurred
+    expect(result).to.include('…');
+  });
+
+  it('respects topK parameter', () => {
+    const rag = new ConversationRag();
+    rag.build(makeHistory([
+      ['user', 'authentication JWT tokens login security'],
+      ['assistant', 'use JWT for auth tokens'],
+      ['user', 'database SQLite schema migration'],
+      ['assistant', 'SQLite migration with WAL'],
+      ['user', 'frontend React components'],
+      ['assistant', 'use React hooks'],
+      ['user', 'current question about auth and database'],
+    ]));
+    const result1 = rag.query('auth database', 1, 1);
+    const result2 = rag.query('auth database', 3, 1);
+    // topK=1 should return fewer results than topK=3
+    const count1 = (result1.match(/\[(?:User|Assistant) \(earlier\)\]/g) || []).length;
+    const count2 = (result2.match(/\[(?:User|Assistant) \(earlier\)\]/g) || []).length;
+    expect(count2).to.be.at.least(count1);
+  });
+
+  it('returns the turn containing the queried keyword when topK=1', () => {
+    const rag = new ConversationRag();
+    rag.build(makeHistory([
+      ['user', 'we decided to migrate the database schema using Flyway'],
+      ['assistant', 'Flyway migration approach confirmed'],
+      ['user', 'current question not about migrations'],
+    ]));
+    // Only one eligible turn (excludeLast=1), it matches the keyword
+    const result = rag.query('Flyway migration database', 1, 1);
+    expect(result).to.include('Flyway');
   });
 });

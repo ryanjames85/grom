@@ -69,7 +69,11 @@ async function _probeOllamaShow(url: string, model: string): Promise<number | nu
     clearTimeout(t);
     if (res.ok) {
       const d = await res.json();
-      const n = d?.model_info?.['llama.context_length'] ?? d?.model_info?.['context_length'] ?? d?.parameters?.num_ctx ?? null;
+      // model_info uses architecture-specific keys (llama.context_length, gemma.context_length, etc.)
+      // Find whichever one is present rather than hard-coding the llama key only.
+      const modelInfo = d?.model_info ?? {};
+      const ctxKey = Object.keys(modelInfo).find(k => k.endsWith('.context_length'));
+      const n = (ctxKey ? modelInfo[ctxKey] : null) ?? modelInfo['context_length'] ?? d?.parameters?.num_ctx ?? null;
       if (n) return Number(n);
     }
   } catch {}

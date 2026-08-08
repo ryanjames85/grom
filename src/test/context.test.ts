@@ -5,8 +5,15 @@
 // resolveSlashCommand destructures at call time, so the stub is picked up correctly.
 const sinon = require('sinon');
 const childProcess = require('child_process');
-const { resolveSlashCommand } = require('../context');
+const { resolveSlashCommand, resolveMentions } = require('../context');
 const pkg = require('../../package.json');
+
+// Grab the vscode mock that context.ts was loaded with (set up by agent-loop.test.ts).
+// We add `fs.stat` here since agent-loop's mock only has readFile/writeFile/etc.
+const vscode = require('vscode');
+if (!vscode.workspace.fs.stat) {
+  vscode.workspace.fs.stat = sinon.stub();
+}
 
 let expect;
 
@@ -122,6 +129,58 @@ describe('resolveSlashCommand other commands', () => {
   it('unknown command returns the raw text unchanged', async () => {
     const result = await resolveSlashCommand('hello world');
     expect(result).to.equal('hello world');
+  });
+});
+
+describe('resolveMentions', () => {
+  let fetchStub;
+
+  before(async () => {
+    const chai = await import('chai');
+    expect = chai.expect;
+  });
+
+  beforeEach(() => {
+    fetchStub = sinon.stub(global, 'fetch');
+    vscode.workspace.findFiles.reset();
+    vscode.workspace.findFiles.resolves([]);
+    vscode.workspace.fs.readFile.reset();
+    vscode.workspace.fs.stat.reset();
+  });
+
+  afterEach(() => {
+    fetchStub.restore();
+    sinon.restore();
+  });
+
+  it('@url reports HTTP error status when fetch returns non-ok response', async () => {
+    fetchStub.resolves({ ok: false, status: 404, statusText: 'Not Found' });
+    const result = await resolveMentions('@url:https://example.com/missing', new Set());
+    expect(result).to.include('HTTP 404');
+    expect(result).to.include('Not Found');
+  });
+
+  it('@url reports HTTP 403 Forbidden correctly', async () => {
+    fetchStub.resolves({ ok: false, status: 403, statusText: 'Forbidden' });
+    const result = await resolveMentions('@url:https://example.com/private', new Set());
+    expect(result).to.include('HTTP 403');
+    expect(result).to.include('Forbidden');
+  });
+
+  it('@filename reports error when file is found but cannot be read', async () => {
+    vscode.workspace.findFiles.resolves([{ fsPath: '/test/config.ts' }]);
+    vscode.workspace.fs.stat.resolves({ size: 100 });
+    vscode.workspace.fs.readFile.rejects(new Error('permission denied'));
+    const result = await resolveMentions('@config.ts', new Set());
+    expect(result).to.include('Error: could not read file');
+    expect(result).to.include('config.ts');
+  });
+
+  it('@filename reports error when stat throws', async () => {
+    vscode.workspace.findFiles.resolves([{ fsPath: '/test/missing.ts' }]);
+    vscode.workspace.fs.stat.rejects(new Error('file not found'));
+    const result = await resolveMentions('@missing.ts', new Set());
+    expect(result).to.include('Error: could not read file');
   });
 });
 

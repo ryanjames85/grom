@@ -28,7 +28,7 @@ import { RagIndex } from './rag';
 import { DocsIndex } from './docs-index';
 import { McpManager } from './mcp';
 import { AgentLoop } from './agent-loop';
-import { estimateTokens, estimateHistoryTokens } from './utils';
+import { estimateTokens, estimateHistoryTokens, getNonSystemMessages, isCompactMarker, COMPACT_EXTRACTION_PROMPT, buildExtractionInput } from './utils';
 import { log, logError } from './logger';
 import { VoiceManager, findFfmpeg } from './voice';
 
@@ -61,12 +61,22 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   // one to finish rather than running concurrently and corrupting session history.
   private _chatQueue: Promise<void> = Promise.resolve();
   private _detectedContextLength: number | null = null;
+  private _lastActiveEditor: vscode.TextEditor | undefined = vscode.window.activeTextEditor;
+  private _connectionCheckInProgress = false;
+  // Stores args for a deferred check queued while one is already running.
+  // null = nothing pending; object = pending (undefined fields = use config).
+  // Later callers overwrite earlier ones — only the most-recent intent matters.
+  private _pendingConnectionCheck: { url?: string; model?: string; ollama?: boolean } | null = null;
+  // Resolve callbacks for all callers waiting on the deferred check — called together when it completes.
+  private _pendingConnectionResolvers: Array<() => void> = [];
   private _contextHintSent = new Set<string>(); // session IDs that have already received a context hint
   private _docsHintSent = new Set<string>();   // session IDs that have already received the @docs hint
 
   constructor(private readonly _context: vscode.ExtensionContext, private readonly _rag?: RagIndex, private readonly _docs?: DocsIndex) {
     this._mcp = new McpManager();
-    this._mcp.initialize();
+    // Re-check connection after MCP finishes initializing so tool availability is
+    // reflected immediately on startup without waiting for a settings change.
+    void this._mcp.initialize().then(() => this._checkConnection());
     this._voice = new VoiceManager(_context, (msg: any) => {
       if (msg.type === 'voiceAudio' || msg.type === 'voiceAudioStart') {
         try { this._voiceReply?.postMessage(msg); } catch { this._voiceReply = undefined; }
@@ -94,6 +104,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       requestApproval: (id, tool, args) => this._requestApproval(id, tool, args),
       appendTaskLog: (sid, tool, args, result) => this._appendTaskLog(sid, tool, args, result),
       getMemory: () => this._context.globalState.get<string>('gromMemory', ''),
+      getContextLength: () => this._detectedContextLength,
+      getActiveEditor: () => this._lastActiveEditor,
+      resolveProviderConfig: (url, useOllama) => this._resolveProviderKey(url, useOllama),
     });
   }
 
@@ -185,7 +198,11 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    const editorWatcher = vscode.window.onDidChangeActiveTextEditor(() => {
+    const editorWatcher = vscode.window.onDidChangeActiveTextEditor(editor => {
+      // Only update the stored editor when a real text editor gains focus — not when
+      // the webview takes focus (which fires with undefined), so the last file stays
+      // available as context when the user types in Grom's input box.
+      if (editor) this._lastActiveEditor = editor;
       this._updateActiveContext();
     });
 
@@ -225,6 +242,10 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'send': {
+          if ((data.text as string)?.trim() === '/memorise') {
+            this._chatQueue = this._chatQueue.then(() => this._memoriseSession());
+            break;
+          }
           const ph = this._context.globalState.get<string[]>('promptHistory', []);
           if (data.text && (ph.length === 0 || ph[ph.length - 1] !== data.text)) {
             ph.push(data.text);
@@ -234,6 +255,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           // Serialise through the queue — if a previous message is still streaming,
           // this one waits for it to fully complete before starting. Prevents two
           // concurrent runs from interleaving writes to session.history.
+          this._isStreaming = true;
           this._chatQueue = this._chatQueue.then(() =>
             this._handleChat(data.text, data.images, data.mode)
           );
@@ -472,13 +494,14 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           await vscode.workspace.getConfiguration('grom').update('model', data.model, vscode.ConfigurationTarget.Global);
           const sess = this._sessionManager.getCurrentSession();
           sess.model = data.model;
-          // Reset native tool calling cache — the new model may not support it
           sess.nativeToolsWorked = false;
+          this._detectedContextLength = null;
           this._saveState();
           await this._checkConnection();
           break;
         }
         case 'changeProvider': {
+          this._detectedContextLength = null;
           const cfg = vscode.workspace.getConfiguration('grom');
           let newUrl: string;
           let isOllama: boolean;
@@ -544,8 +567,10 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
               }
             }
           }
+          this._agentLoop.silentAbort();
           await cfg.update('useOllamaFormat', isOllama, vscode.ConfigurationTarget.Global);
           await cfg.update('apiUrl', newUrl, vscode.ConfigurationTarget.Global);
+          if (data.model) await cfg.update('model', data.model, vscode.ConfigurationTarget.Global);
           // Clear native tool calling cache — the new provider may behave differently
           const current = this._sessionManager.getCurrentSession();
           if (current) { current.nativeToolsWorked = false; this._saveState(); }
@@ -650,7 +675,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   /** Notifies the webview of the currently active file so the context badge stays in sync. */
   private async _updateActiveContext() {
     if (!this._view && !this._popout) return;
-    const editor = vscode.window.activeTextEditor;
+    const editor = this._lastActiveEditor;
     const files = [];
     if (editor) {
       const name = editor.document.fileName.split(/[\\\/]/).pop() || "";
@@ -668,8 +693,8 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Persists all sessions and the active session ID to workspaceState so they survive VS Code restarts. */
   private _saveState() {
-    this._context.workspaceState.update('sessions', this._sessionManager.getSessions());
-    this._context.workspaceState.update('lastSessionId', this._sessionManager.getCurrentSessionId());
+    void this._context.workspaceState.update('sessions', this._sessionManager.getSessions()).then(undefined, () => {});
+    void this._context.workspaceState.update('lastSessionId', this._sessionManager.getCurrentSessionId()).then(undefined, () => {});
   }
 
   private async _loadAllSessions(userInitiated = false) {
@@ -790,18 +815,107 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     this._loadAllSessions(true);
   }
 
-  private _compactSession() {
+  private async _compactSession() {
+    if (this._isStreaming) {
+      vscode.window.showInformationMessage('Cannot compact while a response is in progress.');
+      return;
+    }
     const current = this._sessionManager.getCurrentSession();
-    if (this._sessionManager.compactSession(current.id)) {
-      // Allow the context hint to fire again after a compact — history just shrank
+    const nonSystem = getNonSystemMessages(current.history);
+    if (nonSystem.length <= 4) {
+      vscode.window.showInformationMessage('Nothing to compact.');
+      return;
+    }
+    // Messages that will be trimmed — all non-system except the last 4
+    const toTrim = nonSystem.slice(0, -4);
+    let summary: string | undefined;
+    try {
+      const cfg = vscode.workspace.getConfiguration('grom');
+      const url = (cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+      const model = cfg.get<string>('model') || 'qwen2.5-coder';
+      const useOllama = cfg.get<boolean>('useOllamaFormat') || false;
+      const { key, authType, providerFormat } = await this._resolveProviderKey(url, useOllama);
+      const extractClient = new LocalLLMClient(url, model, useOllama, key, authType, providerFormat);
+      const convText = buildExtractionInput(toTrim);
+      summary = await extractClient.chat(
+        [{ role: 'system', content: COMPACT_EXTRACTION_PROMPT }, { role: 'user', content: convText }],
+        AbortSignal.timeout(20000)
+      );
+    } catch { /* fall back to plain marker */ }
+
+    if (this._sessionManager.compactSession(current.id, summary)) {
       this._contextHintSent.delete(current.id);
       this._saveState();
       this._updateUsageDisplay();
-      // Tell the webview to show a compact notice inline without wiping the chat
       this._post({ type: 'compacted' });
     } else {
       vscode.window.showInformationMessage('Nothing to compact.');
     }
+  }
+
+  /**
+   * Handles the /memorise slash command. Calls the active model to extract facts from
+   * the current session worth persisting, then appends them to gromMemory automatically.
+   * The extracted facts are also streamed into the chat so the user can review them.
+   */
+  private async _memoriseSession() {
+    const session = this._sessionManager.getCurrentSession();
+    const nonSystem = getNonSystemMessages(session.history);
+    if (nonSystem.length < 2) {
+      this._post({ type: 'chunk', text: '*Nothing to memorise yet — have a conversation first.*' });
+      this._post({ type: 'status', text: 'Ready' });
+      return;
+    }
+
+    session.history.push({ role: 'user', content: '/memorise' });
+    this._saveState();
+
+    const cfg = vscode.workspace.getConfiguration('grom');
+    const url = (cfg.get<string>('apiUrl') || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+    const model = cfg.get<string>('model') || 'qwen2.5-coder';
+    const useOllama = cfg.get<boolean>('useOllamaFormat') || false;
+
+    try {
+      const { key, authType, providerFormat } = await this._resolveProviderKey(url, useOllama);
+      const client = new LocalLLMClient(url, model, useOllama, key, authType, providerFormat);
+      const memory = this._context.globalState.get<string>('gromMemory', '');
+      const convText = buildExtractionInput(nonSystem);
+      const prompt = `Review this conversation and extract facts worth persisting across future sessions. Focus on:
+- Confirmed architectural decisions
+- Project-wide constraints and rules
+- Technology choices with rationale
+- Things the user explicitly said to always/never do
+
+Format as concise bullet points. Omit anything already in the current memory below. Omit session-specific or temporary context. Output ONLY the bullet points, no preamble.
+
+Current memory:
+${memory || '(empty)'}
+
+Conversation:
+${convText}`;
+
+      const result = await client.chat([{ role: 'user', content: prompt }], AbortSignal.timeout(25000));
+
+      const newMemory = memory.trim() ? `${memory.trim()}\n\n${result.trim()}` : result.trim();
+      await this._context.globalState.update('gromMemory', newMemory);
+
+      // Patch the session system message so the updated memory is live immediately
+      const sys = session.history.find(m => m.role === 'system' && !isCompactMarker(m));
+      if (sys) {
+        const base = sys.content.replace(/\n\nUSER MEMORY:[\s\S]*?(?=\n\nSESSION INSTRUCTIONS:|$)/, '');
+        sys.content = base + `\n\nUSER MEMORY:\n${newMemory.trim()}`;
+      }
+
+      session.history.push({ role: 'assistant', content: `**Memory updated:**\n\n${result.trim()}` });
+      this._saveState();
+      this._post({ type: 'chunk', text: `**Memory updated:**\n\n${result.trim()}` });
+      this._post({ type: 'memorySaved', hasMemory: true });
+    } catch (e: any) {
+      session.history.push({ role: 'assistant', content: `*Failed to extract memory: ${e.message || e}*` });
+      this._saveState();
+      this._post({ type: 'chunk', text: `*Failed to extract memory: ${e.message || e}*` });
+    }
+    this._post({ type: 'status', text: 'Ready' });
   }
 
   private _updateMode(mode: 'plan' | 'build') {
@@ -830,7 +944,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     if (current.history.length === 0) return;
     let markdown = `# Chat Session: ${current.title}\n\n> Import this file into Grom to continue the conversation.\n\n`;
     current.history.forEach(msg => {
-      if (msg.role === 'system' && msg.content === '__compacted__') markdown += `---\n*Earlier messages were compacted.*\n\n`;
+      if (isCompactMarker(msg)) markdown += `---\n*Earlier messages were compacted.*\n\n`;
       else if (msg.role !== 'system') markdown += `### ${msg.role === 'user' ? 'User' : 'Assistant'}\n${msg.content}\n\n`;
     });
     const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(`grom-chat-${current.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`), filters: { 'Markdown': ['md'] } });
@@ -922,7 +1036,40 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** Pings the LLM server, fetches available models and capabilities, and posts the status to the webview. */
-  private async _checkConnection(overrideUrl?: string, overrideModel?: string, overrideOllama?: boolean) {
+  private _checkConnection(overrideUrl?: string, overrideModel?: string, overrideOllama?: boolean): Promise<void> {
+    if (this._connectionCheckInProgress) {
+      // A check is already running — give the user immediate feedback so the UI
+      // doesn't appear frozen, then queue this call's params as the next check.
+      const cfg = vscode.workspace.getConfiguration('grom');
+      const feedbackUrl = overrideUrl ?? cfg.get<string>('apiUrl') ?? '';
+      const feedbackOllama = overrideOllama ?? cfg.get<boolean>('useOllamaFormat') ?? true;
+      this._post({ type: 'statusUpdate', status: 'Connecting…', color: 'var(--vscode-descriptionForeground)', url: feedbackUrl, useOllama: feedbackOllama });
+      // Later callers win — overwrite pending params with the most-recent intent.
+      this._pendingConnectionCheck = { url: overrideUrl, model: overrideModel, ollama: overrideOllama };
+      // Return a promise that resolves only when the pending check actually completes,
+      // so callers like changeProvider that await this get correct semantics.
+      return new Promise<void>(resolve => this._pendingConnectionResolvers.push(resolve));
+    }
+
+    this._connectionCheckInProgress = true;
+    return this._doCheckConnection(overrideUrl, overrideModel, overrideOllama)
+      .catch(() => {
+        // _doCheckConnection has its own try/catch for user-visible errors; this outer
+        // catch is a safety net so an unexpected throw never leaves the flag stuck true.
+      })
+      .finally(() => {
+        this._connectionCheckInProgress = false;
+        if (this._pendingConnectionCheck !== null) {
+          const { url, model, ollama } = this._pendingConnectionCheck;
+          this._pendingConnectionCheck = null;
+          const resolvers = this._pendingConnectionResolvers.splice(0);
+          // Run the pending check then unblock all callers that were waiting on it.
+          void this._checkConnection(url, model, ollama).then(() => resolvers.forEach(r => r()));
+        }
+      });
+  }
+
+  private async _doCheckConnection(overrideUrl?: string, overrideModel?: string, overrideOllama?: boolean) {
     const config = vscode.workspace.getConfiguration('grom');
     const rawUrl = overrideUrl || config.get<string>('apiUrl') || 'http://127.0.0.1:11434';
     const model = overrideModel || config.get<string>('model') || 'qwen2.5-coder';
@@ -932,6 +1079,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       this._post({ type: 'statusUpdate', status: 'Invalid URL', color: 'var(--vscode-errorForeground)', url: rawUrl, useOllama });
       return;
     }
+    this._post({ type: 'statusUpdate', status: 'Connecting…', color: 'var(--vscode-descriptionForeground)', url, useOllama });
     log(`[connection] checking ${url} model=${model}`);
     try {
       await this._mcp.waitForReady(2000); // Wait briefly for MCP servers on first connect
@@ -961,6 +1109,15 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         ? new LocalLLMClient(url, activeModel, useOllama, key, authType, providerFormat)
         : client;
       const caps = await capsClient.getCapabilities();
+      // User overrides take precedence over all auto-detection.
+      const capOverrides = config.get<Record<string, any>>('modelCapabilities') || {};
+      const overrideKey = Object.keys(capOverrides).find(k => activeModel.toLowerCase().includes(k.toLowerCase()));
+      if (overrideKey) {
+        const ov = capOverrides[overrideKey];
+        if (typeof ov.tools === 'boolean') caps.tools = ov.tools;
+        if (typeof ov.vision === 'boolean') caps.vision = ov.vision;
+        if (typeof ov.reasoning === 'boolean') caps.reasoning = ov.reasoning;
+      }
       if (mcpToolCount > 0) caps.tools = true;
 
       // Auto-detect context length — cloud providers won't respond and fall through silently.
@@ -1032,6 +1189,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           this._docsHintSent.add(sessionId);
           this._post({ type: 'gromHint', hint: 'docs' });
         }
+        this._isStreaming = false;
         return;
       }
     }
@@ -1051,7 +1209,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       this._isStreaming = false;
       this._checkConnection();
       if (!this._view?.visible) {
-        const summary = (text.slice(0, 60) + (text.length > 60 ? '…' : '')).replace(/"/g, "'");
+        const summary = text.slice(0, 60).replace(/[^a-zA-Z0-9 .,!?'()\-]/g, '') + (text.length > 60 ? '...' : '');
         // Show within VS Code notification area
         vscode.window.showInformationMessage(`Grom — task complete: "${summary}"`);
         // Also fire a Windows OS toast so it surfaces when VS Code is minimized

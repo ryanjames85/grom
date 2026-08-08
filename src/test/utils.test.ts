@@ -1,5 +1,111 @@
 import { expect } from 'chai';
-import { isPrivateUrl } from '../utils';
+import { isPrivateUrl, isCompactMarker, COMPACT_EXTRACTION_PROMPT, buildExtractionInput } from '../utils';
+import { ChatMessage } from '../client';
+
+// ── isCompactMarker ───────────────────────────────────────────────────────────
+
+describe('isCompactMarker', () => {
+  it('returns true for a plain compact marker', () => {
+    expect(isCompactMarker({ role: 'system', content: '__compacted__' })).to.be.true;
+  });
+
+  it('returns true for a compact marker that includes a structured summary', () => {
+    expect(isCompactMarker({ role: 'system', content: '__compacted__\n\ndecisions: used SQLite\nconstraints: no ORM' })).to.be.true;
+  });
+
+  it('returns false for a normal system message', () => {
+    expect(isCompactMarker({ role: 'system', content: 'You are a helpful assistant.' })).to.be.false;
+  });
+
+  it('returns false for a user message that starts with __compacted__', () => {
+    expect(isCompactMarker({ role: 'user', content: '__compacted__ something' })).to.be.false;
+  });
+
+  it('returns false for an assistant message', () => {
+    expect(isCompactMarker({ role: 'assistant', content: 'Hello!' })).to.be.false;
+  });
+
+  it('returns false for an empty system message', () => {
+    expect(isCompactMarker({ role: 'system', content: '' })).to.be.false;
+  });
+
+  it('returns false for a system message that merely contains the word compacted', () => {
+    expect(isCompactMarker({ role: 'system', content: 'History was compacted.' })).to.be.false;
+  });
+});
+
+// ── COMPACT_EXTRACTION_PROMPT ─────────────────────────────────────────────────
+
+describe('COMPACT_EXTRACTION_PROMPT', () => {
+  it('is a non-empty string', () => {
+    expect(COMPACT_EXTRACTION_PROMPT).to.be.a('string').and.to.have.length.above(0);
+  });
+
+  it('names the key extraction sections', () => {
+    expect(COMPACT_EXTRACTION_PROMPT).to.include('decisions');
+    expect(COMPACT_EXTRACTION_PROMPT).to.include('constraints');
+    expect(COMPACT_EXTRACTION_PROMPT).to.include('openFiles');
+    expect(COMPACT_EXTRACTION_PROMPT).to.include('nextSteps');
+  });
+
+  it('instructs the model to omit empty sections', () => {
+    expect(COMPACT_EXTRACTION_PROMPT).to.include('Omit');
+  });
+
+  it('instructs the model to output only the structured block', () => {
+    expect(COMPACT_EXTRACTION_PROMPT).to.include('no preamble');
+  });
+});
+
+// ── buildExtractionInput ──────────────────────────────────────────────────────
+
+describe('buildExtractionInput', () => {
+  const msg = (role: 'user' | 'assistant', content: string): ChatMessage => ({ role, content });
+
+  it('returns empty string for empty input', () => {
+    expect(buildExtractionInput([])).to.equal('');
+  });
+
+  it('formats user and assistant messages with role labels', () => {
+    const result = buildExtractionInput([msg('user', 'hello'), msg('assistant', 'world')]);
+    expect(result).to.include('User: hello');
+    expect(result).to.include('Assistant: world');
+  });
+
+  it('truncates individual messages to maxCharsPerMsg', () => {
+    const long = 'a'.repeat(2000);
+    const result = buildExtractionInput([msg('user', long)], 10000, 100);
+    expect(result).to.have.length.lessThan(200);
+  });
+
+  it('respects the token budget and drops earliest messages when over budget', () => {
+    const msgs = Array.from({ length: 20 }, (_, i) => msg('user', `message number ${i} with some content padding here`));
+    const result = buildExtractionInput(msgs, 200);
+    // Should not include all 20 messages — early ones get dropped
+    expect(result.split('\n\n').length).to.be.lessThan(20);
+  });
+
+  it('includes at least the most recent message even if it alone exceeds the budget', () => {
+    const huge = 'word '.repeat(500); // ~625 tokens, well over any small budget
+    const result = buildExtractionInput([msg('user', huge)], 10);
+    expect(result).to.include('word');
+  });
+
+  it('keeps the most recent messages when budget is exhausted', () => {
+    const msgs = [
+      msg('user', 'very early message'),
+      msg('assistant', 'early reply'),
+      msg('user', 'recent important question'),
+    ];
+    // Budget of 10 fits only the last message (8 tokens); adding the previous one (6) would exceed it
+    const result = buildExtractionInput(msgs, 10);
+    expect(result).to.include('recent important question');
+    expect(result).to.not.include('very early message');
+    expect(result).to.not.include('early reply');
+  });
+});
+
+// ── isPrivateUrl ──────────────────────────────────────────────────────────────
 
 describe('isPrivateUrl', () => {
   // ── Public URLs — must NOT be blocked ──────────────────────────────────────

@@ -451,6 +451,76 @@ export class RagIndex {
   }
 }
 
+// ── Conversation RAG ─────────────────────────────────────────────────────────
+
+/**
+ * Lightweight BM25 index over conversation turns. Built fresh each call from the
+ * session history — no embeddings, no async, negligible cost. Retrieves semantically
+ * relevant earlier turns so the model can reconstruct context that was compacted away.
+ *
+ * Usage: build() from session.history, then query() with the current user text.
+ * The excludeLast parameter prevents retrieving turns that are still in the visible
+ * context window (the most recent N non-system messages).
+ */
+export class ConversationRag {
+  private _turns: Array<{ role: string; text: string; terms: Map<string, number>; bigrams: Set<string>; dl: number }> = [];
+  private _idf: Map<string, number> = new Map();
+  private _avgDl = 1;
+  private _builtForCount = 0;
+  private _builtForLastContent = '';
+
+  build(history: Array<{ role: string; content: string }>) {
+    const eligible = history.filter(m => m.role !== 'system' && m.content.trim().length > 0);
+    const lastContent = eligible[eligible.length - 1]?.content ?? '';
+    if (eligible.length === this._builtForCount && lastContent === this._builtForLastContent) return;
+    this._builtForCount = eligible.length;
+    this._builtForLastContent = lastContent;
+    this._turns = eligible.map(m => {
+        const tokens = tokenizeToArray(m.content);
+        return { role: m.role, text: m.content, terms: termFreq(tokens), bigrams: buildBigrams(tokens), dl: tokens.length || 1 };
+      });
+    this._avgDl = this._turns.length
+      ? this._turns.reduce((s, t) => s + t.dl, 0) / this._turns.length
+      : 1;
+    const df = new Map<string, number>();
+    for (const turn of this._turns) {
+      for (const term of turn.terms.keys()) df.set(term, (df.get(term) || 0) + 1);
+    }
+    const N = this._turns.length || 1;
+    this._idf = new Map([...df.entries()].map(([t, d]) => [t, Math.log((N - d + 0.5) / (d + 0.5) + 1)]));
+  }
+
+  /** Returns a formatted string of the top-K relevant earlier turns, excluding the most recent ones. */
+  query(text: string, topK = 3, excludeLast = 4): string {
+    const candidates = this._turns.length > excludeLast ? this._turns.slice(0, -excludeLast) : [];
+    if (!candidates.length) return '';
+    const qTokens = tokenizeToArray(text);
+    const qTerms = termFreq(qTokens);
+    const qBigrams = buildBigrams(qTokens);
+    const avgDl = this._avgDl;
+    const scores = candidates.map((turn, idx) => {
+      let score = 0;
+      for (const [term, qtf] of qTerms) {
+        const tf = turn.terms.get(term) || 0;
+        if (!tf) continue;
+        const idf = this._idf.get(term) || 0;
+        score += idf * (tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * turn.dl / avgDl)) * Math.min(qtf, 3);
+      }
+      for (const bg of qBigrams) { if (turn.bigrams.has(bg)) score += 2; }
+      return { idx, score };
+    });
+    scores.sort((a, b) => b.score - a.score);
+    const top = scores.slice(0, topK).filter(s => s.score > 0);
+    if (!top.length) return '';
+    return top.map(({ idx }) => {
+      const t = candidates[idx];
+      const label = t.role === 'user' ? 'User (earlier)' : 'Assistant (earlier)';
+      const excerpt = t.text.length > 500 ? t.text.slice(0, 500) + '…' : t.text;
+      return `[${label}]: ${excerpt}`;
+    }).join('\n\n');
+  }
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 /** Fast djb2 hash of file content — used for incremental re-indexing change detection. */
