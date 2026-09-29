@@ -1,7 +1,7 @@
 /**
  * extension.ts
  *
- * VS Code extension entry point — owns all glue between the extension API and the pure logic modules.
+ * Orchestrates the VS Code extension lifecycle, owns all glue between the extension API and the pure logic modules.
  *
  * Responsibilities:
  *   - RAG: discovers workspace files, reads them, and calls ragIndex.build(). Watches for file changes
@@ -25,7 +25,7 @@ import { DocsIndex, DocSource } from './docs-index';
 import { inlineEdit } from './inlineedit';
 import { InlineDiffSession, undoLastComposer } from './editor';
 import { appendTerminalOutput } from './terminal-buffer';
-import { dispose as disposeLogger } from './logger';
+import { log, dispose as disposeLogger } from './logger';
 
 function extractNotebookText(content: string): string {
   try {
@@ -39,6 +39,7 @@ function extractNotebookText(content: string): string {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+  log('[grom] ready build=a2b7c3e9d1f');
   const completionProvider = new GromInlineCompletionProvider(context);
   context.subscriptions.push(createStatusBar(context));
 
@@ -54,13 +55,22 @@ export function activate(context: vscode.ExtensionContext) {
   const ragStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   context.subscriptions.push(ragStatusItem);
 
+  // Late-bound so the callback can post to the webview once provider is created below.
+  let _ragProgressTarget: { postMessageToWebview: (m: any) => void } | undefined;
   const ragIndex = new RagIndex((msg) => {
-    if (!msg) { ragStatusItem.hide(); return; }
+    if (!msg) {
+      ragStatusItem.hide();
+      _ragProgressTarget?.postMessageToWebview({ type: 'indexingProgress', progress: 100 });
+      return;
+    }
     ragStatusItem.text = `$(sync~spin) Grom: ${msg}`;
     ragStatusItem.show();
     if (!msg.includes('…') && !msg.includes('...')) {
       setTimeout(() => ragStatusItem.hide(), 3000);
     }
+    const pctMatch = msg.match(/(\d+)%/);
+    const progress = pctMatch ? parseInt(pctMatch[1]) : (msg.startsWith('indexing') ? 5 : 100);
+    _ragProgressTarget?.postMessageToWebview({ type: 'indexingProgress', progress });
   });
 
   const buildRag = async (force = false) => {
@@ -117,7 +127,7 @@ export function activate(context: vscode.ExtensionContext) {
   fileWatcher.onDidDelete(_scheduleReindex);
   fileWatcher.onDidChange(_scheduleReindex);
   context.subscriptions.push(fileWatcher);
-  // Clear any pending reindex timer on deactivation — prevents the callback firing
+  // Clear any pending reindex timer on deactivation, prevents the callback firing
   // against a disposed context if a file change triggered the 3-second debounce
   // right before the extension was deactivated.
   context.subscriptions.push({ dispose: () => clearTimeout(_reindexTimer) });
@@ -163,6 +173,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ── Provider + webview ───────────────────────────────────────────────────
   const provider = new LocalChatViewProvider(context, ragIndex, docsIndex);
+  _ragProgressTarget = provider;
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('localChatView', provider, {
     webviewOptions: { retainContextWhenHidden: true }
   }));
@@ -181,7 +192,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(promptWatcher);
 
   // ── Terminal ─────────────────────────────────────────────────────────────
-  // onDidWriteTerminalData is a proposed API — wrap in try/catch so activation doesn't fail
+  // onDidWriteTerminalData is a proposed API; wrap in try/catch so activation doesn't fail
   // in environments that block proposed APIs (published extension installs, stable VS Code).
   let _lastTerminalError = '';
   let _errorDebounce: NodeJS.Timeout | undefined;

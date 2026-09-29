@@ -10,7 +10,7 @@
  *   - context.ts calls docsIndex.query(text, sourceName?) when the user types @docs in chat
  *
  * Doc sources are configured via grom.docSources in VS Code settings, but this file
- * never reads VS Code config directly — sources are passed in by the caller.
+ * never reads VS Code config directly; sources are passed in by the caller.
  *
  * NOTE: This file is intentionally vscode-free. All config reading and status bar
  * updates live in extension.ts. Progress messages are emitted via the onProgress callback.
@@ -153,7 +153,7 @@ export class DocsIndex {
 
     while (queue.length > 0 && pages.length < MAX_PAGES_PER_SOURCE) {
       const current = queue.shift()!;
-      // Strip fragments — we treat fragment URLs as the same page
+      // Strip fragments: we treat fragment URLs as the same page
       const normalised = current.split('#')[0];
       if (visited.has(normalised)) continue;
       visited.add(normalised);

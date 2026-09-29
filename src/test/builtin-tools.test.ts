@@ -110,6 +110,25 @@ describe('Builtin Tools', () => {
       expect(result.length).to.be.lessThan(largeContent.length);
       expect(result).to.include('(truncated');
     });
+
+    // Found via live manual testing (v0.5.6): a model called read_file with the wrong
+    // argument key (e.g. {"param": "..."} instead of {"path": "..."}), leaving args.path
+    // undefined. safePath() called .replace() on it directly and threw a raw, unhelpful
+    // JS crash ("Cannot read properties of undefined (reading 'replace')") that gave the
+    // model no way to self-correct, so it retried the identical broken call 20 times running
+    // out the whole agent loop. Must return a clear, actionable error instead.
+    it('returns a clear error instead of crashing when path is missing entirely', async () => {
+      const result = await executeBuiltinTool('read_file', { param: 'ARCHITECTURE.md' } as any);
+      expect(result).to.include('Error');
+      expect(result).to.include("'path'");
+      expect(result).to.not.include('Cannot read properties of undefined');
+    });
+
+    it('returns a clear error instead of crashing when path is not a string', async () => {
+      const result = await executeBuiltinTool('read_file', { path: 42 } as any);
+      expect(result).to.include('Error');
+      expect(result).to.include("'path'");
+    });
   });
 
   describe('write_file', () => {
@@ -139,6 +158,12 @@ describe('Builtin Tools', () => {
       expect(backups.has('src/brand-new.ts')).to.be.true;
       expect(backups.get('src/brand-new.ts')).to.be.null;
     });
+
+    it('returns a clear error instead of crashing when path is missing', async () => {
+      const result = await executeBuiltinTool('write_file', { content: 'hello' } as any);
+      expect(result).to.include('Error');
+      expect(result).to.include("'path'");
+    });
   });
 
   describe('list_directory', () => {
@@ -153,6 +178,13 @@ describe('Builtin Tools', () => {
       expect(result).to.include('[file] README.md');
       expect(result).to.not.include('node_modules');
     });
+
+    it('still treats a missing path as the workspace root, not an error (path is optional here)', async () => {
+      vscode.workspace.fs.readDirectory.resolves([['README.md', 1]]);
+      const result = await executeBuiltinTool('list_directory', {} as any);
+      expect(result).to.include('[file] README.md');
+      expect(result).to.not.include('Error');
+    });
   });
 
   describe('delete_file', () => {
@@ -161,6 +193,12 @@ describe('Builtin Tools', () => {
       const result = await executeBuiltinTool('delete_file', { path: 'old.ts' });
       expect(result).to.include('Deleted old.ts');
       expect(vscode.workspace.fs.delete.calledWith(sinon.match.any, sinon.match({ useTrash: true }))).to.be.true;
+    });
+
+    it('returns a clear error instead of crashing when path is missing', async () => {
+      const result = await executeBuiltinTool('delete_file', {} as any);
+      expect(result).to.include('Error');
+      expect(result).to.include("'path'");
     });
   });
 
@@ -180,10 +218,56 @@ describe('Builtin Tools', () => {
       expect(result).to.equal('stdout output');
     });
 
+    // Found via live manual testing (v0.5.6): a model called run_terminal with the wrong
+    // argument key ({"param": "..."} instead of {"command": "..."}), leaving args.command
+    // undefined. Node's exec() threw its own raw, unhelpful crash ("The 'command' argument
+    // must be of type string. Received undefined") before this fix, giving the model no way
+    // to self-correct, so it retried the identical broken call 20 times running out the whole
+    // agent loop. Must return a clear, actionable error instead, and never reach exec() at all.
+    it('returns a clear error instead of crashing when command is missing entirely', async () => {
+      const result = await executeBuiltinTool('run_terminal', { param: 'ls' } as any);
+      expect(result).to.include('Error');
+      expect(result).to.include("'command'");
+      expect(execStub.called).to.be.false;
+    });
+
+    it('returns a clear error instead of crashing when command is not a string', async () => {
+      const result = await executeBuiltinTool('run_terminal', { command: 42 } as any);
+      expect(result).to.include('Error');
+      expect(result).to.include("'command'");
+      expect(execStub.called).to.be.false;
+    });
+
     it('returns exit code on error', async () => {
       execStub.yields({ code: 1 }, '', 'error output');
       const result = await executeBuiltinTool('run_terminal', { command: 'false' });
       expect(result).to.equal('error output');
+    });
+
+    it('reports a timeout when the command is killed (30s limit)', async () => {
+      // No stdout/stderr on timeout: fallback message is what the model sees.
+      execStub.yields({ killed: true, code: null }, '', '');
+      const result = await executeBuiltinTool('run_terminal', { command: 'ping -t 127.0.0.1' });
+      expect(result).to.equal('Command timed out after 30 seconds.');
+    });
+
+    it('reports the 200 KB output cap when maxBuffer is exceeded', async () => {
+      execStub.yields({ code: null, message: 'stdout maxBuffer length exceeded' }, '', '');
+      const result = await executeBuiltinTool('run_terminal', { command: 'yes' });
+      expect(result).to.equal('Command output exceeded the 200 KB limit. Use a more targeted command or redirect output to a file.');
+    });
+
+    it('reports the exit code and error message for a plain failing command', async () => {
+      // No stdout/stderr on some failures (e.g. command not found): fallback text carries the exit code.
+      execStub.yields({ code: 127, message: 'Command failed: notacommand\n' }, '', '');
+      const result = await executeBuiltinTool('run_terminal', { command: 'notacommand' });
+      expect(result).to.equal('Process exited with code 127: Command failed: notacommand\n');
+    });
+
+    it('prefers real stdout/stderr output over the fallback message when both are present on failure', async () => {
+      execStub.yields({ code: 1 }, '', 'actual stderr text');
+      const result = await executeBuiltinTool('run_terminal', { command: 'somecommand' });
+      expect(result).to.equal('actual stderr text');
     });
 
     it('allows normal chained commands with &&', async () => {
@@ -224,7 +308,7 @@ describe('Builtin Tools', () => {
 
     it('allows $ in a string that is not a subshell (e.g. env var reference)', async () => {
       execStub.yields(null, '/home/user', '');
-      // $HOME is variable expansion, not subshell substitution — $( is the blocked pattern
+      // $HOME is variable expansion, not subshell substitution; $( is the blocked pattern
       const result = await executeBuiltinTool('run_terminal', { command: 'echo $HOME' });
       expect(result).to.equal('/home/user');
     });

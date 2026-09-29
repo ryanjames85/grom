@@ -105,6 +105,60 @@ describe('webview — slash command menu tooltips', () => {
     expect(m).to.not.equal(null, '/clear-history title assignment not found');
     expect(m![1].length).to.be.greaterThan(10);
   });
+
+  it('typing /reindex is intercepted before being sent to the model', () => {
+    expect(js).to.include("val.toLowerCase() === '/reindex'",
+      '/reindex is not intercepted in sendBtn.onclick the same way /compact and /clear-history are');
+  });
+
+  it('typed /reindex posts reindexWorkspace to the extension host', () => {
+    expect(js).to.match(/'\/reindex'[\s\S]{0,120}type:\s*'reindexWorkspace'/,
+      'typing /reindex does not post {type: reindexWorkspace}');
+  });
+
+  // Selecting a slash-menu item via Tab/Enter (keyboard) or a mouse click both run that
+  // item's own click handler directly, bypassing sendBtn.onclick's `prompt.value = ''`.
+  // Each menu item's handler must clear the box itself, or the typed text lingers after
+  // the command has already run (found via manual testing of /reindex, applies to all three).
+  it('the Compact menu item clears the input box itself, not just via sendBtn.onclick', () => {
+    const idx = js.indexOf("compact.addEventListener('click'");
+    expect(idx).to.not.equal(-1);
+    const line = js.slice(idx, js.indexOf('\n', idx));
+    expect(line).to.include("prompt.value = ''",
+      'Compact menu item must clear prompt.value itself: Tab/Enter selection calls its click handler directly, never going through sendBtn.onclick');
+  });
+
+  it('the Clear-history menu item clears the input box itself', () => {
+    const idx = js.indexOf("clearHist.addEventListener('click'");
+    expect(idx).to.not.equal(-1);
+    const line = js.slice(idx, js.indexOf('\n', idx));
+    expect(line).to.include("prompt.value = ''",
+      'Clear-history menu item must clear prompt.value itself');
+  });
+
+  it('the Reindex menu item clears the input box itself', () => {
+    const idx = js.indexOf("reindex.addEventListener('click'");
+    expect(idx).to.not.equal(-1);
+    const line = js.slice(idx, js.indexOf('\n', idx));
+    expect(line).to.include("prompt.value = ''",
+      'Reindex menu item must clear prompt.value itself');
+  });
+
+  it('/reindex item has a title attribute set', () => {
+    expect(js).to.include("reindex.title = '",
+      '/reindex slash menu item is missing reindex.title');
+  });
+
+  it('/reindex title is non-trivial', () => {
+    const m = js.match(/reindex\.title\s*=\s*'([^']+)'/);
+    expect(m).to.not.equal(null, '/reindex title assignment not found');
+    expect(m![1].length).to.be.greaterThan(10);
+  });
+
+  it('/reindex menu item click posts reindexWorkspace', () => {
+    expect(js).to.match(/reindex\.addEventListener\('click',[\s\S]{0,120}type:\s*'reindexWorkspace'/,
+      '/reindex menu item click handler does not post {type: reindexWorkspace}');
+  });
 });
 
 // ── Toolbar + and / buttons ───────────────────────────────────────────────────
@@ -309,7 +363,7 @@ describe('webview — nudge hide-mic info badge', () => {
   });
 });
 
-// ── loadSessions — session reset guard ───────────────────────────────────────
+// ── loadSessions: session reset guard ───────────────────────────────────────
 
 describe('webview — loadSessions session reset guard', () => {
   it('loadSessions guard checks m.userInitiated before skipping reset', () => {
@@ -373,5 +427,221 @@ describe('webview — loadSessions session reset guard', () => {
     const slice = provider.slice(idx, idx + 100);
     expect(slice).to.not.include('_loadAllSessions(true)',
       'refreshPresets must NOT pass userInitiated=true — it is a background reload');
+  });
+});
+
+describe('webview — thinking display (grom.showThinking)', () => {
+  it('package.json declares grom.showThinking, default true', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const setting = pkg.contributes?.configuration?.properties?.['grom.showThinking'];
+    expect(setting, 'grom.showThinking missing from package.json').to.not.equal(undefined);
+    expect(setting.type).to.equal('boolean');
+    expect(setting.default).to.equal(true);
+  });
+
+  it('provider.ts reads grom.showThinking and includes it in the loadSessions post', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    expect(provider).to.include("get<boolean>('showThinking', true)");
+    const idx = provider.indexOf("showReasoningToggle: vscode.workspace.getConfiguration('grom').get<boolean>('showReasoningToggle'");
+    const slice = provider.slice(idx, idx + 300);
+    expect(slice, 'showThinking should be posted alongside showReasoningToggle').to.include('showThinking');
+  });
+
+  it('main.js reads m.showThinking in the loadSessions handler', () => {
+    expect(js).to.include('_showThinking = m.showThinking !== false');
+  });
+
+  it('main.js defaults _showThinking to true before any message arrives', () => {
+    const idx = js.indexOf('let _showThinking');
+    expect(idx).to.be.greaterThan(-1);
+    expect(js.slice(idx, idx + 40)).to.include('= true');
+  });
+
+  it('updateAiDisplay renders a collapsible <details class="think"> with a live preview and a toggle/disable control', () => {
+    expect(js).to.include('details class="think"');
+    expect(js).to.include('think-preview');
+    expect(js).to.include('think-toggle-label');
+    expect(js).to.include('think-disable-btn');
+  });
+
+  it('updateAiDisplay suppresses the think block entirely when _showThinking is false', () => {
+    const idx = js.indexOf('function updateAiDisplay');
+    const body = js.slice(idx, idx + 1800);
+    expect(body).to.include('if (!_showThinking)');
+    expect(body).to.not.include('hideThisOne');
+  });
+
+  it('the Hide/Show block label is plain text riding on the native summary toggle, not its own click handler', () => {
+    const idx = js.indexOf('function _renderThinkBlock');
+    expect(idx, '_renderThinkBlock not found').to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 2000);
+    expect(body).to.include("details.open ? 'Hide block' : 'Show block'");
+    expect(js).to.not.include('window.hideThinking');
+  });
+
+  it('disableThinking is a global, persisted setting change, confirmed first, not a per-message flag', () => {
+    expect(js).to.include('window.disableThinking = ');
+    const idx = js.indexOf('window.disableThinking = ');
+    const body = js.slice(idx, idx + 800);
+    // VS Code webviews silently block window.confirm()/alert()/prompt() — there is no option to
+    // allow them — so confirmation has to be inline (click-to-arm, click-again-to-commit), not a
+    // native dialog which would just do nothing when clicked.
+    expect(body, 'native confirm() would silently no-op in a VS Code webview').to.not.include('confirm(');
+    expect(body, 'first click arms it rather than acting immediately').to.include("btn.dataset.confirming !== '1'");
+    expect(body, 'posts setShowThinking to persist it').to.include("type: 'setShowThinking', value: false");
+    expect(body, 'takes effect immediately client-side too').to.include('_showThinking = false');
+    expect(js).to.not.include('dataset.thinkHidden');
+  });
+
+  it('provider.ts persists setShowThinking as a global VS Code setting', () => {
+    const provider = fs.readFileSync(path.join(root, 'src', 'provider.ts'), 'utf8');
+    const idx = provider.indexOf("case 'setShowThinking'");
+    expect(idx, "case 'setShowThinking' not found in provider.ts").to.be.greaterThan(-1);
+    const body = provider.slice(idx, idx + 500);
+    expect(body).to.include("update('showThinking'");
+    expect(body).to.include('ConfigurationTarget.Global');
+  });
+
+  it('onThinkToggle remembers a manually expanded thinking block across re-renders', () => {
+    expect(js).to.include('window.onThinkToggle');
+    expect(js).to.include("dataset.thinkOpen = details.open");
+    expect(js).to.include("dataset.thinkOpen === '1'");
+  });
+
+  it('the toggle label reads "Hide block" when open and "Show block" when closed', () => {
+    const idx = js.indexOf('function _renderThinkBlock');
+    const body = js.slice(idx, idx + 2000);
+    expect(body).to.include("details.open ? 'Hide block' : 'Show block'");
+  });
+
+  it('the disable button reads "Disable", a clearly separate action from the toggle label', () => {
+    const idx = js.indexOf('function _renderThinkBlock');
+    const body = js.slice(idx, idx + 2000);
+    expect(body).to.include('>Disable<');
+  });
+
+  it('the collapsed preview shows a live tail of the actual thinking text, not a generic label', () => {
+    const idx = js.indexOf('function _renderThinkBlock');
+    const body = js.slice(idx, idx + 2000);
+    expect(body, 'shows real content, not a placeholder like "Thinking…"').to.include('think.slice(-240)');
+    expect(body).to.not.include("'Thinking…'");
+    expect(body).to.not.include("'Thought for '");
+  });
+
+  it('the collapsed preview is hidden once expanded, so it does not duplicate the full text', () => {
+    const css = fs.readFileSync(path.join(root, 'media', 'styles.css'), 'utf8');
+    expect(css).to.include('details.think[open] .think-preview');
+  });
+
+  it('the preview box is bottom-aligned and fixed height with a fade mask, not real scrolling', () => {
+    const css = fs.readFileSync(path.join(root, 'media', 'styles.css'), 'utf8');
+    expect(css).to.include('.think-preview {');
+    expect(css).to.include('mask-image');
+    expect(css).to.include('align-items: flex-end');
+  });
+
+  it('the fade goes top-to-bottom (top line stays readable, the newest bottom line fades toward nothing)', () => {
+    const css = fs.readFileSync(path.join(root, 'media', 'styles.css'), 'utf8');
+    const idx = css.indexOf('.think-preview {');
+    const rule = css.slice(idx, idx + 400);
+    const m = rule.match(/mask-image: linear-gradient\(to bottom, ([^)]+)\)/);
+    expect(m, 'mask-image gradient not found on .think-preview').to.not.equal(null);
+    const stops = m![1];
+    // "black" (opaque) must come before "transparent" in the stop list, i.e. top is opaque/dim
+    // and the fade toward transparent happens further down, not the other way around.
+    expect(stops.indexOf('black')).to.be.lessThan(stops.indexOf('transparent'));
+  });
+
+  it('an expand/collapse arrow sits beside Hide block and rotates when the block is open', () => {
+    expect(js).to.include('think-expand-arrow');
+    const css = fs.readFileSync(path.join(root, 'media', 'styles.css'), 'utf8');
+    expect(css).to.include('.think-expand-arrow');
+    expect(css, 'the arrow should visibly change state when expanded').to.include('details.think[open] .think-expand-arrow');
+  });
+
+  it('the expanded thought box has a capped height and scrolls internally instead of growing the page', () => {
+    const css = fs.readFileSync(path.join(root, 'media', 'styles.css'), 'utf8');
+    const idx = css.indexOf('.think-body {');
+    const rule = css.slice(idx, idx + 200);
+    expect(rule).to.include('max-height');
+    expect(rule).to.include('overflow-y: auto');
+  });
+
+  it('an expanded thinking box stays scrolled to the newest text as it streams, unless the user scrolled away', () => {
+    const idx = js.indexOf('function _renderThinkBlock');
+    const body = js.slice(idx, idx + 2600);
+    expect(body).to.include("querySelector('.think-body')");
+    expect(body).to.include('box.scrollTop = box.scrollHeight');
+    expect(body, 'must not force-scroll when the user has manually scrolled up').to.include('!box._userScrolledUp');
+  });
+
+  it('a mini jump-to-latest control tracks scroll position per box, mirroring the main chat pattern', () => {
+    expect(js).to.include('window.jumpThinkToBottom');
+    const idx = js.indexOf('function _renderThinkBlock');
+    const body = js.slice(idx, idx + 2000);
+    expect(body).to.include("box._userScrolledUp = false");
+    expect(body).to.include("box.addEventListener('scroll'");
+    const css = fs.readFileSync(path.join(root, 'media', 'styles.css'), 'utf8');
+    expect(css).to.include('think-scroll-btn');
+  });
+
+  it('the thinking block DOM is built once and updated in place, not torn down on every chunk', () => {
+    const idx = js.indexOf('function _renderThinkBlock');
+    expect(idx, '_renderThinkBlock not found').to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 400);
+    expect(body, 'reuses the existing details element when present').to.include("content.querySelector(':scope > details.think')");
+    expect(body).to.include('if (!details)');
+  });
+
+  it('an abort mid-thought renders plainly as "*Cancelled.*", not swallowed into the think block', () => {
+    // A cut-off <think> block never gets a closing tag, so without this guard the Cancelled
+    // marker parses as more thinking content instead of the answer -- checked ahead of the
+    // <think> branch entirely, not merely as a special case inside it.
+    const idx = js.indexOf('function updateAiDisplay');
+    const guardIdx = js.indexOf('*Cancelled.*', idx);
+    const thinkIdx = js.indexOf("text.includes('<think>')", idx);
+    expect(guardIdx, 'no Cancelled guard found in updateAiDisplay').to.be.greaterThan(-1);
+    expect(guardIdx, 'the Cancelled guard must run before the <think> branch').to.be.lessThan(thinkIdx);
+    const body = js.slice(idx, thinkIdx);
+    expect(body).to.include("marked.parse('*Cancelled.*')");
+    expect(body).to.include('return;');
+  });
+
+  it('the loading dots are a sibling outside .ai-content, never torn down by a content re-render', () => {
+    expect(js).to.include("innerHTML = '<div class=\"thinking-dots\"><span></span><span></span><span></span><span class=\"elapsed-time\"></span></div><div class=\"ai-content\"></div>'");
+    const idx = js.indexOf('function updateAiDisplay');
+    const body = js.slice(idx, idx + 700);
+    expect(body).to.include("querySelector(':scope > .ai-content')");
+    expect(body).to.include("querySelector(':scope > .thinking-dots')");
+  });
+
+  it('updateAiDisplay itself toggles the dots on/off based on whether a real answer has arrived', () => {
+    const idx = js.indexOf('function updateAiDisplay');
+    const body = js.slice(idx, idx + 3200);
+    expect(body).to.include('const stillWorking = !stripThinkTags(text)');
+    expect(body).to.include('dots.style.display = stillWorking');
+    expect(body).to.include('if (!stillWorking) _stopElapsedTimer()');
+  });
+
+  it('the chunk handler no longer special-cases suppression — updateAiDisplay owns dots visibility', () => {
+    const idx = js.indexOf("case 'chunk':");
+    const body = js.slice(idx, idx + 500);
+    expect(body).to.include('updateAiDisplay(currentAiDiv');
+    expect(body).to.not.include('suppressingThink');
+  });
+
+  it('stripThinkTags removes both closed and still-open <think> content', () => {
+    const idx = js.indexOf('function stripThinkTags');
+    expect(idx).to.be.greaterThan(-1);
+    expect(js.slice(idx, idx + 150)).to.include('<\\/think>|$');
+  });
+
+  it('styles.css styles details.think with a toggle label and a disable button hidden until hover', () => {
+    const css = fs.readFileSync(path.join(root, 'media', 'styles.css'), 'utf8');
+    expect(css).to.include('details.think');
+    expect(css).to.include('think-toggle-label');
+    expect(css).to.include('think-disable-btn');
+    expect(css, 'the disable control should not be visible by default').to.include('details.think .think-disable-btn { flex-shrink: 0; opacity: 0;');
+    expect(css, 'only revealed on hovering the summary row').to.include('details.think summary:hover .think-disable-btn');
   });
 });

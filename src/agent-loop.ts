@@ -1,7 +1,7 @@
 /**
  * agent-loop.ts
  *
- * The agentic execution loop — runs tool calls until the model produces a final answer.
+ * Agentic execution loop: runs tool calls until the model produces a final answer.
  *
  * AgentLoop is constructed with a set of dependency callbacks so it stays decoupled from
  * provider.ts. Provider owns the webview, session state, and approval UI; AgentLoop only
@@ -27,6 +27,8 @@ import { RagIndex, ConversationRag } from './rag';
 import { DocsIndex } from './docs-index';
 import { ChatSession } from './session';
 import { estimateHistoryTokens, getNonSystemMessages, isCompactMarker, COMPACT_EXTRACTION_PROMPT, buildExtractionInput } from './utils';
+import { getReasoningControl, isReasoningModel } from './model-caps';
+import { log } from './logger';
 
 /** Tools that modify state and require user approval before execution. */
 const DESTRUCTIVE_TOOLS = new Set(['write_file', 'delete_file', 'run_terminal']);
@@ -49,6 +51,9 @@ export interface AgentLoopDeps {
   getActiveEditor?: () => vscode.TextEditor | undefined;
   /** Resolves the API key and wire format for the active provider from SecretStorage. */
   resolveProviderConfig?: (url: string, useOllama: boolean) => Promise<{ key: string | undefined; authType: import('./providers').AuthType; providerFormat: import('./providers').ProviderFormat }>;
+  /** Archives messages auto-compact is about to trim, so "expand compacted history" in the
+   *  webview also works for automatic compaction, not just the manual /compact command. */
+  archiveTrimmedMessages?: (sessionId: string, trimmed: ChatMessage[]) => Promise<void>;
 }
 
 export class AgentLoop {
@@ -61,7 +66,7 @@ export class AgentLoop {
   /** Aborts any in-progress stream, sending *Cancelled.* to the webview. */
   abort() { this._abortController?.abort(); }
 
-  /** Aborts silently — no *Cancelled.* message sent. Use when switching sessions programmatically. */
+  /** Aborts silently: no *Cancelled.* message sent. Use when switching sessions programmatically. */
   silentAbort() { this._silent = true; this._abortController?.abort(); }
   private _silent = false;
 
@@ -85,7 +90,7 @@ export class AgentLoop {
 
     // Web search and slash commands take priority over normal message processing
     const webSearchResult = await resolveWebSearch(rawText);
-    const text = webSearchResult ?? await resolveSlashCommand(rawText);
+    const text = webSearchResult ?? await resolveSlashCommand(rawText, this.deps.getActiveEditor);
 
     // Direct responses (sentinel \x00 prefix) bypass the model entirely
     if (text.startsWith('\x00')) {
@@ -93,7 +98,7 @@ export class AgentLoop {
       saveState();
       updateUsageDisplay();
       this.deps.postMessage({ type: 'chunk', text: text.slice(1) });
-      this.deps.postMessage({ type: 'status', text: 'Ready' });
+      this.deps.postMessage({ type: 'status', text: 'Ready', sessionId: session.id });
       return;
     }
 
@@ -103,7 +108,7 @@ export class AgentLoop {
     const config = vscode.workspace.getConfiguration('grom');
     const apiUrl = config.get<string>('apiUrl') || 'http://127.0.0.1:11434';
     const baseModel = config.get<string>('model') || 'qwen2.5-coder';
-    const activeLang = vscode.window.activeTextEditor?.document.languageId || '';
+    const activeLang = (this.deps.getActiveEditor?.() ?? vscode.window.activeTextEditor)?.document.languageId || '';
     const chatLangModels = config.get<Record<string, string>>('chatLanguageModels', {});
     const fallbackLangModels = config.get<Record<string, string>>('languageModels', {});
     const model = chatLangModels[activeLang] || fallbackLangModels[activeLang] || baseModel;
@@ -128,14 +133,14 @@ export class AgentLoop {
       const truncated = lines.length > 300 ? lines.slice(0, 300).join('\n') + '\n[...truncated]' : content;
       activeFileContext = `[Currently open file — use as reference/context: ${name}]\n${truncated}\n`;
     }
-    // Only show explicitly @-mentioned files in the UI chips — auto-context is an implementation detail
+    // Only show explicitly @-mentioned files in the UI chips; auto-context is an implementation detail
     this.deps.postMessage({ type: 'filesUsed', files: [...manualFiles].map(name => ({ name, tokens: 0 })) });
 
     const planInstructions = 'You are in PLAN mode. Be conversational and helpful — not every message needs a formal plan. Match your tone to the message: brief for casual questions, thorough for design and architecture. When the user wants to design, scope, or think through a feature, help them break it down. Do NOT write files, execute commands, or call any tools. When the user is ready to implement, suggest they switch to BUILD mode.';
     const buildInstructions = 'You are in BUILD mode. Use tools to read files, write code, and execute tasks. Prefer action over explanation. IMPORTANT: before modifying or appending to an existing file, always call read_file first to get its current content — never assume you know what is already in the file.';
     const modeInstructions = mode === 'build' ? buildInstructions : planInstructions;
 
-    // Inject or patch system prompt. Only write when content changes — keeping the system
+    // Inject or patch system prompt. Only write when content changes, keeping the system
     // message identical between turns lets local runtimes (Ollama, LM Studio, llama.cpp)
     // reuse the KV-cache prefix without any provider-specific API parameter.
     const memory = this.deps.getMemory();
@@ -155,14 +160,14 @@ export class AgentLoop {
 
     const toolsOn = config.get<boolean>('agentEnabled', true) && (session.agentEnabled ?? false);
     const ragContext = (toolsOn && this.deps.rag?.isIndexed()) ? await this.deps.rag.queryAsync(text) : '';
-    // Retrieve relevant earlier turns — gives the model access to compacted history via BM25
+    // Retrieve relevant earlier turns: gives the model access to compacted history via BM25
     const convRag = new ConversationRag();
     convRag.build(session.history);
     const convContext = convRag.query(text);
     const contextPrompt = `CONTEXT:\n${ragContext ? `CODEBASE:\n${ragContext}\n\n` : ''}${convContext ? `EARLIER CONVERSATION (relevant):\n${convContext}\n\n` : ''}${autoContext}\n${manualContext}\n${activeFileContext}\n\nUSER: ${text}`;
-    // Strip any empty-content messages — they cause jinja template errors on some models (e.g. gemma-4)
+    // Strip any empty-content messages: they cause jinja template errors on some models (e.g. gemma-4)
     let messagesForApi: ChatMessage[] = ([...session.history, { role: 'user' as const, content: contextPrompt, images }])
-      // Keep role:'tool' messages even if empty — removing them orphans the preceding tool_calls
+      // Keep role:'tool' messages even if empty, removing them orphans the preceding tool_calls
       // assistant message, which is a hard validation error for OpenAI and Anthropic.
       .filter(m => m.role === 'tool' || m.content.trim().length > 0);
 
@@ -179,11 +184,14 @@ export class AgentLoop {
     const pricing = config.get<Record<string, any>>('modelPricing') || {};
     const modelKey = Object.keys(pricing).find(k => model.toLowerCase().includes(k.toLowerCase()));
     const p = modelKey ? pricing[modelKey] : { context: 8192 };
-    // Use the same context length source as the display so compact fires at the same % the user sees.
+    // Use the same detected/configured context length as the display so compact fires at the same %
+    // the user sees. When neither is known the display falls back to 8192, but compaction is skipped
+    // rather than guessing a limit that may be far too small for the model.
     const detectedCtx = this.deps.getContextLength?.() ?? null;
-    const limit = (detectedCtx ?? p.context ?? 8192) * compactThreshold;
+    const configuredCtx = modelKey ? p.context : null;
+    const limit = (detectedCtx ?? configuredCtx ?? null);
     const estimatedTokens = JSON.stringify(messagesForApi).length / 4;
-    if (estimatedTokens > limit && getNonSystemMessages(session.history).length > 3) {
+    if (limit !== null && estimatedTokens > limit * compactThreshold && getNonSystemMessages(session.history).length > 3) {
       this.deps.postMessage({ type: 'compacting' });
       // Extract a structured summary of the messages about to be trimmed so the model
       // can reconstruct context from typed facts rather than losing it entirely.
@@ -198,16 +206,20 @@ export class AgentLoop {
           );
         } catch { /* fall back to plain marker if extraction times out or fails */ }
       }
+      // Same archive step the manual /compact command uses, so nothing trimmed here is lost
+      // either — only what's sent to the model shrinks, never what's kept on disk.
+      await this.deps.archiveTrimmedMessages?.(session.id, toTrim);
       const sys = session.history.find(m => m.role === 'system' && !isCompactMarker(m));
       const lastMessages = getNonSystemMessages(session.history).slice(-4);
       const markerContent = compactSummary ? `__compacted__\n\n${compactSummary}` : '__compacted__';
-      const marker: ChatMessage = { role: 'system', content: markerContent };
+      const compactedAt = Date.now();
+      const marker: ChatMessage = { role: 'system', content: markerContent, compactedAt };
       session.history = sys ? [sys, marker, ...lastMessages] : [marker, ...lastMessages];
       session.tokens.input = estimateHistoryTokens(session.history);
       session.tokens.output = 0;
       messagesForApi = [...session.history, { role: 'user', content: contextPrompt, images }];
       saveState();
-      this.deps.postMessage({ type: 'compacted' });
+      this.deps.postMessage({ type: 'compacted', compactedAt });
     }
     session.history.push({ role: 'user', content: rawText, images });
     saveState();
@@ -219,13 +231,23 @@ export class AgentLoop {
     const mcpTools = this.deps.mcp.getAllTools();
     const allTools = (agentEnabled && mode === 'build') ? [...BUILTIN_TOOLS, ...mcpTools] : [];
     const isCompose = text.trimStart().startsWith('/compose');
+    const effortEnabled = config.get<boolean>('showReasoningToggle', true);
+    const globalEffort = config.get<string>('reasoningEffort', 'off') as 'off' | 'low' | 'medium' | 'high';
+    const userReasoningModels = config.get<string[]>('reasoningModels', []);
+    const rc = getReasoningControl(model, isReasoningModel(model, userReasoningModels));
+    // Only apply effort for models with reliable control (API params or Qwen3 tokens).
+    // Hint-only models get no injection; the feature is hidden for them.
+    const reasoningEffort = (effortEnabled && (rc === 'api' || rc === 'token'))
+      ? (session.reasoningEffort ?? globalEffort)
+      : undefined;
+    log(`[reasoning] model=${model} rc=${rc} effortEnabled=${effortEnabled} sessionEffort=${session.reasoningEffort} globalEffort=${globalEffort} -> resolved=${reasoningEffort} tools=${allTools.length} mode=${mode}`);
 
-    // Simple stream — no tools configured, or plan mode (tools suppressed)
+    // Simple stream: no tools configured, or plan mode (tools suppressed)
     if (!allTools.length || mode === 'plan') {
       try {
         const { text: fullText } = await this._client.streamChatWithCallback(messagesForApi, (chunk) => {
           this.deps.postMessage({ type: 'chunk', text: chunk });
-        }, this._abortController.signal);
+        }, this._abortController.signal, false, undefined, reasoningEffort);
         if (isCompose) {
           const patches = parseComposerResponse(fullText);
           if (patches.length > 0) await applyComposerPatches(patches);
@@ -247,11 +269,11 @@ export class AgentLoop {
             : `\n\n**Error:** ${msg}` });
         }
       }
-      this.deps.postMessage({ type: 'status', text: 'Ready' });
+      this.deps.postMessage({ type: 'status', text: 'Ready', sessionId: session.id });
       return;
     }
 
-    // Agentic loop — tools available
+    // Agentic loop: tools available
     try {
       let toolMessages = [...messagesForApi];
 
@@ -296,15 +318,27 @@ export class AgentLoop {
       let trustAll = false;
       let hitMaxRounds = false;
 
+      let activeTools: ToolDefinition[] | undefined = allTools as ToolDefinition[];
       for (let round = 0; round < MAX_ROUNDS; round++) {
-        if (round === MAX_ROUNDS - 1) hitMaxRounds = true;
         if (this._abortController.signal.aborted) break;
+        if (round === MAX_ROUNDS - 1) hitMaxRounds = true;
 
-        const result = await this._streamWithToolDetection(toolMessages, toolCallMade, allTools as ToolDefinition[]);
+        const result = await this._streamWithToolDetection(toolMessages, toolCallMade, activeTools, reasoningEffort);
         const fullText = result.text;
         // If the provider dropped tools mid-session (e.g. Ollama 500 on malformed tool JSON),
-        // reset nativeToolsWorked so heuristic instructions are re-injected next turn.
-        if (result.toolsDropped) session.nativeToolsWorked = false;
+        // reset nativeToolsWorked and switch to heuristic path for remaining rounds.
+        if (result.toolsDropped) {
+          session.nativeToolsWorked = false;
+          activeTools = undefined;
+          if (!toolMessages.some(m => m.role === 'system' && m.content.includes('Available tools:'))) {
+            const toolSuffix = buildToolSystemPrompt(allTools as ToolDefinition[]);
+            if (toolMessages[0]?.role === 'system') {
+              toolMessages[0] = { ...toolMessages[0], content: toolMessages[0].content + toolSuffix };
+            } else {
+              toolMessages = [{ role: 'system', content: toolSuffix.trimStart() }, ...toolMessages];
+            }
+          }
+        }
         // Native tool call (Layer 1/2) takes priority; fall back to heuristic parser (Layer 5)
         const nativeTc = result.toolCall;
         const parsed = nativeTc
@@ -312,7 +346,7 @@ export class AgentLoop {
           : parseToolCall(fullText);
 
         if (!parsed) {
-          // Model wrote prose without calling a tool — nudge it once, but ONLY on the very first
+          // Model wrote prose without calling a tool; nudge it once, but ONLY on the very first
           // turn before any tool has been called. After a tool succeeds, prose = task complete.
           if (!toolCallMade && repromptsLeft > 0 && fullText.trim()) {
             repromptsLeft--;
@@ -329,11 +363,11 @@ export class AgentLoop {
             const patches = parseComposerResponse(fullText);
             if (patches.length > 0) await applyComposerPatches(patches);
           }
-          this.deps.postMessage({ type: 'status', text: 'Ready' });
+          this.deps.postMessage({ type: 'status', text: 'Ready', sessionId: session.id });
           return;
         }
 
-        // Unknown tool — tell the model and retry once
+        // Unknown tool: tell the model and retry once
         const toolKnown = isBuiltinTool(parsed.tool) || mcpTools.some(t => t.name === parsed.tool);
         if (!toolKnown) {
           consecutiveNoOp++;
@@ -403,18 +437,21 @@ export class AgentLoop {
         saveState();
         updateUsageDisplay();
       }
-      if (hitMaxRounds) {
+      if (this._abortController.signal.aborted) {
+        this.deps.postMessage({ type: 'chunk', text: '\n\n*Cancelled.*' });
+      } else if (hitMaxRounds) {
         this.deps.postMessage({ type: 'chunk', text: `\n\n*Agent reached the maximum number of tool-call rounds (${MAX_ROUNDS}). Review the results and continue if needed.*` });
       }
     } catch (e: any) {
-      // On abort, trim any trailing assistant/tool message pairs that have no following user
-      // message — they were committed mid-loop and would cause a validation error next turn.
+      // On abort, an assistant message with tool_calls may have been committed without its
+      // tool results. Providers reject that shape on the next turn, so it is trimmed below.
       if (e?.name === 'AbortError') {
-        while (session.history.length > 0) {
-          const last = session.history[session.history.length - 1];
-          if (last.role === 'tool' || last.role === 'assistant') {
-            session.history.pop();
-          } else break;
+        // Only trim a trailing assistant message that has tool_calls but no following tool result
+        // (genuinely orphaned: it would cause a validation error next turn). Completed
+        // assistant+tool pairs are valid history and must be kept so the model has context.
+        const last = session.history[session.history.length - 1];
+        if (last?.role === 'assistant' && last.tool_calls?.length) {
+          session.history.pop();
         }
       }
       if (e?.name !== 'AbortError') {
@@ -427,20 +464,21 @@ export class AgentLoop {
       }
     }
 
-    this.deps.postMessage({ type: 'status', text: 'Ready' });
+    this.deps.postMessage({ type: 'status', text: 'Ready', sessionId: session.id });
   }
 
   /**
    * Streams a model response and returns the full text once complete.
    * Thinking blocks (<think>...</think>) are posted to the UI as they arrive.
-   * Everything else is buffered — tool-call detection happens on the complete text
+   * Everything else is buffered: tool-call detection happens on the complete text
    * after streaming finishes, avoiding false positives from mid-stream JSON fragments.
    * When jsonMode is true (mid-task), even thinking blocks are suppressed.
    */
   private async _streamWithToolDetection(
     messages: ChatMessage[],
     jsonMode = false,
-    tools?: ToolDefinition[]
+    tools?: ToolDefinition[],
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high'
   ): Promise<{ text: string; toolCall?: { id: string; name: string; args: Record<string, any> }; proseStreamed: boolean; toolsDropped?: boolean }> {
     let inThink = false;
     let proseStreamed = false;
@@ -457,7 +495,7 @@ export class AgentLoop {
         proseStreamed = true;
         if (accumulatedText.includes('</think>')) inThink = false;
       }
-    }, this._abortController?.signal, jsonMode, tools);
+    }, this._abortController?.signal, jsonMode, tools, reasoningEffort);
 
     return { text: result.text, toolCall: result.toolCall, proseStreamed, toolsDropped: result.toolsDropped };
   }

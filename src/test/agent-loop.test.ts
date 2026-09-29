@@ -383,6 +383,85 @@ describe('AgentLoop', () => {
     expect(deps.appendTaskLog.called).to.be.false;
   });
 
+  describe('RAG gating', () => {
+    it('does NOT query RAG when tools are off even if indexed', async () => {
+      deps.rag.isIndexed.returns(true);
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: false };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+      await loop.run('tell me about the codebase', undefined, 'build', session, () => {}, () => {});
+      expect(deps.rag.queryAsync.called).to.be.false;
+    });
+
+    it('DOES query RAG in plan mode when agentEnabled is on (RAG gates on agentEnabled, not mode)', async () => {
+      deps.rag.isIndexed.returns(true);
+      deps.rag.queryAsync.resolves('relevant context');
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan', agentEnabled: true };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+      await loop.run('explain the codebase', undefined, 'plan', session, () => {}, () => {});
+      expect(deps.rag.queryAsync.called).to.be.true;
+    });
+
+    it('DOES query RAG when tools are on and rag is indexed in build mode', async () => {
+      deps.rag.isIndexed.returns(true);
+      deps.rag.queryAsync.resolves('relevant context');
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+      await loop.run('explain auth.ts', undefined, 'build', session, () => {}, () => {});
+      expect(deps.rag.queryAsync.called).to.be.true;
+    });
+
+    it('does NOT query RAG when not indexed regardless of tools state', async () => {
+      deps.rag.isIndexed.returns(false);
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+      await loop.run('explain auth.ts', undefined, 'build', session, () => {}, () => {});
+      expect(deps.rag.queryAsync.called).to.be.false;
+    });
+  });
+
+  describe('reasoning effort passthrough', () => {
+    beforeEach(() => {
+      // Use a Qwen3 model so getReasoningControl returns 'token' and effort is forwarded.
+      vscodeMock.workspace.getConfiguration.returns({ get: (key: string, def: any) => key === 'model' ? 'qwen3-8b' : def });
+    });
+
+    it('passes session reasoningEffort to streamChatWithCallback in plan mode', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan', reasoningEffort: 'high' };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+      await loop.run('hi', undefined, 'plan', session, () => {}, () => {});
+      const callArgs = clientStub.streamChatWithCallback.firstCall.args;
+      // reasoningEffort is the 6th argument (index 5)
+      expect(callArgs[5]).to.equal('high');
+    });
+
+    it('passes session reasoningEffort=low to streamChatWithCallback', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan', reasoningEffort: 'low' };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+      await loop.run('hi', undefined, 'plan', session, () => {}, () => {});
+      expect(clientStub.streamChatWithCallback.firstCall.args[5]).to.equal('low');
+    });
+
+    it('uses global config effort when session has no reasoningEffort set', async () => {
+      vscodeMock.workspace.getConfiguration.returns({ get: (key: string, def: any) => key === 'model' ? 'qwen3-8b' : key === 'reasoningEffort' ? 'medium' : def });
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+      await loop.run('hi', undefined, 'plan', session, () => {}, () => {});
+      expect(clientStub.streamChatWithCallback.firstCall.args[5]).to.equal('medium');
+    });
+
+    it('passes reasoningEffort through the tool-detection path in build mode', async () => {
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true, reasoningEffort: 'high' };
+      const nativeTc = { id: 'call_1', name: 'read_file', args: { path: 'test.ts' } };
+      clientStub.streamChatWithCallback
+        .onFirstCall().resolves({ text: '', toolCall: nativeTc })
+        .onSecondCall().resolves({ text: 'Done.' });
+      await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+      // Both calls should carry the effort
+      expect(clientStub.streamChatWithCallback.firstCall.args[5]).to.equal('high');
+      expect(clientStub.streamChatWithCallback.secondCall.args[5]).to.equal('high');
+    });
+  });
+
   describe('toolsOffNudge', () => {
     it('posts toolsOffNudge when tools are off and model outputs a tool call in build mode', async () => {
       const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: false };
@@ -498,7 +577,7 @@ describe('AgentLoop', () => {
       expect(assistantMsg.tool_calls[0].function.name).to.equal('read_file');
     });
 
-    it('trims orphaned assistant and tool messages from history on abort', async () => {
+    it('keeps completed tool rounds in history on abort, only removes orphaned assistant', async () => {
       const session: any = { id: 's-abort', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
       const nativeTc = { id: 'call_1', name: 'read_file', args: { path: 'test.ts' } };
 
@@ -509,9 +588,10 @@ describe('AgentLoop', () => {
 
       await loop.run('Do something', undefined, 'build', session, () => {}, () => {});
 
+      // Round 1 completed (tool executed + result committed), keep it for model context
       const roles = session.history.map((m: any) => m.role);
-      expect(roles).to.not.include('assistant');
-      expect(roles).to.not.include('tool');
+      expect(roles).to.include('assistant'); // round 1 assistant (with tool_calls) kept
+      expect(roles).to.include('tool');      // round 1 tool result kept
       expect(roles).to.include('user');
     });
 
@@ -653,6 +733,93 @@ describe('AgentLoop', () => {
         .filter(c => c.args[0]?.type === 'chunk')
         .map(c => c.args[0].text as string);
       expect(chunks.some(t => t.includes('unknown tool') || t.includes('could not complete'))).to.be.true;
+    });
+  });
+
+  describe('silentAbort vs abort', () => {
+    it('abort posts Cancelled message to webview', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+      const abortErr = new Error('aborted'); abortErr.name = 'AbortError';
+      clientStub.streamChatWithCallback.callsFake(async () => {
+        loop.abort();
+        throw abortErr;
+      });
+
+      await loop.run('Hi', undefined, 'plan', session, () => {}, () => {});
+
+      const chunks = deps.postMessage.getCalls()
+        .filter((c: any) => c.args[0]?.type === 'chunk')
+        .map((c: any) => c.args[0].text as string);
+      expect(chunks.some((t: string) => t.includes('Cancelled'))).to.be.true;
+    });
+
+    it('silentAbort does NOT post Cancelled message', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+      const abortErr = new Error('aborted'); abortErr.name = 'AbortError';
+      clientStub.streamChatWithCallback.callsFake(async () => {
+        loop.silentAbort();
+        throw abortErr;
+      });
+
+      await loop.run('Hi', undefined, 'plan', session, () => {}, () => {});
+
+      const chunks = deps.postMessage.getCalls()
+        .filter((c: any) => c.args[0]?.type === 'chunk')
+        .map((c: any) => c.args[0].text as string);
+      expect(chunks.some((t: string) => t.includes('Cancelled'))).to.be.false;
+    });
+
+    it('_silent flag resets between runs so abort works normally on the next run', async () => {
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+      const abortErr = new Error('aborted'); abortErr.name = 'AbortError';
+
+      // First run: silentAbort, no Cancelled
+      clientStub.streamChatWithCallback.onFirstCall().callsFake(async () => {
+        loop.silentAbort();
+        throw abortErr;
+      });
+      await loop.run('Hi', undefined, 'plan', session, () => {}, () => {});
+      deps.postMessage.reset();
+
+      // Second run: normal abort, Cancelled should appear (flag was reset)
+      clientStub.streamChatWithCallback.onSecondCall().callsFake(async () => {
+        loop.abort();
+        throw abortErr;
+      });
+      await loop.run('Hi again', undefined, 'plan', session, () => {}, () => {});
+
+      const chunks = deps.postMessage.getCalls()
+        .filter((c: any) => c.args[0]?.type === 'chunk')
+        .map((c: any) => c.args[0].text as string);
+      expect(chunks.some((t: string) => t.includes('Cancelled'))).to.be.true;
+    });
+  });
+
+  describe('resolveWebSearch integration', () => {
+    it('calls the model with the search result when resolveWebSearch returns a non-null string', async () => {
+      const searchResult = 'Web search results for "TypeScript":\n\nSummary: TypeScript is a typed language.';
+      contextModule.resolveWebSearch.resolves(searchResult);
+
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+
+      await loop.run('/search TypeScript', undefined, 'plan', session, () => {}, () => {});
+
+      expect(clientStub.streamChatWithCallback.called).to.be.true;
+      const msgs: any[] = clientStub.streamChatWithCallback.firstCall.args[0];
+      const combined = JSON.stringify(msgs);
+      expect(combined).to.include('TypeScript');
+    });
+
+    it('does not bypass model for web search results (non-sentinel string)', async () => {
+      contextModule.resolveWebSearch.resolves('Some search result');
+
+      const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'plan' };
+      clientStub.streamChatWithCallback.resolves({ text: 'ok' });
+
+      await loop.run('/search something', undefined, 'plan', session, () => {}, () => {});
+
+      expect(clientStub.streamChatWithCallback.called).to.be.true;
     });
   });
 

@@ -209,7 +209,7 @@ describe('SessionManager', () => {
       ];
       mgr.compactSession('default');
       const h = mgr.getCurrentSession().history;
-      // Should be: [sys, __compacted__, u2, a2, u3, a3] — only last 4 non-system
+      // Should be: [sys, __compacted__, u2, a2, u3, a3], only last 4 non-system
       const nonSystem = h.filter(m => m.role !== 'system');
       expect(nonSystem).to.have.length(4);
       expect(nonSystem[0].content).to.equal('u2');
@@ -289,7 +289,7 @@ describe('SessionManager', () => {
         { role: 'user', content: 'u2' },
         { role: 'assistant', content: 'a2' },
       ];
-      // 5 messages total but only 2 non-system — should not compact again meaningfully
+      // 5 messages total but only 2 non-system; should not compact again meaningfully
       // compactSession threshold is <= 2 total, so this returns true but is idempotent
       const result = mgr.compactSession('default');
       const h = mgr.getCurrentSession().history;
@@ -353,6 +353,34 @@ describe('SessionManager', () => {
       const mgr = makeManager();
       (mgr as any).setSystemPrompt('ghost', 'new system');
       expect(mgr.getCurrentSession().systemPrompt).to.be.undefined;
+    });
+  });
+
+  describe('setReasoningEffort', () => {
+    it('sets reasoning effort on an existing session', () => {
+      const mgr = makeManager();
+      mgr.setReasoningEffort('default', 'high');
+      expect(mgr.getCurrentSession().reasoningEffort).to.equal('high');
+    });
+
+    it('overwrites a previously set effort', () => {
+      const mgr = makeManager();
+      mgr.setReasoningEffort('default', 'low');
+      mgr.setReasoningEffort('default', 'medium');
+      expect(mgr.getCurrentSession().reasoningEffort).to.equal('medium');
+    });
+
+    it('is a no-op for an unknown session id', () => {
+      const mgr = makeManager();
+      mgr.setReasoningEffort('ghost', 'high');
+      expect(mgr.getCurrentSession().reasoningEffort).to.be.undefined;
+    });
+
+    it('sets effort to off', () => {
+      const mgr = makeManager();
+      mgr.setReasoningEffort('default', 'high');
+      mgr.setReasoningEffort('default', 'off');
+      expect(mgr.getCurrentSession().reasoningEffort).to.equal('off');
     });
   });
 
@@ -505,6 +533,87 @@ describe('session date display — CSS', () => {
 
 // ── edge cases ────────────────────────────────────────────────────────────────
 
+describe('reasoning effort — webview wiring', () => {
+  const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
+  const css = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'styles.css'), 'utf8');
+  const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+
+  it('effort-btn element exists in webview.html', () => {
+    const html = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'webview.html'), 'utf8');
+    expect(html).to.include('id="effort-btn"');
+  });
+
+  it('effort-btn has data-effort attribute defaulting to off', () => {
+    const html = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'webview.html'), 'utf8');
+    expect(html).to.include('data-effort="off"');
+  });
+
+  it('effort-btn is hidden by default (display:none)', () => {
+    const html = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'webview.html'), 'utf8');
+    const effortBtnIdx = html.indexOf('id="effort-btn"');
+    const snippet = html.slice(effortBtnIdx, effortBtnIdx + 200);
+    expect(snippet).to.include('display:none');
+  });
+
+  it('CSS defines .effort-btn base style', () => {
+    expect(css).to.include('.effort-btn {');
+  });
+
+  it('CSS defines effort-btn[data-effort="off"] state', () => {
+    expect(css).to.include('.effort-btn[data-effort="off"]');
+  });
+
+  it('CSS defines effort-btn[data-effort="high"] state', () => {
+    expect(css).to.include('.effort-btn[data-effort="high"]');
+  });
+
+  it('CSS targets .kb-bolt for bolt visibility', () => {
+    expect(css).to.include('.kb-bolt');
+  });
+
+  it('cycleReasoningEffort function is defined in main.js', () => {
+    expect(js).to.include('cycleReasoningEffort');
+  });
+
+  it('main.js handles reasoningEffortChanged message', () => {
+    expect(js).to.include("case 'reasoningEffortChanged'");
+  });
+
+  it('main.js calls _updateEffortVisibility in loadSessions handler', () => {
+    const loadIdx = js.indexOf("case 'loadSessions'");
+    expect(loadIdx).to.not.equal(-1);
+    const slice = js.slice(loadIdx, loadIdx + 1000);
+    expect(slice).to.include('_updateEffortVisibility()');
+  });
+
+  it('/effort command is intercepted in provider.ts send handler', () => {
+    expect(provider).to.include('/effort');
+    expect(provider).to.include('effortMatch');
+  });
+
+  it('provider.ts handles setReasoningEffort message type', () => {
+    expect(provider).to.include("case 'setReasoningEffort'");
+  });
+
+  it('provider.ts sends showReasoningToggle in loadSessions state', () => {
+    expect(provider).to.include('showReasoningToggle');
+  });
+
+  it('provider.ts gates reasoning effort behind showReasoningToggle', () => {
+    expect(provider).to.include('showReasoningToggle');
+    expect(provider).to.include('reasoningEffort');
+  });
+
+  it('provider.ts blocks /effort for hint-only models using getReasoningControl', () => {
+    expect(provider).to.include('getReasoningControl');
+    expect(provider).to.include("rc === 'hint'");
+  });
+
+  it("main.js visibility check requires reasoningControl 'api' or 'token'", () => {
+    expect(js).to.include("_reasoningControl === 'api' || _reasoningControl === 'token'");
+  });
+});
+
 describe('session edge cases', () => {
   const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
   const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
@@ -534,6 +643,11 @@ describe('session edge cases', () => {
       '_createNewSession must check title is Untitled before bailing out');
   });
 
+  it("reindexWorkspace message handler runs the grom.reindex command", () => {
+    expect(provider).to.match(/case 'reindexWorkspace':[\s\S]{0,80}executeCommand\('grom\.reindex'\)/,
+      'reindexWorkspace case must invoke the grom.reindex command so /reindex reuses the real file-discovery + RAG rebuild logic, not a duplicate');
+  });
+
   it('#5 — _silent resets at start of every run()', () => {
     const agentLoop = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'agent-loop.ts'), 'utf8');
     const runIdx = agentLoop.indexOf('async run(');
@@ -559,5 +673,130 @@ describe('session edge cases', () => {
     const slice = provider.slice(idx, idx + 600);
     expect(slice).to.include('this._suppressNextConfigReload = true',
       '_switchSession must suppress the config watcher reload when updating model');
+  });
+});
+
+describe('compacted history archive', () => {
+  const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+  const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
+  const css = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'styles.css'), 'utf8');
+
+  it('archives trimmed messages before compactSession() discards them, so nothing is lost', () => {
+    const idx = provider.indexOf('private async _compactSession()');
+    expect(idx, '_compactSession not found').to.be.greaterThan(-1);
+    const body = provider.slice(idx, idx + 2400);
+    const archiveIdx = body.indexOf('_archiveTrimmedMessages');
+    const compactIdx = body.indexOf('this._sessionManager.compactSession(');
+    expect(archiveIdx, 'archive call not found').to.be.greaterThan(-1);
+    expect(archiveIdx, 'must archive BEFORE compactSession() discards the messages').to.be.lessThan(compactIdx);
+    expect(body).to.include('await this._archiveTrimmedMessages(current.id, toTrim)');
+  });
+
+  it('the archive lives in the extension\'s own workspace storage, never sent to the model', () => {
+    expect(provider).to.include('this._context.storageUri');
+    const idx = provider.indexOf('private _archiveUri');
+    const body = provider.slice(idx, idx + 300);
+    expect(body).to.include("'archives'");
+  });
+
+  it('archiving failure never blocks compaction itself', () => {
+    const idx = provider.indexOf('private async _archiveTrimmedMessages');
+    const body = provider.slice(idx, idx + 900);
+    expect(body, 'archive errors must be caught, not thrown').to.include('catch (e) {');
+    expect(body).to.include('logError');
+  });
+
+  it('archiving appends to any existing archive rather than overwriting it, across multiple compactions', () => {
+    const idx = provider.indexOf('private async _archiveTrimmedMessages');
+    const body = provider.slice(idx, idx + 900);
+    expect(body, 'reads the existing archive first').to.include('existing = Buffer.from');
+    expect(body, 'writes existing content back plus the new messages').to.include('existing + this._messagesToMarkdown(trimmed)');
+  });
+
+  it('export, import, and the archive all reuse the same markdown serialiser and parser', () => {
+    expect(provider, '_exportChat should use the shared serialiser').to.include('this._messagesToMarkdown(current.history)');
+    expect(provider, '_importChat should use the shared parser').to.include('this._markdownToMessages(raw)');
+    expect(provider, '_expandCompactedHistory should use the shared parser too').to.include('this._markdownToMessages(raw)');
+  });
+
+  it('a missing archive (nothing to expand) is reported distinctly from an empty one, not silently ignored', () => {
+    const idx = provider.indexOf('private async _expandCompactedHistory');
+    const body = provider.slice(idx, idx + 700);
+    expect(body).to.include("messages: null");
+  });
+
+  it('expandCompactedHistory is wired into the message handler switch', () => {
+    expect(provider).to.include("case 'expandCompactedHistory': this._expandCompactedHistory(data.sessionId); break;");
+  });
+
+  it('the compact notice is clickable and carries the session id it belongs to', () => {
+    const idx = js.indexOf('function _makeCompactNotice');
+    expect(idx, '_makeCompactNotice not found').to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 1300);
+    expect(body).to.include("notice.dataset.sessionId = sessionId");
+    expect(body).to.include("type: 'expandCompactedHistory'");
+  });
+
+  it('the compact notice shows a real timestamp of when that compaction ran', () => {
+    const idx = js.indexOf('function _makeCompactNotice');
+    const body = js.slice(idx, idx + 1300);
+    expect(body, 'accepts compactedAt and stores it for later').to.include('notice.dataset.compactedAt = compactedAt');
+    expect(body, 'reuses the existing relative-time formatter, not a new one').to.include('_relativeTime(compactedAt)');
+  });
+
+  it('both the manual /compact command and auto-compact (in agent-loop.ts) set compactedAt and archive what they trim', () => {
+    const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+    const agentLoop = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'agent-loop.ts'), 'utf8');
+    expect(provider, 'manual /compact must post the timestamp back to the webview').to.include("this._post({ type: 'compacted', compactedAt");
+    expect(agentLoop, 'auto-compact must set compactedAt on its own marker').to.include('content: markerContent, compactedAt');
+    expect(agentLoop, 'auto-compact must also archive before trimming, not just manual /compact').to.include('await this.deps.archiveTrimmedMessages?.(session.id, toTrim)');
+    expect(agentLoop, 'auto-compact must post the timestamp too').to.include("this.deps.postMessage({ type: 'compacted', compactedAt })");
+  });
+
+  it('loadSessions detects a compact marker even when it carries a summary, not just the bare marker', () => {
+    // A real compaction almost always attaches a summary ("__compacted__\n\n<summary>"), and an
+    // exact-match check against the bare "__compacted__" string would silently skip rendering the
+    // notice at all for that — the common case, not an edge case.
+    expect(js).to.not.include("msg.content === '__compacted__'");
+    expect(js).to.include("msg.content.startsWith('__compacted__')");
+  });
+
+  it('archivedHistory inserts messages in place of the notice, then keeps the notice as a relabelled marker (not removed)', () => {
+    const idx = js.indexOf("case 'archivedHistory':");
+    expect(idx, "case 'archivedHistory' not found").to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 1600);
+    expect(body).to.include('chatContainer.insertBefore(div, notice)');
+    // The marker is the record that a compaction happened here — it stays, relabelled, rather
+    // than disappearing once its content has been shown.
+    expect(body, 'the notice must not be removed from the DOM').to.not.include('notice.remove()');
+    expect(body, 'it is marked expanded so a stray click does not re-fetch').to.include("notice.dataset.expanded = '1'");
+    expect(body, 'and stops responding to clicks').to.include('notice.onclick = null');
+    expect(body).to.include('(expanded above)');
+  });
+
+  it('archivedHistory with no messages tells the user plainly instead of doing nothing', () => {
+    const idx = js.indexOf("case 'archivedHistory':");
+    const body = js.slice(idx, idx + 700);
+    expect(body).to.include('no earlier messages were saved');
+  });
+
+  it('the compact notice has hover styling to signal it is clickable', () => {
+    expect(css).to.include('.compact-notice.clickable');
+  });
+
+  it('a single compaction does not leave two stacked notices behind (both compacting and compacted reach this handler)', () => {
+    const idx = js.indexOf("case 'compacting':");
+    expect(idx, "case 'compacting' not found").to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 500);
+    expect(body, 'must remove any existing notice for this session before appending a new one').to.include('querySelectorAll(`.compact-notice[data-session-id=');
+    expect(body).to.include('.forEach(n => n.remove())');
+  });
+
+  it('expanding history scrolls to what was just revealed, not to the bottom of the chat', () => {
+    const idx = js.indexOf("case 'archivedHistory':");
+    const body = js.slice(idx, idx + 2000);
+    expect(body, 'must not jump to the newest message the user has already seen').to.not.include('chatContainer.scrollTop = chatContainer.scrollHeight');
+    expect(body, 'scrolls the first newly-inserted message into view instead').to.include('chatContainer.scrollTop = Math.max(0, firstDiv.offsetTop');
+    expect(body, 'must not call scrollIntoView, which is unreliable right after a batch of DOM insertions').to.not.include('.scrollIntoView(');
   });
 });

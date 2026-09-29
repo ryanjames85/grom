@@ -1,9 +1,9 @@
 /**
  * rag.ts
  *
- * Codebase indexing and retrieval (RAG — Retrieval Augmented Generation).
- * Builds a searchable index from pre-read workspace files using BM25 keyword
- * scoring (always) and optional semantic embeddings via an embedding model.
+ * Retrieval-augmented codebase indexing via BM25 keyword scoring and optional
+ * semantic embeddings. Builds a searchable index from pre-read workspace files
+ * and exposes a ranked-retrieval API for context assembly.
  *
  * Usage:
  *   - extension.ts reads files from the workspace and calls ragIndex.build(files, embConfig)
@@ -13,9 +13,9 @@
  * when embeddings are available, or pure BM25 when no embedding model is configured.
  *
  * Embedding endpoint resolution order (cached after first success per session):
- *   1. /api/embed       — Ollama native batch endpoint
- *   2. /v1/embeddings   — OpenAI-compatible (LM Studio, OpenRouter, etc.)
- *   3. /api/embeddings  — Legacy Ollama single-text endpoint
+ *   1. /api/embed:       Ollama native batch endpoint
+ *   2. /v1/embeddings:   OpenAI-compatible (LM Studio, OpenRouter, etc.)
+ *   3. /api/embeddings:  Legacy Ollama single-text endpoint
  *
  * NOTE: This file is intentionally vscode-free. All file discovery, config reading,
  * and status bar updates live in extension.ts. This makes the indexing logic independently
@@ -30,7 +30,7 @@ export interface RagFile {
   content: string; // Full file text
 }
 
-/** Ollama embedding configuration — passed in from extension.ts which reads VS Code settings. */
+/** Ollama embedding configuration: passed in from extension.ts which reads VS Code settings. */
 export interface EmbeddingConfig {
   model: string;  // e.g. "nomic-embed-text"
   apiUrl: string; // e.g. "http://127.0.0.1:11434"
@@ -50,7 +50,7 @@ const CHUNK_LINES = 30;
 const CHUNK_OVERLAP = 5;
 const EMBED_BATCH = 20;
 
-// BM25 hyperparameters — standard defaults that work well across code corpora
+// BM25 hyperparameters: standard defaults that work well across code corpora
 const BM25_K1 = 1.5; // Term saturation: controls diminishing returns for repeated terms
 const BM25_B  = 0.75; // Length normalisation: penalises longer chunks relative to average
 
@@ -70,11 +70,11 @@ export class RagIndex {
   private _hasEmbeddings = false;
   private _embConfig?: EmbeddingConfig;
 
-  // Endpoint cache — set on first successful call, skips re-probing for the session lifetime
+  // Endpoint cache: set on first successful call, skips re-probing for the session lifetime
   private _workingEndpoint: 'ollama' | 'openai' | 'legacy' | null = null;
-  // Expected vector dimension — guards against silent corruption when the model changes mid-session
+  // Expected vector dimension: guards against silent corruption when the model changes mid-session
   private _embDim = 0;
-  // Per-file content hashes — enables incremental re-indexing on file changes
+  // Per-file content hashes: enables incremental re-indexing on file changes
   private _fileHashes: Map<string, string> = new Map();
   // Set when an embedding model is configured but all embedding attempts fail
   private _embeddingFailed = false;
@@ -99,8 +99,8 @@ export class RagIndex {
   /**
    * Builds or incrementally updates the index from the provided file list.
    *
-   * - First call (not yet indexed): full build — chunks all files, embeds all chunks.
-   * - Subsequent calls without force: incremental — only re-chunks and re-embeds files
+   * - First call (not yet indexed): full build, chunks all files, embeds all chunks.
+   * - Subsequent calls without force: incremental, only re-chunks and re-embeds files
    *   whose content hash changed; untouched files keep their existing vectors.
    * - force=true: full rebuild regardless (e.g. when the embedding model changes).
    *
@@ -109,7 +109,7 @@ export class RagIndex {
    */
   async build(files: RagFile[], embConfig?: EmbeddingConfig, force = false): Promise<void> {
     if (this._indexing) {
-      // Queue the rebuild — the current build will pick it up when it finishes
+      // Queue the rebuild: the current build will pick it up when it finishes
       if (force) this._pendingRebuild = { files, embConfig };
       return;
     }
@@ -202,6 +202,11 @@ export class RagIndex {
       this._onProgress?.(this._progressLabel());
     } finally {
       this._indexing = false;
+      const pending = this._pendingRebuild;
+      if (pending) {
+        this._pendingRebuild = null;
+        await this.build(pending.files, pending.embConfig, true);
+      }
     }
   }
 
@@ -259,7 +264,7 @@ export class RagIndex {
     if (!this._hasEmbeddings) return this.query(query, topK);
 
     const qVecRaw = await this._embed(query, this._embConfig);
-    // Guard against dimension mismatch — if the model changed mid-session cosine produces nonsense
+    // Guard against dimension mismatch: if the model changed mid-session cosine produces nonsense
     const qVec = (qVecRaw && (this._embDim === 0 || qVecRaw.length === this._embDim))
       ? new Float32Array(qVecRaw)
       : null;
@@ -305,7 +310,7 @@ export class RagIndex {
       for (const term of chunk.terms.keys()) df.set(term, (df.get(term) || 0) + 1);
     }
     const N = this._chunks.length;
-    // BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1) — always positive, handles rare/common terms better than TF-IDF
+    // BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1), always positive, handles rare/common terms better than TF-IDF
     this._idf = new Map([...df.entries()].map(([t, d]) => [t, Math.log((N - d + 0.5) / (d + 0.5) + 1)]));
   }
 
@@ -343,7 +348,7 @@ export class RagIndex {
    * Embeds a set of chunks in batches. Used for both full builds and incremental updates.
    * Tries the cached working endpoint first; probes all three on first call.
    * Updates _hasEmbeddings and _embeddingFailed based on results.
-   * Embedding is optional — silent failure degrades to BM25.
+   * Embedding is optional: silent failure degrades to BM25.
    */
   private async _embedChunks(chunks: IndexedChunk[], embConfig: EmbeddingConfig): Promise<void> {
     let successCount = 0;
@@ -364,7 +369,7 @@ export class RagIndex {
           }
         }
       } catch {}
-      this._onProgress?.(`embedding ${Math.round(i / chunks.length * 100)}%…`);
+      this._onProgress?.(`embedding ${Math.round(Math.min(i + EMBED_BATCH, chunks.length) / chunks.length * 100)}%…`);
     }
     if (successCount > 0) {
       this._hasEmbeddings = true;
@@ -420,7 +425,7 @@ export class RagIndex {
   }
 
   /**
-   * Single-text embedding — delegates to _embedBatch first (Ollama + OpenAI-compat),
+   * Single-text embedding: delegates to _embedBatch first (Ollama + OpenAI-compat),
    * then falls back to the legacy Ollama /api/embeddings endpoint for older servers.
    * embConfig is optional; returns null when undefined.
    */
@@ -455,7 +460,7 @@ export class RagIndex {
 
 /**
  * Lightweight BM25 index over conversation turns. Built fresh each call from the
- * session history — no embeddings, no async, negligible cost. Retrieves semantically
+ * session history: no embeddings, no async, negligible cost. Retrieves semantically
  * relevant earlier turns so the model can reconstruct context that was compacted away.
  *
  * Usage: build() from session.history, then query() with the current user text.
@@ -523,7 +528,7 @@ export class ConversationRag {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/** Fast djb2 hash of file content — used for incremental re-indexing change detection. */
+/** Fast djb2 hash of file content, used for incremental re-indexing change detection. */
 function fileHash(content: string): string {
   let h = 5381;
   for (let i = 0; i < content.length; i++) h = (h * 33 ^ content.charCodeAt(i)) >>> 0;

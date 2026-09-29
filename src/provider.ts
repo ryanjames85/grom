@@ -1,7 +1,7 @@
 /**
  * provider.ts
  *
- * WebviewViewProvider that drives the Grom chat panel â€” the central hub of the extension.
+ * WebviewViewProvider that drives the Grom chat panel, the central hub of the extension.
  *
  * Responsibilities:
  *   - Renders the webview HTML and handles all messages sent from the webview JS
@@ -31,6 +31,7 @@ import { AgentLoop } from './agent-loop';
 import { estimateTokens, estimateHistoryTokens, getNonSystemMessages, isCompactMarker, COMPACT_EXTRACTION_PROMPT, buildExtractionInput } from './utils';
 import { log, logError } from './logger';
 import { VoiceManager, findFfmpeg } from './voice';
+import { isReasoningModel, getReasoningControl } from './model-caps';
 
 const MAX_GREETING_LEN = 200;
 const BLOCKED_TERMS = [
@@ -57,7 +58,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _suppressNextConfigReload = false;
   private _pendingApprovals = new Map<string, (result: 'allow' | 'allowAll' | 'deny') => void>();
   private _isStreaming = false;
-  // Promise chain that serialises _handleChat calls — new messages wait for the previous
+  // Promise chain that serialises _handleChat calls; new messages wait for the previous
   // one to finish rather than running concurrently and corrupting session history.
   private _chatQueue: Promise<void> = Promise.resolve();
   private _detectedContextLength: number | null = null;
@@ -65,9 +66,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
   private _connectionCheckInProgress = false;
   // Stores args for a deferred check queued while one is already running.
   // null = nothing pending; object = pending (undefined fields = use config).
-  // Later callers overwrite earlier ones — only the most-recent intent matters.
+  // Later callers overwrite earlier ones, only the most-recent intent matters.
   private _pendingConnectionCheck: { url?: string; model?: string; ollama?: boolean } | null = null;
-  // Resolve callbacks for all callers waiting on the deferred check — called together when it completes.
+  // Resolve callbacks for all callers waiting on the deferred check, called together when it completes.
   private _pendingConnectionResolvers: Array<() => void> = [];
   private _contextHintSent = new Set<string>(); // session IDs that have already received a context hint
   private _docsHintSent = new Set<string>();   // session IDs that have already received the @docs hint
@@ -107,6 +108,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       getContextLength: () => this._detectedContextLength,
       getActiveEditor: () => this._lastActiveEditor,
       resolveProviderConfig: (url, useOllama) => this._resolveProviderKey(url, useOllama),
+      archiveTrimmedMessages: (sessionId, trimmed) => this._archiveTrimmedMessages(sessionId, trimmed),
     });
   }
 
@@ -190,6 +192,18 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       if (e.affectsConfiguration('grom')) {
         this._checkConnection();
         this._updateTheme();
+        if (e.affectsConfiguration('grom.reasoningEffort')) {
+          // Only propagate the global setting change to sessions that haven't been explicitly customised.
+          // A session with reasoningEffort already set was changed via toolbar or /effort; preserve it.
+          const newEffort = vscode.workspace.getConfiguration('grom').get<string>('reasoningEffort', 'off') as 'off' | 'low' | 'medium' | 'high';
+          const session = this._sessionManager.getCurrentSession();
+          if (session.reasoningEffort === undefined) {
+            this._sessionManager.setReasoningEffort(session.id, newEffort);
+            this._saveState();
+          }
+          // Post directly so the webview updates even when _suppressNextConfigReload is set.
+          this.postMessageToWebview({ type: 'reasoningEffortChanged', effort: session.reasoningEffort ?? newEffort });
+        }
         if (this._suppressNextConfigReload) { this._suppressNextConfigReload = false; }
         else { this._loadAllSessions(); }
         if (e.affectsConfiguration('grom.mcpServers')) {
@@ -199,16 +213,25 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     const editorWatcher = vscode.window.onDidChangeActiveTextEditor(editor => {
-      // Only update the stored editor when a real text editor gains focus — not when
+      // Only update the stored editor when a real text editor gains focus, not when
       // the webview takes focus (which fires with undefined), so the last file stays
       // available as context when the user types in Grom's input box.
       if (editor) this._lastActiveEditor = editor;
       this._updateActiveContext();
     });
 
+    const closeWatcher = vscode.workspace.onDidCloseTextDocument(doc => {
+      // If the tracked file is closed, clear it immediately so the context chip disappears.
+      if (this._lastActiveEditor?.document.uri.toString() === doc.uri.toString()) {
+        this._lastActiveEditor = undefined;
+        this._updateActiveContext();
+      }
+    });
+
     webviewView.onDidDispose(() => {
       configWatcher.dispose();
       editorWatcher.dispose();
+      closeWatcher.dispose();
     });
 
     webviewView.webview.onDidReceiveMessage(async (data) => {
@@ -246,13 +269,38 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             this._chatQueue = this._chatQueue.then(() => this._memoriseSession());
             break;
           }
+          const effortMatch = (data.text as string)?.trim().match(/^\/effort\s+(off|low|medium|high)$/i);
+          if (effortMatch) {
+            const cfg = vscode.workspace.getConfiguration('grom');
+            if (!cfg.get<boolean>('showReasoningToggle', true)) {
+              this._post({ type: 'chunk', text: 'Reasoning effort is disabled. Enable it with `grom.showReasoningToggle: true` in settings.' });
+              this._post({ type: 'status', text: 'Ready' });
+              break;
+            }
+            const effortModel = cfg.get<string>('model') || '';
+            const userReasoning = cfg.get<string[]>('reasoningModels', []);
+            const rc = getReasoningControl(effortModel, isReasoningModel(effortModel, userReasoning));
+            if (rc === 'hint' || rc === 'none') {
+              this._post({ type: 'chunk', text: `**${effortModel}** does not support reliable reasoning effort control. The feature is available for Qwen3 and cloud models (Anthropic, OpenAI o-series, Gemini 2.5+).` });
+              this._post({ type: 'status', text: 'Ready' });
+              break;
+            }
+            const effort = effortMatch[1].toLowerCase() as 'off' | 'low' | 'medium' | 'high';
+            const session = this._sessionManager.getCurrentSession();
+            this._sessionManager.setReasoningEffort(session.id, effort);
+            this._saveState();
+            this._post({ type: 'reasoningEffortChanged', effort });
+            this._post({ type: 'chunk', text: `Reasoning effort set to **${effort}**.` });
+            this._post({ type: 'status', text: 'Ready' });
+            break;
+          }
           const ph = this._context.globalState.get<string[]>('promptHistory', []);
           if (data.text && (ph.length === 0 || ph[ph.length - 1] !== data.text)) {
             ph.push(data.text);
             if (ph.length > 50) ph.shift();
             void this._context.globalState.update('promptHistory', ph);
           }
-          // Serialise through the queue — if a previous message is still streaming,
+          // Serialise through the queue: if a previous message is still streaming,
           // this one waits for it to fully complete before starting. Prevents two
           // concurrent runs from interleaving writes to session.history.
           this._isStreaming = true;
@@ -289,7 +337,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         case 'switchSession': this._switchSession(data.sessionId); break;
         case 'deleteSession': this._deleteSession(data.sessionId); break;
         case 'compactSession': this._compactSession(); break;
+        case 'expandCompactedHistory': this._expandCompactedHistory(data.sessionId); break;
         case 'clearPromptHistory': void this._context.globalState.update('promptHistory', []); break;
+        case 'reindexWorkspace': void vscode.commands.executeCommand('grom.reindex'); break;
         case 'renameSession': this._renameSession(data.title, data.sessionId); break;
         case 'exportChat': this._exportChat(); break;
         case 'importChat': this._importChat(); break;
@@ -355,7 +405,26 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           this._saveState();
           break;
         }
-        case 'updateHistory': await this._updateSessionHistory(data.text); break;
+        case 'setReasoningEffort': {
+          if (!vscode.workspace.getConfiguration('grom').get<boolean>('showReasoningToggle', true)) break;
+          const session = this._sessionManager.getCurrentSession();
+          this._sessionManager.setReasoningEffort(session.id, data.effort);
+          this._saveState();
+          const tbModel = vscode.workspace.getConfiguration('grom').get<string>('model') || '';
+          const tbUserReasoning = vscode.workspace.getConfiguration('grom').get<string[]>('reasoningModels', []);
+          if (data.effort !== 'off' && tbModel && !isReasoningModel(tbModel, tbUserReasoning)) {
+            void vscode.window.showWarningMessage(`Reasoning effort: ${tbModel} may not support extended thinking — effort hints will have no effect.`);
+          }
+          break;
+        }
+        case 'setShowThinking': {
+          // Global, persisted setting — hiding thinking applies to every chat, not just the
+          // message the Hide button was clicked on. The config watcher below picks this up and
+          // re-posts loadSessions, which already carries showThinking to the webview.
+          await vscode.workspace.getConfiguration('grom').update('showThinking', !!data.value, vscode.ConfigurationTarget.Global);
+          break;
+        }
+        case 'updateHistory': await this._updateSessionHistory(data.text, data.sessionId); break;
         case 'resend': {
           const session = this._sessionManager.getCurrentSession();
           const text = this._sessionManager.trimLastExchange(session.id);
@@ -464,7 +533,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           vscode.commands.executeCommand('workbench.action.openSettings', data.query ?? `@ext:${this._context.extension.id}`);
           break;
         case 'getFiles': {
-          // Collect open tabs first — these are highest priority
+          // Collect open tabs first: these are highest priority
           const openPaths = new Set<string>();
           const openFiles: { name: string; path: string; group: string }[] = [];
           for (const tg of vscode.window.tabGroups.all) {
@@ -571,7 +640,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
           await cfg.update('useOllamaFormat', isOllama, vscode.ConfigurationTarget.Global);
           await cfg.update('apiUrl', newUrl, vscode.ConfigurationTarget.Global);
           if (data.model) await cfg.update('model', data.model, vscode.ConfigurationTarget.Global);
-          // Clear native tool calling cache — the new provider may behave differently
+          // Clear native tool calling cache; the new provider may behave differently
           const current = this._sessionManager.getCurrentSession();
           if (current) { current.nativeToolsWorked = false; this._saveState(); }
           await this._checkConnection(newUrl, data.model || 'qwen2.5-coder', isOllama);
@@ -648,7 +717,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       }
   }
 
-  /** Sends a message to the webview — used by extension.ts to inject triggered actions (explain, refactor, etc.). */
+  /** Sends a message to the webview, used by extension.ts to inject triggered actions (explain, refactor, etc.). */
   public postMessageToWebview(m: any) { this._post(m); }
 
   /** Re-adopts a popout panel restored by VS Code after a restart. */
@@ -730,6 +799,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       hasMemory: !!(this._context.globalState.get<string>('gromMemory', '') || '').trim(),
       hasSystemPrompt: !!(current.systemPrompt || '').trim(),
       agentEnabled: current.agentEnabled ?? false,
+      reasoningEffort: current.reasoningEffort ?? vscode.workspace.getConfiguration('grom').get<string>('reasoningEffort', 'off'),
+      showReasoningToggle: vscode.workspace.getConfiguration('grom').get<boolean>('showReasoningToggle', true),
+      showThinking: vscode.workspace.getConfiguration('grom').get<boolean>('showThinking', true),
       promptHistory: this._context.globalState.get<string[]>('promptHistory', [])
     });
     this._updateUsageDisplay();
@@ -797,7 +869,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       // Update UI immediately so the chat switches without waiting for async model update.
       this._loadAllSessions(true);
       if (session.model) {
-        // Suppress the config watcher's loadAllSessions — we already did it above.
+        // Suppress the config watcher's loadAllSessions; we already did it above.
         this._suppressNextConfigReload = true;
         vscode.workspace.getConfiguration('grom').update('model', session.model, vscode.ConfigurationTarget.Global);
       }
@@ -826,7 +898,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       vscode.window.showInformationMessage('Nothing to compact.');
       return;
     }
-    // Messages that will be trimmed — all non-system except the last 4
+    // Messages that will be trimmed; all non-system except the last 4
     const toTrim = nonSystem.slice(0, -4);
     let summary: string | undefined;
     try {
@@ -843,11 +915,16 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       );
     } catch { /* fall back to plain marker */ }
 
+    // Archive before trimming: toTrim is exactly what compactSession() is about to discard from
+    // session.history, so this is the last point the full, unsummarised messages are available.
+    await this._archiveTrimmedMessages(current.id, toTrim);
+
     if (this._sessionManager.compactSession(current.id, summary)) {
       this._contextHintSent.delete(current.id);
       this._saveState();
       this._updateUsageDisplay();
-      this._post({ type: 'compacted' });
+      const marker = this._sessionManager.getSessions()[current.id].history.find(m => isCompactMarker(m));
+      this._post({ type: 'compacted', compactedAt: marker?.compactedAt });
     } else {
       vscode.window.showInformationMessage('Nothing to compact.');
     }
@@ -939,22 +1016,18 @@ ${convText}`;
     });
   }
 
-  private async _exportChat() {
-    const current = this._sessionManager.getCurrentSession();
-    if (current.history.length === 0) return;
-    let markdown = `# Chat Session: ${current.title}\n\n> Import this file into Grom to continue the conversation.\n\n`;
-    current.history.forEach(msg => {
+  /** Same markdown shape used by export, import, and the on-disk compaction archive, so all
+   *  three stay readable by the same parser below instead of drifting into separate formats. */
+  private _messagesToMarkdown(messages: ChatMessage[]): string {
+    let markdown = '';
+    messages.forEach(msg => {
       if (isCompactMarker(msg)) markdown += `---\n*Earlier messages were compacted.*\n\n`;
       else if (msg.role !== 'system') markdown += `### ${msg.role === 'user' ? 'User' : 'Assistant'}\n${msg.content}\n\n`;
     });
-    const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(`grom-chat-${current.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`), filters: { 'Markdown': ['md'] } });
-    if (uri) { await vscode.workspace.fs.writeFile(uri, Buffer.from(markdown)); vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`); }
+    return markdown;
   }
 
-  private async _importChat() {
-    const uris = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Markdown': ['md'] }, title: 'Import Grom Chat' });
-    if (!uris || uris.length === 0) return;
-    const raw = Buffer.from(await vscode.workspace.fs.readFile(uris[0])).toString('utf8');
+  private _markdownToMessages(raw: string): { title: string; history: ChatMessage[] } {
     const lines = raw.split('\n');
     const history: ChatMessage[] = [];
     let title = 'Imported Chat';
@@ -976,6 +1049,62 @@ ${convText}`;
       else if (currentRole && !line.startsWith('> ')) { currentContent.push(line); }
     }
     flush();
+    return { title, history };
+  }
+
+  /** Path to the ever-growing, never-trimmed archive for one session's compacted-away messages.
+   *  Lives in the extension's own workspace storage, never sent to the model, so keeping it
+   *  costs disk space only, not tokens. undefined when no workspace folder is open. */
+  private _archiveUri(sessionId: string): vscode.Uri | undefined {
+    if (!this._context.storageUri) return undefined;
+    return vscode.Uri.joinPath(this._context.storageUri, 'archives', `${sessionId}.md`);
+  }
+
+  /** Appends messages about to be trimmed by compaction to that session's on-disk archive,
+   *  so "click to view earlier messages" always has the full, never-summarised originals to
+   *  read back, no matter how many times the session gets compacted. Best-effort: a failure
+   *  here must never block compaction itself. */
+  private async _archiveTrimmedMessages(sessionId: string, trimmed: ChatMessage[]) {
+    const uri = this._archiveUri(sessionId);
+    if (!uri || trimmed.length === 0) return;
+    try {
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(this._context.storageUri!, 'archives'));
+      let existing = '';
+      try { existing = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8'); } catch { /* first compaction for this session */ }
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(existing + this._messagesToMarkdown(trimmed)));
+    } catch (e) {
+      logError('[grom] failed to archive compacted messages', e);
+    }
+  }
+
+  private async _expandCompactedHistory(sessionId?: string) {
+    const id = sessionId || this._sessionManager.getCurrentSession().id;
+    const uri = this._archiveUri(id);
+    if (!uri) { this._post({ type: 'archivedHistory', sessionId: id, messages: null }); return; }
+    try {
+      const raw = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+      const { history } = this._markdownToMessages(raw);
+      this._post({ type: 'archivedHistory', sessionId: id, messages: history.filter(m => m.role !== 'system') });
+    } catch {
+      // No archive file: either nothing has been compacted yet, or this session was compacted
+      // before the archive existed. Either way there is nothing earlier to show.
+      this._post({ type: 'archivedHistory', sessionId: id, messages: null });
+    }
+  }
+
+  private async _exportChat() {
+    const current = this._sessionManager.getCurrentSession();
+    if (current.history.length === 0) return;
+    const markdown = `# Chat Session: ${current.title}\n\n> Import this file into Grom to continue the conversation.\n\n` + this._messagesToMarkdown(current.history);
+    const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(`grom-chat-${current.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`), filters: { 'Markdown': ['md'] } });
+    if (uri) { await vscode.workspace.fs.writeFile(uri, Buffer.from(markdown)); vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`); }
+  }
+
+  private async _importChat() {
+    const uris = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Markdown': ['md'] }, title: 'Import Grom Chat' });
+    if (!uris || uris.length === 0) return;
+    const raw = Buffer.from(await vscode.workspace.fs.readFile(uris[0])).toString('utf8');
+    const { title, history } = this._markdownToMessages(raw);
 
     if (history.length === 0) { vscode.window.showWarningMessage('No messages found in file.'); return; }
 
@@ -986,13 +1115,16 @@ ${convText}`;
     sessions[id].tokens.input = estimateHistoryTokens(history);
     this._saveState();
     this._loadAllSessions(true);
-    vscode.window.showInformationMessage(`Imported "${title}" â€” ${history.filter(m => m.role !== 'system').length} messages.`);
+    vscode.window.showInformationMessage(`Imported "${title}": ${history.filter(m => m.role !== 'system').length} messages.`);
   }
 
-  private async _updateSessionHistory(text: string) {
+  private async _updateSessionHistory(text: string, sessionId?: string) {
     if (!text.trim()) return; // never store empty assistant messages
     const sessions = this._sessionManager.getSessions();
-    const s = sessions[this._sessionManager.getCurrentSessionId()];
+    // Use the session ID from the turn that produced this text, not getCurrentSessionId().
+    // The user may have switched sessions while the stream was in flight.
+    const targetId = (sessionId && sessions[sessionId]) ? sessionId : this._sessionManager.getCurrentSessionId();
+    const s = sessions[targetId];
     if (s) {
       s.history.push({ role: 'assistant', content: text });
       s.tokens.output += estimateTokens(text);
@@ -1038,13 +1170,13 @@ ${convText}`;
   /** Pings the LLM server, fetches available models and capabilities, and posts the status to the webview. */
   private _checkConnection(overrideUrl?: string, overrideModel?: string, overrideOllama?: boolean): Promise<void> {
     if (this._connectionCheckInProgress) {
-      // A check is already running — give the user immediate feedback so the UI
+      // A check is already running, give the user immediate feedback so the UI
       // doesn't appear frozen, then queue this call's params as the next check.
       const cfg = vscode.workspace.getConfiguration('grom');
       const feedbackUrl = overrideUrl ?? cfg.get<string>('apiUrl') ?? '';
       const feedbackOllama = overrideOllama ?? cfg.get<boolean>('useOllamaFormat') ?? true;
       this._post({ type: 'statusUpdate', status: 'Connecting…', color: 'var(--vscode-descriptionForeground)', url: feedbackUrl, useOllama: feedbackOllama });
-      // Later callers win — overwrite pending params with the most-recent intent.
+      // Later callers win: overwrite pending params with the most-recent intent.
       this._pendingConnectionCheck = { url: overrideUrl, model: overrideModel, ollama: overrideOllama };
       // Return a promise that resolves only when the pending check actually completes,
       // so callers like changeProvider that await this get correct semantics.
@@ -1104,7 +1236,7 @@ ${convText}`;
       })));
 
       // For OpenAI-compat providers, getCapabilities() reuses the /v1/models response
-      // already fetched by getAvailableModels() — no extra network request.
+      // already fetched by getAvailableModels(): no extra network request.
       const capsClient = activeModel !== model
         ? new LocalLLMClient(url, activeModel, useOllama, key, authType, providerFormat)
         : client;
@@ -1118,9 +1250,14 @@ ${convText}`;
         if (typeof ov.vision === 'boolean') caps.vision = ov.vision;
         if (typeof ov.reasoning === 'boolean') caps.reasoning = ov.reasoning;
       }
+      // grom.reasoningModels: user-maintained list of model name substrings that
+      // should be treated as reasoning models even if not in the built-in list.
+      const userReasoningModels = config.get<string[]>('reasoningModels', []);
+      if (!caps.reasoning && isReasoningModel(activeModel, userReasoningModels)) caps.reasoning = true;
       if (mcpToolCount > 0) caps.tools = true;
+      (caps as any).reasoningControl = getReasoningControl(activeModel, caps.reasoning);
 
-      // Auto-detect context length — cloud providers won't respond and fall through silently.
+      // Auto-detect context length: cloud providers won't respond and fall through silently.
       // Load cached endpoint so we skip failed probes from the last session.
       loadCtxEndpointCache(this._context.globalState.get<Record<string, CtxEndpoint>>('grom.ctxEndpointCache', {}));
       const detectedCtx = await fetchContextLength(url, activeModel);
@@ -1132,6 +1269,10 @@ ${convText}`;
 
       log(`[connection] connected — model=${activeModel} models=[${models.join(', ')}] caps=${JSON.stringify(caps)} mcpTools=${mcpToolCount}`);
       this._post({ type: 'statusUpdate', status: 'Connected', color: 'var(--vscode-testing-iconPassedColor)', url, model: activeModel, models, caps, useOllama, customProviders });
+      // Refresh the context-usage indicator immediately: previously it only updated after
+      // the next message send, so a reconnect (provider/model switch) left it showing a
+      // stale value until the user sent something.
+      this._updateUsageDisplay();
     } catch (err: any) {
       const isNetworkError = err.message?.includes('fetch failed') || err.name === 'AbortError' || err.message?.includes('ECONNREFUSED');
       logError(`[connection] failed (${isNetworkError ? 'network' : 'error'})`, err);
@@ -1174,12 +1315,12 @@ ${convText}`;
     }
   }
 
-  /** Delegates to AgentLoop.run() — context assembly, tool execution, and streaming all happen there. */
+  /** Delegates to AgentLoop.run(): context assembly, tool execution, and streaming all happen there. */
   private async _handleChat(text: string, images?: string[], mode: 'plan' | 'build' = 'plan') {
     if (!this._view && !this._popout) return;
 
-    // If @docs is used but no sources are configured, show the hint and skip the model call entirely —
-    // Grom already knows the answer; there's nothing useful to send to the provider.
+    // If @docs is used but no sources are configured, show the hint and skip the model call entirely.
+    // Grom already knows the answer, so there's nothing useful to send to the provider.
     if (/@docs\b/.test(text)) {
       const docSources = vscode.workspace.getConfiguration('grom').get<any[]>('docSources', []);
       if (!docSources.length) {

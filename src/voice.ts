@@ -7,7 +7,7 @@ import { log, logError } from './logger';
 
 type VoiceState = 'idle' | 'recording' | 'transcribing';
 
-// Single-file static ffmpeg binaries — eugeneware/ffmpeg-static releases.
+// Single-file static ffmpeg binaries: eugeneware/ffmpeg-static releases.
 // Asset names match {platform}-{arch} exactly (no extension, just the binary).
 const FFMPEG_RELEASES_API = 'https://api.github.com/repos/eugeneware/ffmpeg-static/releases/latest';
 
@@ -43,7 +43,7 @@ async function _fetchFfmpegAssetUrl(): Promise<string> {
   });
 }
 
-// Per-session device caches — cleared on each new recording so a reconnected mic is picked up.
+// Per-session device caches: cleared on each new recording so a reconnected mic is picked up.
 // Reset by VoiceManager._start() before spawning ffmpeg.
 let _cachedWindowsDevice: string | undefined;
 let _cachedMacDevice: string | undefined;
@@ -91,12 +91,12 @@ async function _findMacAudioDevice(ffmpegPath: string): Promise<string> {
     proc.on('close', () => {
       // Lines look like: [AVFoundation indev @ 0xADDR] [0] Built-in Microphone
       // We want the standalone [N] at the start of the device name portion, not the hex address.
-      // Match lines that contain ] [<digits>] <name> — the device index block follows the address block.
+      // Match lines that contain ] [<digits>] <name>; the device index block follows the address block.
       let inAudio = false;
       for (const line of stderr.split('\n')) {
         if (line.includes('AVFoundation audio devices')) { inAudio = true; continue; }
         if (!inAudio) continue;
-        // Match "...] [0] Some Mic Name" — two consecutive bracket groups, second is pure digits
+        // Match "...] [0] Some Mic Name"; two consecutive bracket groups, second is pure digits
         const m = line.match(/\]\s*\[(\d+)\]\s*\S/);
         if (m) { _cachedMacDevice = m[1]; resolve(m[1]); return; }
       }
@@ -263,7 +263,7 @@ export class VoiceManager {
   }
 
   private async _start() {
-    // Set state immediately — acts as a lock so a rapid second toggle() call sees 'recording'
+    // Set state immediately: acts as a lock so a rapid second toggle() call sees 'recording'
     // and calls _stop() instead of spawning a second ffmpeg process.
     this._setState('recording');
 
@@ -280,7 +280,7 @@ export class VoiceManager {
     resetDeviceCache();
 
     const captureArgList = await captureArgs(ffmpegPath);
-    // If _stop() was called during the async captureArgs() gap, bail — state is already 'idle'
+    // If _stop() was called during the async captureArgs() gap, bail; state is already 'idle'
     if (this._state !== 'recording') return;
 
     const args = [...captureArgList, '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1'];
@@ -346,17 +346,17 @@ export class VoiceManager {
     this._sentPcmLength = 0;
 
     if (remaining.length === 0) {
-      // All audio already sent as chunks — signal end with empty final
+      // All audio already sent as chunks; signal end with empty final
       this._sendPcm(Buffer.alloc(0), true);
     } else {
       this._sendPcm(remaining, true);
     }
-    // Reset host state to idle — the webview manages its own visual transcribing state
+    // Reset host state to idle; the webview manages its own visual transcribing state
     this._state = 'idle';
   }
 
   private _sendPcm(buf: Buffer, isFinal: boolean) {
-    // Encode as base64 — postMessage only supports JSON-serialisable values
+    // Encode as base64: postMessage only supports JSON-serialisable values
     this._post({ type: 'voiceAudio', pcm: buf.toString('base64'), isFinal });
   }
 

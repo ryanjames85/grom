@@ -167,7 +167,7 @@ describe('LocalLLMClient', () => {
     });
 
     it('overrides name-based tools=true with server-reported tools=false when caps block exists', async () => {
-      // Server explicitly says no tools — trust it over the name
+      // Server explicitly says no tools; trust it over the name
       const client = new LocalLLMClient('http://localhost:1234', 'mistral-nemo', false);
       fetchStub.resolves(minimalModelEntry('mistral-nemo', { capabilities: { tools: false } }));
       const caps = await client.getCapabilities();
@@ -392,7 +392,7 @@ describe('LocalLLMClient', () => {
       const v0Response = { data: [{ id: 'qwen2.5-7b', capabilities: { vision: false, tool_calls: true } }] };
       fetchStub.resolves({ ok: true, json: async () => v0Response } as any);
       await client.getAvailableModels();   // triggers v0 probe, caches result
-      const caps = await client.getCapabilities(); // consumes cache — no extra fetch
+      const caps = await client.getCapabilities(); // consumes cache: no extra fetch
       expect(caps.tools).to.be.true;
       expect(caps.vision).to.be.false;
       // Only 1 fetch total (v0 probe in getModels; getCapabilities consumed cache)
@@ -881,7 +881,7 @@ describe('LocalLLMClient', () => {
     });
 
     it('OpenAI-compat returns toolsDropped:true when tool_call arguments are malformed JSON', async () => {
-      // Provider streams tool_calls with invalid JSON arguments — the catch block should
+      // Provider streams tool_calls with invalid JSON arguments; the catch block should
       // signal toolsDropped so the agent loop resets nativeToolsWorked.
       const client = new LocalLLMClient('http://localhost:1234', 'llama3', false);
       const badArgsSSE = [
@@ -893,6 +893,258 @@ describe('LocalLLMClient', () => {
       const result = await client.streamChatWithCallback([], () => {}, undefined, false, [{ name: 'read_file', description: 'r', inputSchema: {} }]);
       expect(result.toolCall).to.be.undefined;
       expect(result.toolsDropped).to.be.true;
+    });
+  });
+
+  // --- reasoning effort ---
+
+  describe('reasoning effort — OpenAI-compat', () => {
+    it('sends reasoning_effort in body when effort is high for o-series models', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'o3-mini', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'high');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.equal('high');
+    });
+
+    it('sends reasoning_effort in body when effort is high for Gemini 2.5', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'gemini-2.5-flash', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'high');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.equal('high');
+    });
+
+    it('sends reasoning_effort=low in body when effort is low for o-series models', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'o3-mini', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'low');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.equal('low');
+    });
+
+    it('does NOT send reasoning_effort when effort is off', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'deepseek-r1:7b', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'off');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.be.undefined;
+    });
+
+    it('does NOT send reasoning_effort when effort is undefined', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'deepseek-r1:7b', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.be.undefined;
+    });
+
+    it('injects /no_think into last user message for qwen3 at effort=off', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen3-14b', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'why is the sky blue?' }], () => {}, undefined, false, undefined, 'off');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const lastUser = [...body.messages].reverse().find((m: any) => m.role === 'user');
+      expect(lastUser.content).to.include('/no_think');
+    });
+
+    it('injects /think into last user message for qwen3 at effort=high', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen3-14b', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'solve this' }], () => {}, undefined, false, undefined, 'high');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const lastUser = [...body.messages].reverse().find((m: any) => m.role === 'user');
+      expect(lastUser.content).to.include('/think');
+    });
+
+    it('does NOT inject local effort tokens for non-reasoning models', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'llama-3.1-8b', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      const content = 'plain question';
+      await client.streamChatWithCallback([{ role: 'user', content }], () => {}, undefined, false, undefined, 'off');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const lastUser = [...body.messages].reverse().find((m: any) => m.role === 'user');
+      expect(lastUser.content).to.equal(content);
+    });
+
+    it('merges multiple system messages into one for OpenAI-compat providers', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen3-14b', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      const messages: any[] = [
+        { role: 'system', content: 'You are in BUILD mode.' },
+        { role: 'system', content: '__compacted__\n\ndecisions: use TypeScript' },
+        { role: 'user', content: 'hello' },
+      ];
+      await client.streamChatWithCallback(messages, () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const systemMsgs = body.messages.filter((m: any) => m.role === 'system');
+      expect(systemMsgs).to.have.length(1);
+      expect(systemMsgs[0].content).to.include('BUILD mode');
+      expect(systemMsgs[0].content).to.include('decisions: use TypeScript');
+      expect(systemMsgs[0].content).not.to.include('__compacted__');
+    });
+  });
+
+  describe('reasoning effort — Ollama', () => {
+    it('injects /no_think into last user message for qwen3 at effort=off', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'qwen3:14b', true);
+      fetchStub.resolves({ ok: true, body: makeStreamBody([JSON.stringify({ message: { content: 'ok' } }) + '\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'why is the sky blue?' }], () => {}, undefined, false, undefined, 'off');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const lastUser = [...body.messages].reverse().find((m: any) => m.role === 'user');
+      expect(lastUser.content).to.include('/no_think');
+    });
+
+    it('does NOT send reasoning_effort field in Ollama body (Ollama does not support it)', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'deepseek-r1:7b', true);
+      fetchStub.resolves({ ok: true, body: makeStreamBody([JSON.stringify({ message: { content: 'ok' } }) + '\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'high');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.be.undefined;
+    });
+
+    it('injects system hint for deepseek-r1 at effort=off via Ollama', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'deepseek-r1:7b', true);
+      fetchStub.resolves({ ok: true, body: makeStreamBody([JSON.stringify({ message: { content: 'ok' } }) + '\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'off');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const systemMsg = body.messages.find((m: any) => m.role === 'system');
+      expect(systemMsg).to.exist;
+      expect(systemMsg.content).to.include('directly');
+    });
+
+    it('does not modify messages for non-reasoning model at any effort level via Ollama', async () => {
+      const client = new LocalLLMClient('http://localhost:11434', 'llama3.1:8b', true);
+      fetchStub.resolves({ ok: true, body: makeStreamBody([JSON.stringify({ message: { content: 'ok' } }) + '\n']) } as any);
+      const content = 'what time is it?';
+      await client.streamChatWithCallback([{ role: 'user', content }], () => {}, undefined, false, undefined, 'high');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      const userMsg = body.messages.find((m: any) => m.role === 'user');
+      expect(userMsg.content).to.equal(content);
+    });
+  });
+
+  describe('reasoning effort — o-series (OpenAI)', () => {
+    it('sends reasoning_effort body param for o1-mini without local injection', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'o1-mini', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      const content = 'explain recursion';
+      await client.streamChatWithCallback([{ role: 'user', content }], () => {}, undefined, false, undefined, 'high');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.equal('high');
+      // User message should be unchanged; o-series skips local injection
+      const lastUser = [...body.messages].reverse().find((m: any) => m.role === 'user');
+      expect(lastUser.content).to.equal(content);
+    });
+
+    it('sends reasoning_effort body param for o3-mini', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'o3-mini', false);
+      fetchStub.resolves({ ok: true, body: makeStreamBody(['data: [DONE]\n']) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'medium');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.reasoning_effort).to.equal('medium');
+    });
+  });
+
+  describe('reasoning effort — Anthropic', () => {
+    const anthropicReasoningClient = (model = 'claude-3-7-sonnet-20250219') =>
+      new LocalLLMClient('https://api.anthropic.com', model, false, 'sk-ant-key', undefined, 'anthropic');
+
+    it('sends thinking.budget_tokens=16000 when effort is high', async () => {
+      const client = anthropicReasoningClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'high');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.thinking).to.deep.equal({ type: 'enabled', budget_tokens: 16000 });
+    });
+
+    it('sends thinking.budget_tokens=5000 when effort is medium', async () => {
+      const client = anthropicReasoningClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'medium');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.thinking).to.deep.equal({ type: 'enabled', budget_tokens: 5000 });
+    });
+
+    it('sends thinking.budget_tokens=2000 when effort is low', async () => {
+      const client = anthropicReasoningClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'low');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.thinking).to.deep.equal({ type: 'enabled', budget_tokens: 2000 });
+    });
+
+    it('does NOT send thinking when effort is off', async () => {
+      const client = anthropicReasoningClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {}, undefined, false, undefined, 'off');
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.thinking).to.be.undefined;
+    });
+
+    it('does NOT send thinking when effort is undefined', async () => {
+      const client = anthropicReasoningClient();
+      fetchStub.resolves({ ok: true, body: makeStreamBody([]) } as any);
+      await client.streamChatWithCallback([{ role: 'user', content: 'hi' }], () => {});
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      expect(body.thinking).to.be.undefined;
+    });
+  });
+
+  // --- LM Studio model filtering ---
+
+  describe('LM Studio model filtering — getAvailableModels', () => {
+    it('excludes embedding models (type=embeddings) from the model list', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen3-14b', false);
+      fetchStub.resolves({ ok: true, json: async () => ({
+        data: [
+          { id: 'qwen3-14b', type: 'llm', state: 'loaded' },
+          { id: 'nomic-embed-text', type: 'embeddings', state: 'loaded' },
+        ]
+      }) } as any);
+      const models = await client.getAvailableModels();
+      expect(models).to.include('qwen3-14b');
+      expect(models).to.not.include('nomic-embed-text');
+    });
+
+    it('excludes not-loaded models (state=not-loaded) from the model list', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'qwen3-14b', false);
+      fetchStub.resolves({ ok: true, json: async () => ({
+        data: [
+          { id: 'qwen3-14b', type: 'llm', state: 'loaded' },
+          { id: 'deepseek-r1-7b', type: 'llm', state: 'not-loaded' },
+        ]
+      }) } as any);
+      const models = await client.getAvailableModels();
+      expect(models).to.include('qwen3-14b');
+      expect(models).to.not.include('deepseek-r1-7b');
+    });
+
+    it('excludes both embedding and not-loaded models together', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'phi-4', false);
+      fetchStub.resolves({ ok: true, json: async () => ({
+        data: [
+          { id: 'phi-4', type: 'llm', state: 'loaded' },
+          { id: 'embed-model', type: 'embeddings', state: 'loaded' },
+          { id: 'unloaded-llm', type: 'llm', state: 'not-loaded' },
+        ]
+      }) } as any);
+      const models = await client.getAvailableModels();
+      expect(models).to.deep.equal(['phi-4']);
+    });
+
+    it('falls through to /v1/models when all v0 models are filtered out', async () => {
+      const client = new LocalLLMClient('http://localhost:1234', 'phi-4', false);
+      fetchStub
+        .onFirstCall().resolves({ ok: true, json: async () => ({
+          data: [{ id: 'embed-only', type: 'embeddings', state: 'loaded' }]
+        }) } as any)
+        .onSecondCall().resolves({ ok: true, json: async () => ({
+          data: [{ id: 'phi-4' }, { id: 'llama3' }]
+        }) } as any);
+      const models = await client.getAvailableModels();
+      expect(models).to.include('phi-4');
+      expect(models).to.include('llama3');
     });
   });
 
@@ -1178,112 +1430,151 @@ describe('fetchContextLength', () => {
     expect(await fetchContextLength('http://localhost:11434', 'llama3')).to.equal(8192);
   });
 
-  // --- /api/v1/models/{model} (LM Studio native — step 2) ---
+  // --- /api/ps (Ollama runtime; preferred over /api/show's static max) ---
+
+  it('prefers /api/ps runtime context over /api/show static max when model is loaded', async () => {
+    fetchStub.onFirstCall().resolves(showOk({ models: [{ name: 'gemma4:latest', context_length: 8192 }] })); // api/ps
+    fetchStub.onSecondCall().resolves(showOk({ model_info: { 'gemma4.context_length': 131072 } }));          // api/show (should not be used)
+    expect(await fetchContextLength('http://localhost:11434', 'gemma4:latest')).to.equal(8192);
+  });
+
+  it('matches /api/ps entry by "model" field as well as "name"', async () => {
+    fetchStub.onFirstCall().resolves(showOk({ models: [{ model: 'gemma4:latest', context_length: 8192 }] }));
+    fetchStub.onSecondCall().resolves(showOk({ model_info: { 'gemma4.context_length': 131072 } }));
+    expect(await fetchContextLength('http://localhost:11434', 'gemma4:latest')).to.equal(8192);
+  });
+
+  it('falls back to /api/show static max when the model is not currently loaded', async () => {
+    fetchStub.onFirstCall().resolves(showOk({ models: [] }));                                                // api/ps: nothing loaded
+    fetchStub.onSecondCall().resolves(showOk({ model_info: { 'gemma4.context_length': 131072 } }));           // api/show
+    expect(await fetchContextLength('http://localhost:11434', 'gemma4:latest')).to.equal(131072);
+  });
+
+  it('falls back to /api/show when /api/ps is unreachable', async () => {
+    fetchStub.onFirstCall().rejects(new Error('ECONNREFUSED'));                                               // api/ps
+    fetchStub.onSecondCall().resolves(showOk({ model_info: { 'gemma4.context_length': 131072 } }));           // api/show
+    expect(await fetchContextLength('http://localhost:11434', 'gemma4:latest')).to.equal(131072);
+  });
+
+  // --- /api/v1/models/{model} (LM Studio native; step 2) ---
 
   it('reads loaded_instances context_length from LM Studio native /api/v1/models list', async () => {
-    fetchStub.onFirstCall().resolves(notOk());  // api/show
-    fetchStub.onSecondCall().resolves(showOk({
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(showOk({
       models: [{ key: 'llava-v1.6', loaded_instances: [{ config: { context_length: 65536 } }], max_context_length: 131072 }]
     }));
     expect(await fetchContextLength('http://localhost:1234', 'llava-v1.6')).to.equal(65536);
   });
 
   it('reads max_context_length from LM Studio native list when no loaded instances', async () => {
-    fetchStub.onFirstCall().resolves(notOk());  // api/show
-    fetchStub.onSecondCall().resolves(showOk({
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(showOk({
       models: [{ key: 'gemma3', loaded_instances: [], max_context_length: 131072 }]
     }));
     expect(await fetchContextLength('http://localhost:1234', 'gemma3')).to.equal(131072);
   });
 
   it('matches namespaced model (google/gemma-4-e4b) via key field in LM Studio native list', async () => {
-    fetchStub.onFirstCall().resolves(notOk());  // api/show
-    fetchStub.onSecondCall().resolves(showOk({
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(showOk({
       models: [{ key: 'google/gemma-4-e4b', loaded_instances: [{ config: { context_length: 4096 } }], max_context_length: 131072 }]
     }));
     expect(await fetchContextLength('http://localhost:1234', 'google/gemma-4-e4b')).to.equal(4096);
   });
 
-  // --- /v1/models fallback (LM Studio, OpenAI-compatible — step 3) ---
+  // --- /v1/models fallback (LM Studio, OpenAI-compatible; step 3) ---
 
   it('reads max_context_length from /v1/models when /api/show returns no usable data (LM Studio)', async () => {
-    fetchStub.onFirstCall().resolves(showOk({ error: 'Unexpected endpoint' })); // api/show — LM Studio 200 error
-    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
-    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'gemma-4-26b-a4b-it', max_context_length: 131072 }] }));
+    fetchStub.onFirstCall().resolves(notOk());                                    // api/ps
+    fetchStub.onSecondCall().resolves(showOk({ error: 'Unexpected endpoint' }));  // api/show: LM Studio 200 error
+    fetchStub.onThirdCall().resolves(notOk());                                    // lmstudio-native
+    fetchStub.onCall(3).resolves(showOk({ data: [{ id: 'gemma-4-26b-a4b-it', max_context_length: 131072 }] }));
     expect(await fetchContextLength('http://localhost:1234', 'gemma-4-26b-a4b-it')).to.equal(131072);
   });
 
   it('reads context_length from /v1/models when /api/show returns no usable data', async () => {
-    fetchStub.onFirstCall().resolves(notOk());
-    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
-    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'my-model', context_length: 32768 }] }));
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onCall(3).resolves(showOk({ data: [{ id: 'my-model', context_length: 32768 }] }));
     expect(await fetchContextLength('http://localhost:1234', 'my-model')).to.equal(32768);
   });
 
   it('matches model by short name in /v1/models when full id is namespaced', async () => {
-    fetchStub.onFirstCall().resolves(notOk());
-    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
-    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'lmstudio/gemma-4-26b-a4b-it', max_context_length: 8192 }] }));
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onCall(3).resolves(showOk({ data: [{ id: 'lmstudio/gemma-4-26b-a4b-it', max_context_length: 8192 }] }));
     expect(await fetchContextLength('http://localhost:1234', 'gemma-4-26b-a4b-it')).to.equal(8192);
   });
 
   it('skips /v1/models entry when model id does not match', async () => {
-    fetchStub.onFirstCall().resolves(notOk());
-    fetchStub.onSecondCall().resolves(notOk());                                  // lmstudio-native
-    fetchStub.onThirdCall().resolves(showOk({ data: [{ id: 'other-model', max_context_length: 4096 }] }));
-    fetchStub.onCall(3).resolves(notOk());                                       // props
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onCall(3).resolves(showOk({ data: [{ id: 'other-model', max_context_length: 4096 }] }));
+    fetchStub.onCall(4).resolves(notOk());                              // props
     expect(await fetchContextLength('http://localhost:1234', 'my-model')).to.be.null;
   });
 
-  // --- /props fallback (llama.cpp server / llamafile — step 4) ---
+  // --- /props fallback (llama.cpp server / llamafile; step 4) ---
 
   it('falls back to /props when all earlier probes return no usable data', async () => {
-    fetchStub.onFirstCall().resolves(notOk());                           // api/show
-    fetchStub.onSecondCall().resolves(notOk());                          // lmstudio-native
-    fetchStub.onThirdCall().resolves(notOk());                           // v1/models
-    fetchStub.onCall(3).resolves(showOk({ default_generation_settings: { n_ctx: 4096 } }));
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onCall(3).resolves(notOk());                              // v1/models
+    fetchStub.onCall(4).resolves(showOk({ default_generation_settings: { n_ctx: 4096 } }));
     expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(4096);
   });
 
   it('falls back to /props when /api/show throws', async () => {
-    fetchStub.onFirstCall().rejects(new Error('ECONNREFUSED'));
-    fetchStub.onSecondCall().resolves(notOk());                          // lmstudio-native
-    fetchStub.onThirdCall().resolves(notOk());                           // v1/models
-    fetchStub.onCall(3).resolves(showOk({ default_generation_settings: { n_ctx: 16384 } }));
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().rejects(new Error('ECONNREFUSED'));        // api/show
+    fetchStub.onThirdCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onCall(3).resolves(notOk());                              // v1/models
+    fetchStub.onCall(4).resolves(showOk({ default_generation_settings: { n_ctx: 16384 } }));
     expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(16384);
   });
 
   it('reads top-level n_ctx from /props', async () => {
-    fetchStub.onFirstCall().resolves(notOk());
-    fetchStub.onSecondCall().resolves(notOk());                          // lmstudio-native
-    fetchStub.onThirdCall().resolves(notOk());                           // v1/models
-    fetchStub.onCall(3).resolves(showOk({ n_ctx: 2048 }));
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(notOk());                          // lmstudio-native
+    fetchStub.onCall(3).resolves(notOk());                              // v1/models
+    fetchStub.onCall(4).resolves(showOk({ n_ctx: 2048 }));
     expect(await fetchContextLength('http://localhost:8080', 'model')).to.equal(2048);
   });
 
   // --- endpoint caching ---
 
   it('caches working endpoint and skips probes on second call', async () => {
-    // First call: api/show fails, lmstudio-native succeeds → cache 'lmstudio-native'
+    // First call: api/ps empty, api/show fails, lmstudio-native succeeds -> cache 'lmstudio-native'
     const nativeResp = showOk({ models: [{ key: 'model', loaded_instances: [{ config: { context_length: 65536 } }] }] });
-    fetchStub.onFirstCall().resolves(notOk());
-    fetchStub.onSecondCall().resolves(nativeResp);
+    fetchStub.onFirstCall().resolves(notOk());                          // api/ps
+    fetchStub.onSecondCall().resolves(notOk());                         // api/show
+    fetchStub.onThirdCall().resolves(nativeResp);
     const first = await fetchContextLength('http://localhost:1234', 'model');
     expect(first).to.equal(65536);
-    expect(fetchStub.callCount).to.equal(2);
-    // Second call: cached → goes directly to lmstudio-native (1 fetch only, not 2)
-    fetchStub.onThirdCall().resolves(nativeResp);
+    expect(fetchStub.callCount).to.equal(3);
+    // Second call: cached -> goes directly to lmstudio-native (1 fetch only, not 3)
+    fetchStub.onCall(3).resolves(nativeResp);
     const second = await fetchContextLength('http://localhost:1234', 'model');
     expect(second).to.equal(65536);
-    expect(fetchStub.callCount).to.equal(3); // 2 probes first call + 1 cached second call
+    expect(fetchStub.callCount).to.equal(4); // 3 probes first call + 1 cached second call
   });
 
   it('separate server URLs maintain independent cache entries', async () => {
-    // Ollama at :11434 — api/show works
-    fetchStub.onFirstCall().resolves(showOk({ model_info: { 'llama.context_length': 4096 } }));
-    // LM Studio at :1234 — api/show returns 200+error, native list endpoint works
-    fetchStub.onSecondCall().resolves(showOk({ error: 'Unexpected endpoint' }));
-    fetchStub.onThirdCall().resolves(showOk({ models: [{ key: 'model', loaded_instances: [{ config: { context_length: 16384 } }] }] }));
+    // Ollama at :11434: api/ps empty, api/show works
+    fetchStub.onFirstCall().resolves(notOk());                                                    // api/ps
+    fetchStub.onSecondCall().resolves(showOk({ model_info: { 'llama.context_length': 4096 } }));   // api/show
+    // LM Studio at :1234: api/ps N/A, api/show returns 200+error, native list endpoint works
+    fetchStub.onThirdCall().resolves(notOk());                                                     // api/ps
+    fetchStub.onCall(3).resolves(showOk({ error: 'Unexpected endpoint' }));                        // api/show
+    fetchStub.onCall(4).resolves(showOk({ models: [{ key: 'model', loaded_instances: [{ config: { context_length: 16384 } }] }] }));
     const r1 = await fetchContextLength('http://localhost:11434', 'llama3');
     const r2 = await fetchContextLength('http://localhost:1234', 'model');
     expect(r1).to.equal(4096);

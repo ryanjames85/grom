@@ -1,7 +1,7 @@
 /**
  * logger.ts
  *
- * Writes timestamped lines to the "Grom" VS Code Output channel when
+ * Logs timestamped lines to the "Grom" VS Code Output channel when
  * grom.debugLogging is enabled. All calls are no-ops when the setting is off.
  * The channel is created lazily on first use and reused thereafter.
  */

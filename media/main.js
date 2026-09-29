@@ -2,7 +2,7 @@
  * main.js
  *
  * Webview front-end for the Grom chat panel. Runs inside VS Code's sandboxed webview
- * context — no Node.js, no bundler, plain browser JavaScript.
+ * context: no Node.js, no bundler, plain browser JavaScript.
  *
  * Responsibilities:
  *   - Renders chat messages, session list, task log, and approval cards
@@ -12,7 +12,7 @@
  *   - Posts user actions (send, abort, session switch, provider change, etc.) to the extension host
  *   - Receives messages from the extension host and updates the UI accordingly
  *
- * NOTE: This file is hand-written with no build step. Keep it dependency-free —
+ * NOTE: This file is hand-written with no build step. Keep it dependency-free:
  * only marked.js and highlight.js (copied to media/ at build time) are loaded externally.
  */
 
@@ -25,7 +25,7 @@ let currentAiDiv = null, currentAiText = "", pendingImages = [], currentMode = '
 let _requestId = 0; // incremented on each send; used to discard stale Ready/chunk messages
 let _cancelActiveRename = null; // call this before any session list re-render
 let _elapsedTimer = null, _elapsedStart = 0;
-let _voiceState = 'idle'; // idle | recording | transcribing — visual state only, audio runs in extension host
+let _voiceState = 'idle'; // idle | recording | transcribing: visual state only, audio runs in extension host
 let _voiceInputEnabled = true;
 let _isPopout = false;
 function _startElapsedTimer(dotsEl) {
@@ -156,6 +156,49 @@ function _setAgentEnabled(enabled) {
 window.toggleAgent = () => {
     _setAgentEnabled(!_agentEnabled);
     vscode.postMessage({ type: 'toggleAgent', enabled: _agentEnabled });
+};
+
+let _reasoningEffort = 'off';
+let _showThinking = true;
+let _showReasoningToggle = true;
+let _modelSupportsReasoning = false;
+let _reasoningControl = 'hint'; // 'api' | 'token' | 'hint' | 'none'
+function _effortLevels() {
+    // API models (Anthropic, o-series, Gemini 2.5+) have genuine granularity, keep all four.
+    // Other controllable models (Qwen3 hard tokens) only have a meaningful on/off distinction.
+    // Hint-only models get no icon at all (see _updateEffortVisibility).
+    return _reasoningControl === 'api' ? ['off', 'low', 'medium', 'high'] : ['off', 'high'];
+}
+function _setReasoningEffort(effort) {
+    _reasoningEffort = effort;
+    const btn = document.getElementById('effort-btn');
+    if (!btn) return;
+    btn.dataset.effort = effort;
+    const titles = _reasoningControl === 'api'
+        ? {
+            off:    'Reasoning effort: Off — model answers directly',
+            low:    'Reasoning effort: Low — brief reasoning',
+            medium: 'Reasoning effort: Medium — balanced thinking',
+            high:   'Reasoning effort: High — full extended reasoning'
+          }
+        : {
+            off:  'Reasoning effort: Off — thinking suppressed',
+            high: 'Reasoning effort: High — extended thinking enabled'
+          };
+    btn.title = titles[effort] || 'Reasoning effort';
+}
+function _updateEffortVisibility() {
+    const btn = document.getElementById('effort-btn');
+    if (!btn) return;
+    const hasControl = _reasoningControl === 'api' || _reasoningControl === 'token';
+    btn.style.display = (_showReasoningToggle && hasControl) ? '' : 'none';
+}
+window.cycleReasoningEffort = () => {
+    const levels = _effortLevels();
+    const idx = levels.indexOf(_reasoningEffort);
+    const next = levels[(idx === -1 ? 0 : idx + 1) % levels.length];
+    _setReasoningEffort(next);
+    vscode.postMessage({ type: 'setReasoningEffort', effort: next });
 };
 
 window.toggleHistory = () => { const overlay = document.getElementById('history-overlay'); overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex'; };
@@ -459,6 +502,8 @@ window.doneMemory = () => {
   document.getElementById('memory-overlay').style.display = 'none';
 };
 window.cancelMemory = () => {
+  clearTimeout(_memorySaveTimer);
+  _memorySaveTimer = null;
   document.getElementById('memory-editor').value = _memoryOriginal;
   vscode.postMessage({ type: 'saveMemory', memory: _memoryOriginal });
   document.getElementById('memory-overlay').style.display = 'none';
@@ -525,9 +570,10 @@ window.startEditingTitle = () => {
 
 window.copyMsg = (btn) => {
     const msgBody = btn.closest('.msg').querySelector('.msg-body');
-    navigator.clipboard.writeText(msgBody.innerText);
-    const original = btn.innerHTML; btn.innerHTML = '<span>✓ Copied</span>';
-    setTimeout(() => btn.innerHTML = original, 2000);
+    const original = btn.innerHTML;
+    navigator.clipboard.writeText(msgBody.innerText)
+      .then(() => { btn.innerHTML = '<span>✓ Copied</span>'; setTimeout(() => btn.innerHTML = original, 2000); })
+      .catch(() => { btn.innerHTML = '<span>✕ Failed</span>'; setTimeout(() => btn.innerHTML = original, 2000); });
 };
 
 function renderMsg(role, content, images = []) {
@@ -555,12 +601,165 @@ function renderMsg(role, content, images = []) {
   document.getElementById('empty-state').style.display = 'none'; document.getElementById('mini-grom')?.classList.add('visible'); return div;
 }
 
+/** The messages compaction trims away are still archived on disk (never sent to the model, so
+ *  it costs disk space only, not tokens); clicking this divider fetches them back and inserts
+ *  them in place, right where the divider was. */
+function _makeCompactNotice(sessionId, compactedAt) {
+  const notice = document.createElement('div');
+  notice.className = 'compact-notice clickable';
+  notice.dataset.sessionId = sessionId || '';
+  if (compactedAt) notice.dataset.compactedAt = compactedAt;
+  notice.title = 'Click to view the messages that were compacted';
+  const when = compactedAt ? ` · ${_relativeTime(compactedAt)}` : '';
+  notice.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8M9 9l-6-6m6 6V4.2M9 9H4.2"/></svg><span class="compact-notice-label">conversation compacted${when}</span>`;
+  notice.onclick = () => {
+    if (notice.dataset.loading === '1' || notice.dataset.expanded === '1') return;
+    notice.dataset.loading = '1';
+    notice.classList.remove('clickable');
+    notice.querySelector('.compact-notice-label').textContent = 'loading earlier messages…';
+    vscode.postMessage({ type: 'expandCompactedHistory', sessionId: notice.dataset.sessionId });
+  };
+  return notice;
+}
+
+/** Strips <think>...</think> content, closed or still-open, leaving just the real answer text. */
+function stripThinkTags(text) {
+  return text.replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
+}
+
+/** The visible "Hide block" / "Show block" label is just the expand/collapse toggle — plain text
+ *  inside <summary>, no handler needed, it rides along with the native details click same as the
+ *  arrow does. Turning thinking off entirely is a separate, deliberately less-visible action
+ *  (window.disableThinking below): global and persisted, so it needs a confirmation first. */
+
+/** Turns off thinking display everywhere (grom.showThinking), not just this one message. Only
+ *  reachable via the small "Disable" control that appears on hover, and confirmed first since
+ *  it's a global, easy-to-forget-you-changed-it setting. */
+// VS Code webviews block window.confirm()/alert()/prompt() silently — there is no option to
+// allow them, so a native dialog here would just do nothing when clicked. Confirming inline
+// (click once to arm, click again to commit) needs no special permission.
+window.disableThinking = (btn) => {
+  if (btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Click to confirm';
+    btn.title = 'Click again to turn off thinking display in every chat (re-enable later in Settings under Grom › Show Thinking)';
+    clearTimeout(btn._confirmTimer);
+    btn._confirmTimer = setTimeout(() => {
+      btn.dataset.confirming = '0';
+      btn.textContent = 'Disable';
+      btn.title = 'Turn off thinking display in every chat (re-enable later in Settings under Grom › Show Thinking)';
+    }, 4000);
+    return;
+  }
+  clearTimeout(btn._confirmTimer);
+  _showThinking = false;
+  vscode.postMessage({ type: 'setShowThinking', value: false });
+  const details = btn.closest('details.think');
+  if (details) details.remove();
+};
+
+/** Remembers whether the user manually expanded a still-streaming thinking block, so the next
+ *  chunk's re-render doesn't silently collapse it back on them. */
+window.onThinkToggle = (details) => {
+  const body = details.closest('.msg-body');
+  if (body) body.dataset.thinkOpen = details.open ? '1' : '0';
+};
+
+/** Builds the thinking block's DOM ONCE and updates it in place on every later chunk, rather than
+ *  tearing the whole subtree down and rebuilding it each time. Rebuilding on every chunk (the
+ *  previous approach) destroyed and recreated the Disable button constantly while streaming,
+ *  which made :hover flicker on and off, and it reset .think-body's scroll position on every
+ *  render, fighting anyone trying to scroll up to read earlier text. */
+function _renderThinkBlock(content, container, think) {
+  const tail = think.slice(-240);
+  let details = content.querySelector(':scope > details.think');
+  if (!details) {
+    const openAttr = container.dataset.thinkOpen === '1' ? ' open' : '';
+    content.innerHTML =
+      '<details class="think"' + openAttr + ' ontoggle="window.onThinkToggle(this)">' +
+        '<summary>' +
+          '<div class="think-preview"><div class="think-preview-inner"></div></div>' +
+          '<span class="think-expand-arrow">▸</span>' +
+          '<span class="think-toggle-label"></span>' +
+          '<button class="think-disable-btn" title="Turn off thinking display in every chat (re-enable later in Settings under Grom &gt; Show Thinking)" onclick="event.preventDefault(); event.stopPropagation(); window.disableThinking(this)">Disable</button>' +
+        '</summary>' +
+        '<div class="think-body-wrap">' +
+          '<div class="think-body"></div>' +
+          '<button class="think-scroll-btn" title="Jump to latest" onclick="window.jumpThinkToBottom(this)">↓</button>' +
+        '</div>' +
+      '</details>';
+    details = content.querySelector(':scope > details.think');
+    // Same "don't fight a manual scroll" pattern the main chat window already uses (_userScrolledUp
+    // + #scroll-to-bottom), scoped to this one box.
+    const box = details.querySelector('.think-body');
+    box._userScrolledUp = false;
+    box.addEventListener('scroll', () => {
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+      box._userScrolledUp = !atBottom;
+      const btn = details.querySelector('.think-scroll-btn');
+      if (btn) btn.style.display = box._userScrolledUp ? 'flex' : 'none';
+    });
+  }
+  details.querySelector('.think-preview-inner').textContent = tail;
+  details.querySelector('.think-toggle-label').textContent = details.open ? 'Hide block' : 'Show block';
+  const box = details.querySelector('.think-body');
+  box.innerHTML = marked.parse(think);
+  // The box has a fixed max-height with internal scrolling (it must not grow the page as the
+  // thought gets longer). Only follow the newest text automatically while the user hasn't
+  // scrolled away from the bottom themselves.
+  if (details.open && !box._userScrolledUp) box.scrollTop = box.scrollHeight;
+}
+
+window.jumpThinkToBottom = (btn) => {
+  const box = btn.closest('.think-body-wrap').querySelector('.think-body');
+  box._userScrolledUp = false;
+  btn.style.display = 'none';
+  box.scrollTop = box.scrollHeight;
+};
+
 function updateAiDisplay(container, text) {
+  // .ai-content is the sub-element updateAiDisplay owns and freely rewrites. The loading dots
+  // (when present, i.e. during live streaming) are a SIBLING outside its control, so re-rendering
+  // content on every chunk never tears down and restarts the dots' running elapsed-time counter.
+  const content = container.querySelector(':scope > .ai-content') || container;
+  const dots = container.querySelector(':scope > .thinking-dots');
+
+  // An abort mid-thought cuts the model off before </think> ever arrives, so the "*Cancelled.*"
+  // marker agent-loop.ts appends would otherwise get swallowed into the think-block parsing below
+  // (no closing tag means it reads as more thinking content, not a real answer). Show it plainly
+  // instead, same as a cancelled response has always looked when there was no thinking to tangle
+  // it with — there is nothing useful left to expand in a cut-off thought anyway.
+  if (/\*Cancelled\.\*/.test(text)) {
+    content.innerHTML = marked.parse('*Cancelled.*');
+    if (dots) dots.style.display = 'none';
+    _stopElapsedTimer();
+    return;
+  }
+
+  const stillWorking = !stripThinkTags(text);
+
   if (text.includes('<think>')) {
-      const parts = text.split(/<\/think>/), think = parts[0].replace('<think>', '').trim(), main = parts[1] || "";
-      container.innerHTML = '<div class="think">' + (think ? marked.parse(think) : '') + '</div>' + marked.parse(main);
-  } else { container.innerHTML = marked.parse(text); }
-  container.querySelectorAll('pre').forEach(pre => {
+      const parts = text.split(/<\/think>/);
+      const think = parts[0].replace('<think>', '').trim();
+      const main = (parts[1] || '').trim();
+      if (!_showThinking) {
+        content.innerHTML = main ? marked.parse(main) : '';
+      } else if (think) {
+        _renderThinkBlock(content, container, think);
+        let mainEl = content.querySelector(':scope > .think-main');
+        if (!mainEl) { mainEl = document.createElement('div'); mainEl.className = 'think-main'; content.appendChild(mainEl); }
+        mainEl.innerHTML = main ? marked.parse(main) : '';
+      } else {
+        content.innerHTML = marked.parse(main);
+      }
+  } else { content.innerHTML = marked.parse(text); }
+
+  // Dots stay visible (with their own running elapsed counter) for as long as there's no real
+  // reply yet, whether that's because the model is still thinking or thinking is hidden/off.
+  if (dots) { dots.style.display = stillWorking ? '' : 'none'; }
+  if (!stillWorking) _stopElapsedTimer();
+
+  content.querySelectorAll('pre').forEach(pre => {
       const code = pre.querySelector('code').innerText, header = document.createElement('div'); header.className = 'code-header';
       // Detect if the preceding sibling heading looks like a file path (### path/to/file.ext)
       // Only show write-oriented buttons (Diff/Apply/Accept/Reject) for those blocks
@@ -577,7 +776,7 @@ function updateAiDisplay(container, text) {
       const runBtn = document.createElement('button'); runBtn.className = 'code-btn'; runBtn.textContent = 'Run';
       runBtn.onclick = () => vscode.postMessage({ type: 'runInTerminal', code }); header.appendChild(runBtn);
       const copyBtn = document.createElement('button'); copyBtn.className = 'code-btn'; copyBtn.textContent = 'Copy';
-      copyBtn.onclick = () => { navigator.clipboard.writeText(code); copyBtn.textContent = '✓'; setTimeout(() => copyBtn.textContent = 'Copy', 1500); }; header.appendChild(copyBtn);
+      copyBtn.onclick = () => { navigator.clipboard.writeText(code).then(() => { copyBtn.textContent = '✓'; }).catch(() => { copyBtn.textContent = '✕'; }); setTimeout(() => copyBtn.textContent = 'Copy', 1500); }; header.appendChild(copyBtn);
       if (isFileSuggestion) {
         const acceptBtn = document.createElement('button'); acceptBtn.className = 'code-btn code-btn-accept'; acceptBtn.textContent = '✓ Accept';
         acceptBtn.onclick = () => { vscode.postMessage({ type: 'acceptDiff', code }); acceptBtn.textContent = '✓ Applied'; acceptBtn.disabled = true; };
@@ -587,7 +786,7 @@ function updateAiDisplay(container, text) {
       }
       pre.prepend(header); hljs.highlightElement(pre.querySelector('code'));
   });
-  // Detect ### path/to/file.ext headings — add a "Save as file" button to the following code block
+  // Detect ### path/to/file.ext headings; add a "Save as file" button to the following code block
   container.querySelectorAll('h3, h4').forEach(heading => {
     const filePath = heading.textContent.trim();
     if (!/[\w\-][\w\-\/]*\.\w{1,8}$/.test(filePath)) return;
@@ -622,13 +821,14 @@ sendBtn.onclick = () => {
   // Intercept /compact before sending to the model
   if (val.toLowerCase() === '/compact') { prompt.value = ''; window.compactSession(); return; }
   if (val.toLowerCase() === '/clear-history') { prompt.value = ''; _inputHistory = []; _historyIdx = -1; vscode.postMessage({ type: 'clearPromptHistory' }); const note = renderMsg('ai', '*Prompt history cleared.*'); return; }
+  if (val.toLowerCase() === '/reindex') { prompt.value = ''; vscode.postMessage({ type: 'reindexWorkspace' }); const note = renderMsg('ai', '*Reindexing workspace…*'); return; }
   renderMsg('user', val, [...pendingImages]);
   let fullText = val; if (uploadedContext.length > 0) { fullText += "\n\nADDITIONAL UPLOADED CONTEXT:\n" + uploadedContext.map(u => `[File: ${u.name}]\n${u.content}`).join('\n\n'); }
   vscode.postMessage({ type: 'send', text: fullText, images: [...pendingImages], mode: currentMode });
   if (val && (_inputHistory.length === 0 || _inputHistory[_inputHistory.length - 1] !== val)) { _inputHistory.push(val); if (_inputHistory.length > 50) _inputHistory.shift(); }
   _historyIdx = -1;
   prompt.value = ''; currentAiText = ""; currentAiDiv = renderMsg('ai', '');
-  currentAiDiv.querySelector('.msg-body').innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span><span class="elapsed-time"></span></div>';
+  currentAiDiv.querySelector('.msg-body').innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span><span class="elapsed-time"></span></div><div class="ai-content"></div>';
   _startElapsedTimer(currentAiDiv.querySelector('.thinking-dots'));
   _requestId++;
   const _thisRequestId = _requestId;
@@ -885,7 +1085,7 @@ function _setVoiceDownload(text) {
   else { row.style.display = 'none'; }
 }
 
-// ── Whisper inference — runs in a Web Worker to keep the UI thread free ───────
+// ── Whisper inference: runs in a Web Worker to keep the UI thread free ───────
 let _vpWorker = null, _vpAllPcm = null, _vpBusy = false, _vpPendingFinal = false, _vpTranscribedText = '';
 let _vpWarming = false; // suppresses worker progress messages during silent startup pre-load
 
@@ -907,7 +1107,7 @@ function _vpMaybeWarmUp() {
 }
 let _vpModelId = 'tiny.en';   // active/default model used for transcription
 let _vpSelectedId = 'tiny.en'; // currently highlighted in the picker UI
-let _vpEnergyGate = 0.010;    // RMS threshold — audio below this is treated as silence
+let _vpEnergyGate = 0.010;    // RMS threshold: audio below this is treated as silence
 
 function _vpGetDownloaded() {
   try { return JSON.parse(localStorage.getItem('grom_downloaded_models') || '[]'); } catch { return []; }
@@ -963,7 +1163,7 @@ function _vpUpdateModelUI() {
     else desc.textContent = selLabel + ' · ' + selInfo.note + ' · not downloaded';
   }
 
-  // Download button — for selected model if not downloaded
+  // Download button: for selected model if not downloaded
   const dlBtn = document.getElementById('voice-model-download-btn');
   if (dlBtn) {
     dlBtn.style.display = selDownloaded ? 'none' : '';
@@ -971,7 +1171,7 @@ function _vpUpdateModelUI() {
     dlBtn.disabled = false;
   }
 
-  // "Set as default" button — shown when selected is downloaded but not the default
+  // "Set as default" button: shown when selected is downloaded but not the default
   const defBtn = document.getElementById('voice-set-default-btn');
   if (defBtn) {
     defBtn.style.display = (selDownloaded && !isAlreadyDefault) ? '' : 'none';
@@ -983,7 +1183,7 @@ let _vpWorkerPromise = null;
 
 function _vpMakeWorker() {
   // Inline the worker code to avoid vscode-resource origin issues entirely.
-  // Classic worker (no type:module) — dynamic import() is sufficient.
+  // Classic worker (no type:module), dynamic import() is sufficient.
   const src = `
 const MODEL_INFO = {
   'tiny':     'Xenova/whisper-tiny',
@@ -1111,7 +1311,7 @@ function _vpOnWorkerMessage(e) {
   }
 }
 
-// Highlight a model in the picker — does not change the active model
+// Highlight a model in the picker; does not change the active model
 window.selectVoiceModel = function(id) {
   _vpSelectedId = id;
   _vpUpdateModelUI();
@@ -1144,9 +1344,9 @@ window.downloadVoiceModel = async function() {
   }
 };
 
-// Whisper's context window is 30s — beyond this it loops. Cap hard at 28s to be safe.
+// Whisper's context window is 30s; beyond this it loops. Cap hard at 28s to be safe.
 const _VP_MAX_SAMPLES = 16000 * 28;
-// Silence prepended to each utterance — Whisper often drops the first word without it.
+// Silence prepended to each utterance; Whisper often drops the first word without it.
 const _VP_PAD = 16000 * 0.3 | 0;
 
 function _vpRms(samples) {
@@ -1195,12 +1395,12 @@ async function _vpTranscribe(isFinal) {
 function _vpAppendPcm(base64, isFinal) {
   const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
   if (bytes.length === 0) {
-    // Empty final — all audio already sent as chunks; just transcribe what we have
+    // Empty final: all audio already sent as chunks; just transcribe what we have
     _vpTranscribe(true);
     return;
   }
   const chunk = new Float32Array(bytes.buffer);
-  // Accumulate all chunks — only transcribe on final (push-to-talk)
+  // Accumulate all chunks: only transcribe on final (push-to-talk)
   if (_vpAllPcm) {
     const merged = new Float32Array(_vpAllPcm.length + chunk.length);
     merged.set(_vpAllPcm);
@@ -1337,11 +1537,43 @@ window.addEventListener('message', e => {
     }
     case 'compacting':
     case 'compacted': {
-      const notice = document.createElement('div');
-      notice.className = 'compact-notice';
-      notice.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8M9 9l-6-6m6 6V4.2M9 9H4.2"/></svg>conversation compacted`;
-      chatContainer.appendChild(notice);
+      // A single compaction fires BOTH events (start, then finish), and both reach this handler —
+      // without this, one compact action left two stacked notices behind. Only one marker ever
+      // survives in the saved history at a time, so the live chat should only ever show one too.
+      chatContainer.querySelectorAll(`.compact-notice[data-session-id="${_currentSessionId || ''}"]`).forEach(n => n.remove());
+      chatContainer.appendChild(_makeCompactNotice(_currentSessionId, m.compactedAt));
       chatContainer.scrollTop = chatContainer.scrollHeight;
+      break;
+    }
+    case 'archivedHistory': {
+      const notice = chatContainer.querySelector(`.compact-notice[data-session-id="${m.sessionId || ''}"]`);
+      if (!notice) break;
+      if (!m.messages || m.messages.length === 0) {
+        notice.querySelector('.compact-notice-label').textContent = 'no earlier messages were saved for this compaction';
+        notice.onclick = null;
+        break;
+      }
+      let firstDiv = null;
+      m.messages.forEach(msg => {
+        // renderMsg() itself always scrolls to the bottom as a side effect of appending — that
+        // is undone below, after every message has been inserted in its real position.
+        const div = renderMsg(msg.role === 'user' ? 'user' : 'ai', msg.content, msg.images || []);
+        chatContainer.insertBefore(div, notice);
+        if (!firstDiv) firstDiv = div;
+      });
+      // The marker stays — it is the record that a compaction happened here, not just a
+      // "click to load" prompt. Relabel it instead of removing it, and stop it responding to
+      // further clicks now that its content is already showing.
+      notice.dataset.expanded = '1';
+      notice.dataset.loading = '0';
+      notice.onclick = null;
+      const when = notice.dataset.compactedAt ? ` · ${_relativeTime(Number(notice.dataset.compactedAt))}` : '';
+      notice.querySelector('.compact-notice-label').textContent = `conversation compacted${when} (expanded above)`;
+      // Show what was just revealed, not the bottom of the chat — clicking this was to read it,
+      // not to be scrolled past it to the newest reply the user has already seen. Set scrollTop
+      // directly (matching every other scroll in this file) rather than scrollIntoView, which is
+      // less predictable immediately after a batch of DOM insertions.
+      if (firstDiv) chatContainer.scrollTop = Math.max(0, firstDiv.offsetTop - 12);
       break;
     }
     case 'loadSessions':
@@ -1352,7 +1584,16 @@ window.addEventListener('message', e => {
       _setMemoryDot(m.hasMemory);
       _setSysPromptDot(m.hasSystemPrompt);
       _setAgentEnabled(m.agentEnabled ?? false);
-      if (m.promptHistory?.length) { _inputHistory = m.promptHistory; _historyIdx = -1; }
+      _showThinking = m.showThinking !== false;
+      _showReasoningToggle = m.showReasoningToggle !== false;
+      _setReasoningEffort(m.reasoningEffort || 'off');
+      if (!_effortLevels().includes(_reasoningEffort)) {
+        _reasoningEffort = 'off';
+        _setReasoningEffort('off');
+        vscode.postMessage({ type: 'setReasoningEffort', effort: 'off' });
+      }
+      _updateEffortVisibility();
+      _inputHistory = m.promptHistory || []; _historyIdx = -1;
       document.body.classList.remove('font-small', 'font-medium', 'font-large');
       document.body.classList.add('font-' + (m.fontSize || 'medium'));
 
@@ -1395,7 +1636,7 @@ window.addEventListener('message', e => {
 
       // Don't reset the chat container if a request is in-flight due to a background reload
       // (reconnect, title update etc). But always reset for explicit user-initiated session
-      // switches/creates — otherwise the old chat stays visible after New Chat is clicked.
+      // switches/creates: otherwise the old chat stays visible after New Chat is clicked.
       if (currentAiDiv && !m.userInitiated) break;
       if (currentAiDiv) {
         currentAiDiv = null; currentAiText = ''; _stopElapsedTimer();
@@ -1437,14 +1678,20 @@ window.addEventListener('message', e => {
           compact.innerHTML = `<span class="menu-cmd">Compact</span> <span style="opacity:0.5; font-size:10px;">Truncate history</span>`;
           compact.title = 'Truncate conversation history to free up context window space';
           compact.dataset.cmd = 'compact';
-          compact.addEventListener('click', () => { window.compactSession(); window.toggleSlashMenu(false); });
+          compact.addEventListener('click', () => { prompt.value = ''; prompt.style.height = 'auto'; window.compactSession(); window.toggleSlashMenu(false); });
           menu.appendChild(compact);
           const clearHist = document.createElement('div'); clearHist.className = 'menu-item';
           clearHist.innerHTML = `<span class="menu-cmd">Clear-history</span> <span style="opacity:0.5; font-size:10px;">Clear prompt history</span>`;
           clearHist.title = 'Clear your prompt input history (the ↑ / ↓ cycle)';
           clearHist.dataset.cmd = 'clear-history';
-          clearHist.addEventListener('click', () => { _inputHistory = []; _historyIdx = -1; vscode.postMessage({ type: 'clearPromptHistory' }); window.toggleSlashMenu(false); renderMsg('ai', '*Prompt history cleared.*'); });
+          clearHist.addEventListener('click', () => { prompt.value = ''; prompt.style.height = 'auto'; _inputHistory = []; _historyIdx = -1; vscode.postMessage({ type: 'clearPromptHistory' }); window.toggleSlashMenu(false); renderMsg('ai', '*Prompt history cleared.*'); });
           menu.appendChild(clearHist);
+          const reindex = document.createElement('div'); reindex.className = 'menu-item';
+          reindex.innerHTML = `<span class="menu-cmd">Reindex</span> <span style="opacity:0.5; font-size:10px;">Rebuild the codebase index</span>`;
+          reindex.title = 'Force a full rebuild of the RAG codebase index (normally only needed if search results look stale)';
+          reindex.dataset.cmd = 'reindex';
+          reindex.addEventListener('click', () => { prompt.value = ''; prompt.style.height = 'auto'; vscode.postMessage({ type: 'reindexWorkspace' }); window.toggleSlashMenu(false); renderMsg('ai', '*Reindexing workspace…*'); });
+          menu.appendChild(reindex);
       }
 
       renderTaskLog(m.taskLog || []);
@@ -1455,18 +1702,25 @@ window.addEventListener('message', e => {
           document.getElementById('empty-state').style.display = 'none';
           document.getElementById('mini-grom')?.classList.add('visible');
           m.history.forEach(msg => {
-            if (msg.role === 'system' && msg.content === '__compacted__') {
-              const notice = document.createElement('div');
-              notice.className = 'compact-notice';
-              notice.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8M9 9l-6-6m6 6V4.2M9 9H4.2"/></svg>conversation compacted`;
-              chatContainer.appendChild(notice);
+            // startsWith, not ===: a marker with a summary attached is "__compacted__\n\n<summary>",
+            // which an exact-match check would silently skip rendering at all — the common case,
+            // since compaction always tries to generate a summary and only falls back to the bare
+            // marker on failure.
+            if (msg.role === 'system' && msg.content.startsWith('__compacted__')) {
+              chatContainer.appendChild(_makeCompactNotice(m.currentSessionId, msg.compactedAt));
             } else if (msg.role !== 'system') {
               renderMsg(msg.role === 'user' ? 'user' : 'ai', msg.content, msg.images);
             }
           });
       }
       break;
-    case 'chunk': if (currentAiDiv) { currentAiText += m.text; const body = currentAiDiv.querySelector('.msg-body'); const dots = body.querySelector('.thinking-dots'); if (dots) { _stopElapsedTimer(); dots.remove(); } updateAiDisplay(body, currentAiText); if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight; } break;
+    case 'chunk': if (currentAiDiv && currentAiDiv._requestId === _requestId) {
+      currentAiText += m.text;
+      // updateAiDisplay owns the loading dots' visibility itself now (see its stillWorking check),
+      // so every chunk can safely re-render through it without disturbing the dots' running timer.
+      updateAiDisplay(currentAiDiv.querySelector('.msg-body'), currentAiText);
+      if (!_userScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+    } break;
     case 'clearToolCallChunk': {
       if (currentAiDiv) {
         currentAiText = currentAiText.replace(m.raw, '').trim();
@@ -1507,7 +1761,7 @@ window.addEventListener('message', e => {
       // Ignore Ready from a previous aborted request if a new one is already in flight
       if (currentAiDiv && currentAiDiv._requestId && currentAiDiv._requestId !== _requestId) break;
       sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; document.body.classList.remove('grom-thinking'); updateGromLogo();
-      vscode.postMessage({ type: 'updateHistory', text: currentAiText });
+      vscode.postMessage({ type: 'updateHistory', text: currentAiText, sessionId: m.sessionId });
       if (currentAiDiv) {
         currentAiDiv.querySelector('.tool-call-badge')?.remove();
         const dots = currentAiDiv.querySelector('.thinking-dots');
@@ -1667,6 +1921,14 @@ window.addEventListener('message', e => {
     }
     case 'statusUpdate':
       _currentCaps = m.caps || null;
+      _modelSupportsReasoning = !!(m.caps?.reasoning);
+      _reasoningControl = m.caps?.reasoningControl || 'hint';
+      if (!_effortLevels().includes(_reasoningEffort)) {
+        _reasoningEffort = 'off';
+        vscode.postMessage({ type: 'setReasoningEffort', effort: 'off' });
+      }
+      _setReasoningEffort(_reasoningEffort);
+      _updateEffortVisibility();
       document.getElementById('conn-status').textContent = m.status;
       const dot = document.getElementById('status-dot'); dot.className = 'status-dot';
       if (m.status === 'Connected') {
@@ -1736,6 +1998,14 @@ window.addEventListener('message', e => {
       break;
     case 'capsUpdate': {
       _currentCaps = m.caps || null;
+      _modelSupportsReasoning = !!(m.caps?.reasoning);
+      _reasoningControl = m.caps?.reasoningControl || 'hint';
+      if (!_effortLevels().includes(_reasoningEffort)) {
+        _reasoningEffort = 'off';
+        vscode.postMessage({ type: 'setReasoningEffort', effort: 'off' });
+      }
+      _setReasoningEffort(_reasoningEffort);
+      _updateEffortVisibility();
       const capsBar = document.getElementById('model-caps');
       if (capsBar) {
         capsBar.innerHTML = '';
@@ -1744,6 +2014,10 @@ window.addEventListener('message', e => {
         if (m.caps?.tools) capsBar.innerHTML += `<div class="cap-icon cap-tools" title="Tool use — can call functions"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3B8FCC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></div>`;
       }
       updateCapIcons();
+      break;
+    }
+    case 'reasoningEffortChanged': {
+      _setReasoningEffort(m.effort);
       break;
     }
     case 'usageUpdate': {
@@ -1943,7 +2217,7 @@ function scheduleRetry() {
     clearTimeout(_retryTimer);
     _retryTimer = setTimeout(() => vscode.postMessage({ type: 'retryConnection' }), 5000);
 }
-// Periodic idle check — skip during generation so single-threaded servers (LM Studio) aren't polled while busy
+// Periodic idle check: skip during generation so single-threaded servers (LM Studio) aren't polled while busy
 setInterval(() => { if (!document.body.classList.contains('grom-thinking')) vscode.postMessage({ type: 'retryConnection' }); }, 60000);
 
 document.addEventListener('click', e => {

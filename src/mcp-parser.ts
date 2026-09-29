@@ -6,7 +6,7 @@
  *   1. Detecting and extracting tool call JSON from raw model output (parseToolCall)
  *   2. Building the system prompt that instructs the model how to call tools (buildToolSystemPrompt)
  *
- * Models don't always emit clean JSON — they may wrap it in markdown fences, use prose prefixes,
+ * Models don't always emit clean JSON; they may wrap it in markdown fences, use prose prefixes,
  * or use function-call syntax. Four patterns are tried in priority order to handle this.
  *
  * NOTE: This file is intentionally vscode-free so it can be imported in tests without stubs.
@@ -30,7 +30,7 @@ export interface ParsedToolCall {
  */
 const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
 
-  // Pattern 1 — strict JSON object anywhere in the text (most common for well-behaved models)
+  // Pattern 1: strict JSON object anywhere in the text (most common for well-behaved models)
   (text) => {
     const candidates = extractJsonObjects(text);
     for (const obj of candidates) {
@@ -43,7 +43,7 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
     return null;
   },
 
-  // Pattern 2 — JSON inside a markdown code fence (models sometimes wrap tool calls in ```)
+  // Pattern 2: JSON inside a markdown code fence (models sometimes wrap tool calls in ```)
   (text) => {
     const fence = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
     if (!fence) return null;
@@ -57,7 +57,7 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
     return null;
   },
 
-  // Pattern 3 — loose key-value text: "tool: read_file\nargs: {"path":"..."}"
+  // Pattern 3: loose key-value text, e.g. "tool: read_file\nargs: {"path":"..."}"
   // Requires "tool:" at the start of a line to avoid false-positives in prose like
   // "I'll use the tool: write_file to help you"
   (text) => {
@@ -71,7 +71,7 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
     return { tool: nameMatch[1], args, raw: nameMatch[0] };
   },
 
-  // Pattern 4b — gemma-4 / Qwen style: <|tool_call>call:tool_name{...}<tool_call|>
+  // Pattern 4b: gemma-4 / Qwen style, <|tool_call>call:tool_name{...}<tool_call|>
   // These models use unquoted keys AND <|"|>...<|"|> string delimiters for values with special chars.
   // Parse key-value pairs directly to avoid regex corruption of large string values (e.g. Dart code
   // with named params like `, listen: false` that would otherwise get treated as JSON keys).
@@ -91,14 +91,14 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
 
         let value: string;
         if (body.startsWith('<|"|>')) {
-          // <|"|> delimited string — extract raw content, no escaping needed
+          // <|"|> delimited string: extract raw content, no escaping needed
           body = body.slice(5);
           const end = body.indexOf('<|"|>');
           if (end === -1) break;
           value = body.slice(0, end);
           body = body.slice(end + 5);
         } else if (body.startsWith('"')) {
-          // Regular JSON-quoted string — parse char-by-char respecting escapes
+          // Regular JSON-quoted string: parse char-by-char respecting escapes
           let i = 1;
           let s = '';
           while (i < body.length) {
@@ -124,7 +124,7 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
     } catch { return null; }
   },
 
-  // Pattern 4c — <tool_code> tags: gemma-4 wraps calls in <tool_code>fn(args)</tool_code>
+  // Pattern 4c: <tool_code> tags, where gemma-4 wraps calls in <tool_code>fn(args)</tool_code>
   (text) => {
     const block = text.match(/<tool_code>\s*([\s\S]*?)\s*<\/tool_code>/i);
     if (!block) return null;
@@ -143,7 +143,7 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
     return { tool: fnMatch[1], args, raw: block[0] };
   },
 
-  // Pattern 4 — function-call syntax: tool_name({"key":"val"}) or tool_name(key="val", ...)
+  // Pattern 4: function-call syntax, tool_name({"key":"val"}) or tool_name(key="val", ...)
   // Requires double-underscore (server__tool) to avoid matching normal function calls in prose.
   // Single-name built-in functions are caught by Pattern 4c above.
   (text) => {
@@ -164,7 +164,7 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
 
 /**
  * Attempts to extract a tool call from raw model output text.
- * Tries four patterns in priority order — returns the first match, or null if none found.
+ * Tries four patterns in priority order, returns the first match, or null if none found.
  */
 export function parseToolCall(text: string): ParsedToolCall | null {
   for (const pattern of PATTERNS) {
@@ -201,7 +201,7 @@ export function extractJsonObjects(text: string): any[] {
         results.push(JSON.parse(slice));
       } catch {
         // Models on Windows often emit unescaped backslashes in paths (e.g. ".\setup.ps1").
-        // \s, \., etc. are invalid JSON escape sequences — sanitise and retry once.
+        // \s, \., etc. are invalid JSON escape sequences; sanitise and retry once.
         try { results.push(JSON.parse(slice.replace(/\\(?!["\\/bfnrtu])/g, '\\\\'))); } catch {}
       }
     }

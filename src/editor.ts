@@ -5,8 +5,8 @@
  * Each function is a thin wrapper around a VS Code API call.
  *
  * For the more complex diff/apply flows see:
- *   - inline-diff.ts  — InlineDiffSession (accept/reject inline changes) + applyComposerPatches
- *   - inlineedit.ts   — the select-and-instruct edit command
+ *   - inline-diff.ts:  InlineDiffSession (accept/reject inline changes) + applyComposerPatches
+ *   - inlineedit.ts:   the select-and-instruct edit command
  */
 
 import * as vscode from 'vscode';
@@ -32,7 +32,7 @@ export async function applyCode(code: string): Promise<void> {
   }
 }
 
-/** Opens a read-only diff view showing an agent's proposed write — old content left, proposed right.
+/** Opens a read-only diff view showing an agent's proposed write; old content left, proposed right.
  *  Used by the per-action approval flow so the user can review before the file is actually written. */
 export async function diffAgentWrite(targetPath: string, newContent: string): Promise<void> {
   const folders = vscode.workspace.workspaceFolders;
@@ -47,7 +47,7 @@ export async function diffAgentWrite(targetPath: string, newContent: string): Pr
     existingContent = existingDoc.getText();
     lang = existingDoc.languageId;
   } catch {
-    // New file — try VS Code's own detection via untitled URI (not shown to user)
+    // New file: try VS Code's own detection via untitled URI (not shown to user)
     try {
       const filename = normalised.split('/').pop() ?? 'file';
       const tempDoc = await vscode.workspace.openTextDocument(
@@ -63,7 +63,7 @@ export async function diffAgentWrite(targetPath: string, newContent: string): Pr
   await vscode.commands.executeCommand('vscode.diff', origDoc.uri, proposedDoc.uri, label);
 }
 
-/** Shows a diff of the current selection (or whole file) against suggested code — used by the chat panel's Diff button. */
+/** Shows a diff of the current selection (or whole file) against suggested code, used by the chat panel's Diff button. */
 export async function diffCode(code: string): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
@@ -73,7 +73,7 @@ export async function diffCode(code: string): Promise<void> {
   vscode.commands.executeCommand('vscode.diff', origDoc.uri, suggestedDoc.uri, 'Compare');
 }
 
-/** Starts an InlineDiffSession for the given code against the active editor — entry point for the chat panel's Apply button. */
+/** Starts an InlineDiffSession for the given code against the active editor; entry point for the chat panel's Apply button. */
 export async function acceptDiff(code: string): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;

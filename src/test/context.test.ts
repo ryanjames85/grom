@@ -1,11 +1,12 @@
 // @ts-nocheck
 // context.ts is already loaded with the vscode mock by agent-loop.test.ts (which runs first
 // alphabetically and patches Module.prototype.require). We stub child_process.execSync on the
-// cached module — the inline `const { execSync } = require('child_process')` inside
+// cached module: the inline `const { execSync } = require('child_process')` inside
 // resolveSlashCommand destructures at call time, so the stub is picked up correctly.
 const sinon = require('sinon');
 const childProcess = require('child_process');
-const { resolveSlashCommand, resolveMentions } = require('../context');
+const { resolveSlashCommand, resolveMentions, resolveWebSearch } = require('../context');
+const terminalBuffer = require('../terminal-buffer');
 const pkg = require('../../package.json');
 
 // Grab the vscode mock that context.ts was loaded with (set up by agent-loop.test.ts).
@@ -181,6 +182,107 @@ describe('resolveMentions', () => {
     vscode.workspace.fs.stat.rejects(new Error('file not found'));
     const result = await resolveMentions('@missing.ts', new Set());
     expect(result).to.include('Error: could not read file');
+  });
+});
+
+describe('resolveWebSearch', () => {
+  let fetchStub: sinon.SinonStub;
+
+  before(async () => {
+    const chai = await import('chai');
+    expect = chai.expect;
+  });
+
+  beforeEach(() => {
+    fetchStub = sinon.stub(global, 'fetch');
+  });
+
+  afterEach(() => {
+    fetchStub.restore();
+    sinon.restore();
+  });
+
+  it('returns null when text is not a /search command', async () => {
+    const result = await resolveWebSearch('hello world');
+    expect(result).to.be.null;
+  });
+
+  it('returns null for a partial match that is not /search', async () => {
+    const result = await resolveWebSearch('/commit');
+    expect(result).to.be.null;
+  });
+
+  it('returns formatted results for a successful /search query', async () => {
+    fetchStub.resolves({
+      ok: true,
+      json: async () => ({
+        AbstractText: 'TypeScript is a typed superset of JavaScript.',
+        RelatedTopics: [
+          { Text: 'TypeScript - Microsoft' },
+          { Text: 'TypeScript handbook' },
+        ],
+      }),
+    });
+
+    const result = await resolveWebSearch('/search TypeScript');
+    expect(result).to.not.be.null;
+    expect(result).to.include('Web search results');
+    expect(result).to.include('TypeScript');
+    expect(result).to.include('Summary:');
+  });
+
+  it('returns fallback when fetch throws', async () => {
+    fetchStub.rejects(new Error('network error'));
+
+    const result = await resolveWebSearch('/search TypeScript');
+    expect(result).to.not.be.null;
+    expect(result).to.include('TypeScript');
+    expect(result).to.include('training knowledge');
+  });
+
+  it('returns no-results message when API returns empty data', async () => {
+    fetchStub.resolves({
+      ok: true,
+      json: async () => ({ AbstractText: '', RelatedTopics: [] }),
+    });
+
+    const result = await resolveWebSearch('/search unknownquery');
+    expect(result).to.not.be.null;
+    expect(result).to.include('No results found');
+    expect(result).to.include('unknownquery');
+  });
+
+  it('is case-insensitive for the /search prefix', async () => {
+    fetchStub.resolves({
+      ok: true,
+      json: async () => ({ AbstractText: 'Some result', RelatedTopics: [] }),
+    });
+
+    const result = await resolveWebSearch('/SEARCH TypeScript');
+    expect(result).to.not.be.null;
+    expect(result).to.include('TypeScript');
+  });
+});
+
+describe('@terminal mention', () => {
+  before(async () => {
+    const chai = await import('chai');
+    expect = chai.expect;
+  });
+
+  it('includes terminal output when buffer has content', async () => {
+    terminalBuffer.appendTerminalOutput('npm ERR! package not found\n');
+    const result = await resolveMentions('@terminal', new Set());
+    expect(result).to.include('[Terminal output]');
+    expect(result).to.include('npm ERR!');
+  });
+
+  it('includes all sources of terminal content in the same block', async () => {
+    terminalBuffer.appendTerminalOutput('first line\n');
+    terminalBuffer.appendTerminalOutput('second line\n');
+    const result = await resolveMentions('@terminal', new Set());
+    expect(result).to.include('first line');
+    expect(result).to.include('second line');
   });
 });
 

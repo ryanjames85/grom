@@ -205,7 +205,7 @@ export class GromInlineCompletionProvider implements vscode.InlineCompletionItem
     // Extra context from open tabs and recent edits
     const extraContext = buildExtraContext(document, position);
 
-    // Build FIM prompt — extra context goes before the FIM tokens as a comment block
+    // Build FIM prompt: extra context goes before the FIM tokens as a comment block
     const contextHeader = extraContext
       ? `// === Related code from workspace ===\n${extraContext}\n// === Current file ===\n`
       : '';
@@ -252,7 +252,7 @@ function buildExtraContext(current: vscode.TextDocument, position: vscode.Positi
   const currentPath = current.fileName;
   const currentLang = current.languageId;
 
-  // Open editor tabs — same language, not current file
+  // Open editor tabs: same language, not current file
   for (const tab of vscode.window.tabGroups.all.flatMap(g => g.tabs)) {
     const input = tab.input as any;
     if (!input?.uri) continue;

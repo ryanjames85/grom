@@ -60,7 +60,7 @@ describe('parseToolCall', () => {
     expect = chai.expect;
   });
 
-  // Pattern 1 — clean JSON
+  // Pattern 1: clean JSON
   it('parses clean JSON with "tool" and "args" keys', () => {
     const r = parseToolCall('{"tool":"filesystem__read_file","args":{"path":"src/index.ts"}}');
     expect(r).to.not.be.null;
@@ -100,11 +100,11 @@ describe('parseToolCall', () => {
   });
 
   it('does not false-positive on JSON with a tool key but non-object args', () => {
-    // args must be an object — array or string should not match
+    // args must be an object; array or string should not match
     expect(parseToolCall('{"tool":"x","args":"notanobject"}')).to.be.null;
   });
 
-  // Pattern 2 — markdown fence
+  // Pattern 2: markdown fence
   it('parses JSON inside a ```json fence', () => {
     const r = parseToolCall('Sure, here you go:\n```json\n{"tool":"db__query","args":{"sql":"SELECT 1"}}\n```');
     expect(r.tool).to.equal('db__query');
@@ -116,7 +116,7 @@ describe('parseToolCall', () => {
     expect(r.tool).to.equal('fs__write');
   });
 
-  // Pattern 3 — loose key-value text
+  // Pattern 3: loose key-value text
   it('parses loose text format "tool: name" at start of line', () => {
     const r = parseToolCall('tool: fs__read_file\nargs: {"path": "src/app.ts"}');
     expect(r.tool).to.equal('fs__read_file');
@@ -138,7 +138,7 @@ describe('parseToolCall', () => {
     expect(r).to.be.null;
   });
 
-  // Pattern 4 — function-call style
+  // Pattern 4: function-call style
   it('parses function-call style with JSON args', () => {
     const r = parseToolCall('server__read_file({"path":"main.ts"})');
     expect(r.tool).to.equal('server__read_file');
@@ -151,7 +151,7 @@ describe('parseToolCall', () => {
     expect(r.args.query).to.equal('hello world');
   });
 
-  // Pattern 4b — gemma-4 / Qwen <|tool_call> style
+  // Pattern 4b: gemma-4 / Qwen <|tool_call> style
   it('parses gemma-4 <|tool_call>call:name{args} with unquoted keys', () => {
     const r = parseToolCall('<|tool_call>call:write_file{content:"hello",path:"sad.md"}<tool_call|>');
     expect(r.tool).to.equal('write_file');
@@ -213,7 +213,7 @@ describe('parseToolCall', () => {
     expect(r.args.path).to.equal('foo.ts');
   });
 
-  // Pattern 4c — <tool_code> tags (gemma-4)
+  // Pattern 4c: <tool_code> tags (gemma-4)
   it('parses <tool_code> wrapped function call with key=value args', () => {
     const r = parseToolCall('<tool_code>\nwrite_file(path="jokes.md", content="ha ha")\n</tool_code>');
     expect(r).to.not.be.null;

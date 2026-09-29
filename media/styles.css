@@ -91,6 +91,9 @@ mark.search-highlight { background: rgba(232, 168, 56, 0.4); color: inherit; bor
 .compact-notice { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--vscode-descriptionForeground); margin: 8px 0; text-transform: uppercase; letter-spacing: 0.06em; width: 100%; }
 .compact-notice::before, .compact-notice::after { content: ''; flex: 1; height: 1px; background: var(--vscode-widget-border, var(--border)); }
 .compact-notice svg { flex-shrink: 0; }
+.compact-notice.clickable { cursor: pointer; }
+.compact-notice.clickable:hover { color: var(--accent); }
+.compact-notice.clickable:hover::before, .compact-notice.clickable:hover::after { background: var(--accent); }
 .thinking-dots { display: flex; gap: 5px; padding: 6px 2px; align-items: center; }
 .thinking-dots span:not(.elapsed-time) { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); opacity: 0.3; animation: dot-bounce 1.2s ease-in-out infinite; }
 .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
@@ -150,6 +153,15 @@ textarea { width: 100%; background: transparent; color: inherit; border: none; o
 .agent-btn { display: flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; padding: 2px 8px; height: 24px; border-radius: 20px; border: 1px solid transparent; cursor: pointer; transition: all 0.15s; color: var(--text-muted); background: var(--vscode-button-secondaryBackground); }
 .agent-btn.active { color: #fff; border-color: var(--accent); background: var(--accent); }
 body.mode-plan .agent-btn { opacity: 0.35; pointer-events: none; }
+.effort-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; background: transparent; color: var(--text-muted); transition: all 0.15s; padding: 0; }
+.effort-btn:hover { background: var(--vscode-button-secondaryBackground); color: var(--text); }
+.effort-btn[data-effort="off"] { opacity: 0.45; }
+.effort-btn[data-effort="off"]:hover { opacity: 0.7; }
+.effort-btn[data-effort="low"] { color: #4ade80; opacity: 1; border-color: rgba(74,222,128,0.3); }
+.effort-btn[data-effort="medium"] { color: #38bdf8; opacity: 1; border-color: rgba(56,189,248,0.3); }
+.effort-btn[data-effort="high"] { color: #c084fc; opacity: 1; border-color: rgba(192,132,252,0.5); }
+.effort-btn .kb-bolt { opacity: 0; transition: opacity 0.15s; }
+.effort-btn[data-effort="high"] .kb-bolt { opacity: 1; }
 .mode-toggle { display: flex; background: var(--vscode-button-secondaryBackground); border-radius: 20px; padding: 2px; position: relative; cursor: pointer; width: 100px; height: 24px; align-items: center; justify-content: space-between; font-size: 10px; font-weight: bold; box-sizing: border-box; }
 .mode-btn { flex: 1; text-align: center; z-index: 2; transition: color 0.2s; color: var(--text); opacity: 0.6; height: 100%; display: flex; align-items: center; justify-content: center; }
 .mode-btn.active { opacity: 1; color: white; }
@@ -191,7 +203,35 @@ body.mode-plan .agent-btn { opacity: 0.35; pointer-events: none; }
 .file-open-badge { font-size: 9px; opacity: 0.45; margin-left: auto; padding: 1px 5px; border-radius: 3px; background: var(--vscode-button-secondaryBackground); white-space: nowrap; }
 
 pre { background: #1e1e1e !important; padding: 10px; border-radius: 8px; border: 1px solid #333; margin: 10px 0; overflow-x: auto; }
-.code-header { display: flex; justify-content: flex-end; gap: 5px; margin-bottom: -30px; padding: 5px; z-index: 5; position: relative; }
+details.think { margin: 0 0 8px; font-size: 0.9em; }
+details.think summary { cursor: pointer; list-style: none; display: flex; align-items: flex-end; gap: 8px; }
+details.think summary::-webkit-details-marker { display: none; }
+details.think summary::marker { content: ''; }
+/* Fixed-height, bottom-aligned box: as new lines are rendered, older ones get pushed above the
+   visible area and clipped, while the mask fades the topmost sliver instead of cutting it off
+   sharply — a live "still thinking" preview without any real scrolling to manage. */
+details.think .think-preview {
+  flex: 1; height: 2.6em; overflow: hidden; display: flex; align-items: flex-end;
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 0%, black 45%, transparent 100%);
+}
+details.think .think-preview-inner { opacity: 0.55; font-style: italic; line-height: 1.3; }
+details.think[open] .think-preview { display: none; }
+details.think .think-expand-arrow { flex-shrink: 0; opacity: 0.6; display: inline-block; transition: transform 0.15s; }
+details.think[open] .think-expand-arrow { transform: rotate(90deg); }
+details.think .think-toggle-label { flex-shrink: 0; opacity: 0.6; font-size: 0.85em; text-decoration: underline; }
+/* Disabling thinking is global and persisted, so it stays out of the way until the user
+   deliberately hovers this row — not a single accidental click away like the toggle label is. */
+details.think .think-disable-btn { flex-shrink: 0; opacity: 0; background: none; border: none; color: inherit; font-size: 0.8em; text-decoration: underline; cursor: pointer; padding: 0 4px 2px; transition: opacity 0.15s; }
+details.think summary:hover .think-disable-btn { opacity: 0.55; }
+details.think .think-disable-btn:hover { opacity: 1 !important; }
+details.think .think-body-wrap { position: relative; margin-top: 6px; }
+details.think .think-body { opacity: 0.65; font-style: italic; border-left: 2px solid var(--vscode-textSeparator-foreground, #555); padding-left: 10px; max-height: 220px; overflow-y: auto; }
+/* Same "jump to latest" idea as #scroll-to-bottom in the main chat window, scoped to this box. */
+details.think .think-scroll-btn { display: none; position: absolute; bottom: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--accent); background: var(--bg); color: var(--accent); cursor: pointer; align-items: center; justify-content: center; opacity: 0.9; font-size: 0.8em; padding: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
+details.think .think-scroll-btn:hover { opacity: 1; }
+.code-header { display: flex; justify-content: flex-end; gap: 5px; margin-bottom: -30px; padding: 5px; z-index: 5; position: relative; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+pre:hover .code-header { opacity: 1; pointer-events: auto; }
 .code-btn { font-size: 10px; background: #333; color: #ccc; border: 1px solid #444; padding: 3px 8px; border-radius: 4px; cursor: pointer; }
 .code-btn-accept { background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); }
 .code-btn-accept:disabled { opacity: 0.5; cursor: default; }
@@ -353,7 +393,7 @@ body.grom-popout #mini-grom { width: 28px; height: 28px; }
 /* Spin icon */
 .icon-btn svg.spinning { animation: icon-spin 0.4s ease-out; }
 
-/* Narrow panel — responsive breakpoints */
+/* Narrow panel: responsive breakpoints */
 @media (max-width: 280px) {
   .header-bottom { flex-wrap: wrap; }
   #model-select { flex-basis: 100%; }
@@ -369,12 +409,12 @@ body.grom-popout #mini-grom { width: 28px; height: 28px; }
   .header-actions > :nth-child(6),
   .header-actions > :nth-child(8),
   .header-actions > :nth-child(9) { display: none; }
-  /* Collapse status label — keep dot and server icon only */
+  /* Collapse status label: keep dot and server icon only */
   #conn-status { display: none; }
   .status-pill { padding: 2px 4px; gap: 4px; }
 }
 
-/* Chat message overflow — long words and inline code don't break by default */
+/* Chat message overflow: long words and inline code don't break by default */
 .msg-body { overflow-wrap: break-word; min-width: 0; }
 .msg.user { min-width: 0; }
 

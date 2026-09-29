@@ -1,11 +1,11 @@
 /**
  * session.ts
  *
- * Chat session data model and manager.
+ * No-side-effect session data model and manager.
  * A session holds the full message history, token counts, mode (plan/build),
  * an optional per-session system prompt, and the agent task log.
  *
- * SessionManager is a pure in-memory store — it has no side effects.
+ * SessionManager is a pure in-memory store; it has no side effects.
  * Persistence (workspaceState) is handled by provider.ts which calls _saveState()
  * after any mutating operation.
  *
@@ -31,6 +31,7 @@ export interface ChatSession {
   lastModified: number;
   mode: 'plan' | 'build';
   agentEnabled?: boolean;
+  reasoningEffort?: 'off' | 'low' | 'medium' | 'high';
   systemPrompt?: string;
   taskLog?: TaskLogEntry[];
   model?: string;
@@ -54,7 +55,7 @@ export class SessionManager {
     }
   }
 
-  /** Returns the full sessions map — used by provider.ts to persist and render the session list. */
+  /** Returns the full sessions map, used by provider.ts to persist and render the session list. */
   getSessions() {
     return this.sessions;
   }
@@ -72,7 +73,7 @@ export class SessionManager {
   /** Creates a new empty session, switches to it, and returns its ID. */
   createNewSession(agentEnabled = false) {
     const id = Date.now().toString();
-    // Tools start off so plain chat is fast — user enables ⚡ Tools per session when needed.
+    // Tools start off so plain chat is fast; user enables ⚡ Tools per session when needed.
     // mode stays 'plan' regardless of agentEnabled; the user switches to BUILD when they want it.
     this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled: false };
     this.currentSessionId = id;
@@ -96,7 +97,7 @@ export class SessionManager {
   deleteSession(id: string, agentEnabled = false) {
     const remaining = Object.keys(this.sessions).filter(k => k !== id);
     if (remaining.length === 0) {
-      // Last session — clear it rather than leaving nothing
+      // Last session: clear it rather than leaving nothing
       this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled };
       return;
     }
@@ -121,7 +122,7 @@ export class SessionManager {
     const systemMessage = s.history.find(m => m.role === 'system' && !isCompactMarker(m));
     const lastMessages = getNonSystemMessages(s.history).slice(-4);
     const markerContent = summary ? `__compacted__\n\n${summary}` : '__compacted__';
-    const marker: ChatMessage = { role: 'system', content: markerContent };
+    const marker: ChatMessage = { role: 'system', content: markerContent, compactedAt: Date.now() };
     s.history = systemMessage ? [systemMessage, marker, ...lastMessages] : [marker, ...lastMessages];
     s.tokens.input = estimateHistoryTokens(s.history);
     s.tokens.output = 0;
@@ -155,10 +156,17 @@ export class SessionManager {
     }
   }
 
-  /** Toggles the per-session agent flag — controls whether tool schemas are injected in BUILD mode. */
+  /** Toggles the per-session agent flag; controls whether tool schemas are injected in BUILD mode. */
   setAgentEnabled(sessionId: string, enabled: boolean) {
     if (this.sessions[sessionId]) {
       this.sessions[sessionId].agentEnabled = enabled;
+    }
+  }
+
+  /** Sets the reasoning effort level for a session. */
+  setReasoningEffort(sessionId: string, effort: 'off' | 'low' | 'medium' | 'high') {
+    if (this.sessions[sessionId]) {
+      this.sessions[sessionId].reasoningEffort = effort;
     }
   }
 

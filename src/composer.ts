@@ -27,7 +27,7 @@ export function parseComposerResponse(response: string): FilePatch[] {
   return patches;
 }
 
-/** LCS-based line diff — returns 0-based line indices in the suggested output that were added or modified. */
+/** LCS-based line diff: returns 0-based line indices in the suggested output that were added or modified. */
 export function diffLines(original: string[], suggested: string[]): { added: number[]; modified: number[] } {
   const m = original.length, n = suggested.length;
   const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
@@ -66,7 +66,7 @@ export function diffLines(original: string[], suggested: string[]): { added: num
 }
 
 /** Maps a file extension to its VS Code language identifier for syntax highlighting in diff views.
- *  Used only for new files — existing files use the open document's languageId directly. */
+ *  Used only for new files, existing files use the open document's languageId directly. */
 export function languageFromPath(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
   const map: Record<string, string> = {

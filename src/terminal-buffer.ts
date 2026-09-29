@@ -1,11 +1,11 @@
 /**
  * terminal-buffer.ts
  *
- * Rolling buffer of recent terminal output, used to populate the @terminal context provider.
+ * Live rolling buffer of recent terminal output, used to populate the @terminal context provider.
  * extension.ts pipes all VS Code terminal data events into appendTerminalOutput().
  * context.ts reads from getRecentTerminalOutput() when the user types @terminal in chat.
  *
- * NOTE: This file is intentionally vscode-free — it is pure state with no side effects.
+ * NOTE: This file is intentionally vscode-free, it is pure state with no side effects.
  */
 
 let _buffer = '';
@@ -19,3 +19,6 @@ export function appendTerminalOutput(text: string) {
 
 /** Returns the most recent terminal output, up to MAX_BYTES characters. */
 export function getRecentTerminalOutput(): string { return _buffer; }
+
+/** Clears the buffer. Only used in tests. */
+export function _resetBuffer() { _buffer = ''; }

@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Local-first agent harness for VS Code. Bring your own LLM — no cloud, no account, no telemetry. Your model, your machine, your rules.",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -382,6 +382,28 @@
           "default": true,
           "description": "Master switch for the agentic loop. When off, the ⚡ Tools toggle has no effect and no tools are ever injected. Disable to lock Grom to plain chat globally."
         },
+        "grom.reasoningEffort": {
+          "type": "string",
+          "enum": ["off", "low", "medium", "high"],
+          "default": "off",
+          "description": "Default reasoning effort for models that support extended thinking (OpenAI o-series, Claude extended thinking). 'off' disables thinking entirely. 'low' is fast; 'high' is thorough but slower. Can be overridden per session with the toolbar icon or /effort command."
+        },
+        "grom.showReasoningToggle": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the reasoning effort (kettlebell) icon in the toolbar when the active model supports extended thinking. Set to false to hide it and rely on the grom.reasoningEffort setting instead."
+        },
+        "grom.showThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a model's extended thinking in chat, dimmed and collapsed to a one-line summary you can expand. Each thinking block also has its own hide button. Set to false to hide thinking entirely and show only the loading indicator while the model thinks."
+        },
+        "grom.reasoningModels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra model name substrings to treat as reasoning models. Grom maintains a built-in list of known reasoning models (DeepSeek-R1, QwQ, Qwen3, o-series, etc.) — add entries here for new or custom models not yet recognised. Example: [\"my-r1-finetune\", \"local-thinker\"]."
+        },
         "grom.agentMaxIterations": {
           "type": "number",
           "default": 20,
@@ -544,7 +566,8 @@
     "copy-media": "node scripts/build-highlight.mjs && node -e \"const fs=require('fs');fs.mkdirSync('media',{recursive:true});fs.cpSync('node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css','media/github-dark.min.css');fs.cpSync('node_modules/marked/lib/marked.umd.js','media/marked.min.js');\"",
     "vscode:prepublish": "npm run build",
     "tsc": "tsc",
-    "test": "mocha -r ts-node/register \"src/test/**/*.test.ts\""
+    "test": "mocha -r ts-node/register \"src/test/**/*.test.ts\"",
+    "test:integration": "mocha -r ts-node/register -r chai \"src/test/integration/**/*.itest.ts\" --timeout 180000"
   },
   "devDependencies": {
     "@highlightjs/cdn-assets": "^11.11.1",

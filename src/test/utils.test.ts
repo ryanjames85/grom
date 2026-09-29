@@ -81,7 +81,7 @@ describe('buildExtractionInput', () => {
   it('respects the token budget and drops earliest messages when over budget', () => {
     const msgs = Array.from({ length: 20 }, (_, i) => msg('user', `message number ${i} with some content padding here`));
     const result = buildExtractionInput(msgs, 200);
-    // Should not include all 20 messages — early ones get dropped
+    // Should not include all 20 messages; early ones get dropped
     expect(result.split('\n\n').length).to.be.lessThan(20);
   });
 
@@ -108,7 +108,7 @@ describe('buildExtractionInput', () => {
 // ── isPrivateUrl ──────────────────────────────────────────────────────────────
 
 describe('isPrivateUrl', () => {
-  // ── Public URLs — must NOT be blocked ──────────────────────────────────────
+  // ── Public URLs: must NOT be blocked ──────────────────────────────────────
 
   it('allows a public HTTPS URL', () => {
     expect(isPrivateUrl('https://example.com/docs')).to.be.false;

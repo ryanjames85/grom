@@ -100,7 +100,7 @@ describe('popout — webview.html', () => {
   });
 });
 
-// ── main.js — message handlers ────────────────────────────────────────────────
+// ── main.js: message handlers ────────────────────────────────────────────────
 
 describe('popout — main.js message handling', () => {
   it("handles 'popoutOpened' case", () => {
@@ -194,7 +194,7 @@ describe('popout — main.js message handling', () => {
   });
 });
 
-// ── main.js — mic logo swap ───────────────────────────────────────────────────
+// ── main.js: mic logo swap ───────────────────────────────────────────────────
 
 describe('popout — main.js mic logo swap', () => {
   it('_setVoiceState swaps main logo to mic variant on recording', () => {
@@ -263,7 +263,7 @@ describe('popout — CSS', () => {
   });
 });
 
-// ── provider.ts — voice routing ───────────────────────────────────────────────
+// ── provider.ts: voice routing ───────────────────────────────────────────────
 
 describe('popout — provider.ts voice routing', () => {
   it('_voiceReply field is declared', () => {

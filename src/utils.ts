@@ -2,7 +2,7 @@
  * utils.ts
  *
  * Shared pure utility functions used across multiple modules.
- * No VS Code dependency — safe to use in vscode-free files and unit tests.
+ * No VS Code dependency: safe to use in vscode-free files and unit tests.
  */
 
 import { ChatMessage } from './client';
@@ -15,7 +15,7 @@ export function isCompactMarker(m: ChatMessage): boolean {
 /**
  * System prompt used when extracting a structured summary of messages that are about
  * to be trimmed during compaction. Produces typed arrays the model can reconstruct
- * context from, rather than lossy prose — keeps exact file paths, function names, and
+ * context from, rather than lossy prose, keeps exact file paths, function names, and
  * error messages verbatim.
  */
 export const COMPACT_EXTRACTION_PROMPT =

@@ -8,7 +8,7 @@
  * Tool definitions (BUILTIN_TOOLS) follow the same McpTool shape used by MCP tools
  * so they can be passed to buildToolSystemPrompt() alongside any MCP tools.
  *
- * NOTE: write_file, delete_file, and run_terminal are considered destructive — they
+ * NOTE: write_file, delete_file, and run_terminal are considered destructive, they
  * modify state that may be hard to reverse. provider.ts gates these on user approval
  * before execution. read_file, list_directory, and search_files are safe and auto-execute.
  */
@@ -119,8 +119,15 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
    */
   function safePath(raw: string): { uri: vscode.Uri; rel: string } | { error: string } {
     if (!root) return { error: 'No workspace folder open.' };
+    // A missing or wrong-typed 'path' argument (e.g. the model used a different key name)
+    // must produce a clear, actionable error, not a raw JS crash the model cannot learn from.
+    // An empty string is valid on its own (list_directory uses it to mean the workspace root);
+    // only reject when the argument is actually missing or not a string at all.
+    if (typeof raw !== 'string') {
+      return { error: `Missing or invalid 'path' argument. Expected a workspace-relative file path as a string.` };
+    }
     // Normalize and prevent absolute paths or traversal
-    const rel = (raw as string).replace(/\\/g, '/').replace(/^\/+/, '');
+    const rel = raw.replace(/\\/g, '/').replace(/^\/+/, '');
     if (rel.includes('..') || /^[a-zA-Z]:/.test(rel) || rel.startsWith('/')) {
       return { error: 'Path traversal or absolute paths not allowed.' };
     }
@@ -160,7 +167,7 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
             const existing = await vscode.workspace.fs.readFile(p.uri);
             backups.set(p.rel, Buffer.from(existing).toString('utf8'));
           } catch {
-            backups.set(p.rel, null); // file did not exist — undo = delete
+            backups.set(p.rel, null); // file did not exist: undo = delete
           }
         }
         const parentUri = vscode.Uri.joinPath(p.uri, '..');
@@ -237,7 +244,12 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
 
     case 'run_terminal': {
       const command = args.command as string;
-      // Block shell substitution patterns — $(...) and backtick execution allow silent data
+      // A missing or wrong-typed 'command' argument must produce a clear, actionable error,
+      // not Node's raw "argument must be of type string" crash from inside exec().
+      if (typeof command !== 'string' || !command) {
+        return `Error: Missing or invalid 'command' argument. Expected a shell command as a string.`;
+      }
+      // Block shell substitution patterns: $(...) and backtick execution allow silent data
       // exfiltration embedded in otherwise-benign-looking commands (e.g. curl $(whoami)).
       // Legitimate coding tasks never need subshell evaluation; ask the model to split the
       // command into separate steps instead.
@@ -254,8 +266,13 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
         const { exec } = require('child_process') as typeof import('child_process');
         exec(command, { cwd, timeout: 30000, maxBuffer: 200000 }, (err, stdout, stderr) => {
           const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
-          const result = combined.slice(0, 6000) || (err ? `Process exited with code ${err.code}` : 'Command completed with no output');
-          resolve(result);
+          let fallback = 'Command completed with no output';
+          if (err) {
+            if (err.killed) fallback = 'Command timed out after 30 seconds.';
+            else if (err.message?.includes('maxBuffer')) fallback = 'Command output exceeded the 200 KB limit. Use a more targeted command or redirect output to a file.';
+            else fallback = `Process exited with code ${err.code ?? 'unknown'}: ${err.message}`;
+          }
+          resolve(combined.slice(0, 6000) || fallback);
         });
       });
     }

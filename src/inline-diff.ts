@@ -1,14 +1,14 @@
 /**
  * inline-diff.ts
  *
- * InlineDiffSession — applies a code suggestion to the real file and opens VS Code's
+ * InlineDiffSession: applies a code suggestion to the real file and opens VS Code's
  * native diff editor (original left, suggested right) so the user can Accept or Reject.
  *
  * Also owns applyComposerPatches, which drives the /compose multi-file apply flow.
  * It lives here rather than in editor.ts because it relies heavily on InlineDiffSession
  * for the per-file review step.
  *
- * NOTE: Strategy for InlineDiffSession — write the suggested content to the real file first,
+ * NOTE: Strategy for InlineDiffSession, write the suggested content to the real file first,
  * then diff against a temp doc of the original. Accept = leave the file as-is + close diff.
  * Reject = restore original content + close diff. This gives ghost-deletion rendering for free
  * via VS Code's built-in diff renderer without any custom decorations.
@@ -17,7 +17,7 @@
 import * as vscode from 'vscode';
 import { languageFromPath, FilePatch } from './composer';
 
-// Backup store for undo — holds original content before the last Composer run
+// Backup store for undo: holds original content before the last Composer run
 let _composerBackups: Array<{ uri: vscode.Uri; original: string | null }> = [];
 
 /** Reverts all files changed by the last Composer run, deleting any newly created files. */
@@ -149,7 +149,7 @@ export async function applyComposerPatches(patches: FilePatch[]): Promise<void> 
       vscode.window.showWarningMessage(`Grom: skipping unsafe path "${patch.path}"`);
       continue;
     }
-    // In multi-root workspaces the model may prefix paths with the folder name — find the right root
+    // In multi-root workspaces the model may prefix paths with the folder name; find the right root
     const matchedFolder = folders.find(f => normalised.startsWith(f.name + '/'));
     const root = matchedFolder?.uri ?? folders[0].uri;
     const filePath = matchedFolder ? normalised.slice(matchedFolder.name.length + 1) : normalised;

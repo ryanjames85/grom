@@ -10,11 +10,9 @@
 
 ---
 
-Grom is a local-first agent harness and AI coding assistant for VS Code. Bring your own LLM — your code never leaves your machine.
+Grom is a local-first agent harness and AI coding assistant for VS Code. Bring your own LLM. Your code never leaves your machine.
 
-No cloud. No account. No telemetry. No dark patterns. No upsell.
-
-Just you, your code, and Grom.
+No cloud. No account. No telemetry. No upsell.
 
 ---
 
@@ -30,34 +28,78 @@ If Ollama is running, Grom works. That's the whole deal.
 
 ## Meet Grom
 
-Grom is the little robot who lives in your sidebar. He watches your cursor, thinks while you type, and goes to sleep when you're idle. He's not a feature — he's the soul of the tool.
+Grom is the little robot who lives in your sidebar. He watches your cursor, thinks while you type, and goes to sleep when you're idle. He's not a feature He's the heart of the tool.
 
-When Grom goes idle he does two useful things quietly in the background: for Ollama users, he sends a keep-alive ping so your model stays loaded in VRAM and is ready instantly when you return. And if the file you have open has errors, he shows the count in his thought bubble — a gentle nudge without interrupting your flow.
+When Grom goes idle he does two useful things quietly in the background: for Ollama users, he sends a keep-alive ping so your model stays loaded in VRAM and is ready instantly when you return. And if the file you have open has errors, he shows the count in his thought bubble, a gentle nudge that doesn't interrupt your flow.
 
 His antenna tells you what's happening before you read a word:
 
 | | State | What it means |
 | :---: | --- | --- |
-| ![PLAN](resources/grom-plan.png) | Gold, antenna bent | PLAN mode — thinking broadly |
-| ![BUILD](resources/grom-build.png) | Blue, antenna straight | BUILD mode — focused, ready to ship |
+| ![PLAN](resources/grom-plan.png) | Gold, antenna bent | PLAN mode, thinking broadly |
+| ![BUILD](resources/grom-build.png) | Blue, antenna straight | BUILD mode, focused, ready to ship |
 | ![Generating](resources/grom-build.png) | Antenna bouncing *(animated)* | Model is generating a response |
 | ![Disconnected](resources/grom-disconnect.png) | Grey, unplugged | Your server isn't running or isn't connected |
 | ![Error](resources/grom-error.png) | Glitching | Server returned an error |
-| ![Idle](resources/grom-idle.png) | Eyes closed, thought bubble *(animated)* | Idle — keeps model in VRAM; shows error count if active file has issues |
-| <img src="resources/grom-float-plan.png" width="140" alt="Float PLAN"> | Gold, riding a cloud | Floating window — PLAN mode detached from the sidebar |
-| <img src="resources/grom-float-build.png" width="140" alt="Float BUILD"> | Blue, riding a cloud | Floating window — BUILD mode detached from the sidebar |
-| <img src="resources/grom-mic-plan.png" width="80" alt="Mic PLAN"> | Gold, mic icon | Voice recording active — PLAN mode listening |
-| <img src="resources/grom-mic-build.png" width="80" alt="Mic BUILD"> | Blue, mic icon | Voice recording active — BUILD mode listening |
+| ![Idle](resources/grom-idle.png) | Eyes closed, thought bubble *(animated)* | Idle, keeps model in VRAM; shows error count if active file has issues |
+| <img src="resources/grom-float-plan.png" width="140" alt="Float PLAN"> | Gold, riding a cloud | Floating window, PLAN mode detached from the sidebar |
+| <img src="resources/grom-float-build.png" width="140" alt="Float BUILD"> | Blue, riding a cloud | Floating window, BUILD mode detached from the sidebar |
+| <img src="resources/grom-mic-plan.png" width="80" alt="Mic PLAN"> | Gold, mic icon | Voice recording active, PLAN mode listening |
+| <img src="resources/grom-mic-build.png" width="80" alt="Mic BUILD"> | Blue, mic icon | Voice recording active, BUILD mode listening |
 
 ---
 
 ## Two Modes, One Purpose
 
-**PLAN mode** — warm honey gold. Grom thinks architecturally. Break down problems, plan features, talk through ideas before a single line is written.
+**PLAN mode:** warm honey gold. Grom thinks architecturally. Break down problems, plan features, talk through ideas before a single line is written.
 
-**BUILD mode** — focused blue. Grom is direct and implementation-ready. Write code, fix bugs, ship things.
+**BUILD mode:** focused blue. Grom is direct and implementation-ready. Write code, fix bugs, ship things.
 
-**⚡ Tools** — a toggle in the toolbar, only available in BUILD mode. Off by default so plain chat stays fast. When off, Grom skips codebase indexing and RAG queries entirely — replies are instant regardless of workspace size. When on it fills solid with the accent colour — no ambiguity. Turn it on when you want Grom to read and write files, run terminal commands, call MCP tools, and search your codebase for context. Each session remembers its own Tools state.
+**⚡ Tools:** a toggle in the toolbar, only available in BUILD mode. Off by default so plain chat stays fast. When off, Grom skips codebase indexing and RAG queries entirely, so replies are instant regardless of workspace size. When on it fills solid with the accent colour, no ambiguity. Turn it on when you want Grom to read and write files, run terminal commands, call MCP tools, and search your codebase for context. Each session remembers its own Tools state.
+
+**Reasoning effort:** a kettlebell icon appears in the toolbar when your active model has reliable thinking control. Click to adjust how hard the model thinks before answering. The icon only appears where Grom can actually enforce the level. Models where it would be guesswork show no icon at all.
+
+---
+
+**Cloud models** (claude-3-7-sonnet, claude-opus-4, OpenAI o-series, Gemini 2.5+) have four levels:
+
+| Level | Icon | What Grom sends |
+|-------|------|-----------------|
+| **Off** | <img src="resources/effort-off.png" width="20" alt="Off"> | No thinking budget, direct answer |
+| **Low** | <img src="resources/effort-low.png" width="20" alt="Low"> | Small budget, brief reasoning |
+| **Medium** | <img src="resources/effort-medium.png" width="20" alt="Medium"> | Balanced budget |
+| **High** | <img src="resources/effort-high.png" width="20" alt="High"> | Large budget, full extended reasoning |
+
+Maps directly to the provider's native API: `output_config.effort` with adaptive thinking for Claude 4.6+, `thinking.budget_tokens` for Claude 3.7 and 4.5, and `reasoning_effort` for OpenAI and Gemini. The provider enforces the level.
+
+---
+
+**Qwen3** has two levels:
+
+| Level | Icon | What Grom sends |
+|-------|------|-----------------|
+| **Off** | <img src="resources/effort-off.png" width="20" alt="Off"> | `/no_think` token, thinking suppressed, fast reply |
+| **High** | <img src="resources/effort-high.png" width="20" alt="High"> | `/think` token, full thinking enabled |
+
+Qwen3 exposes native control tokens that hard-switch thinking on or off. You will see a clear speed difference between Off and High.
+
+---
+
+**Other local reasoning models** (DeepSeek-R1, QwQ, Magistral, phi-4-reasoning, and others): **no icon shown**.
+
+These models have no reliable mechanism to control how much they think. Grom could send a system prompt hint, but whether the model honours it is unpredictable and untestable. A control that might do nothing isn't worth showing. The kettlebell icon is hidden for these models. If you want them to think less or more, ask directly in your message.
+
+---
+
+Set a default with `grom.reasoningEffort` or use `/effort off|high` in chat to change it mid-session. To disable the feature entirely, set `grom.showReasoningToggle: false`.
+
+**Model not recognised as a reasoning model?** Grom maintains a built-in list of known reasoning models but new ones appear faster than any list can keep up. If your model supports thinking but isn't flagged as a reasoning model, add a substring of its name to `grom.reasoningModels` in your settings:
+
+```json
+"grom.reasoningModels": ["my-r1-finetune", "local-thinker"]
+```
+
+Any model whose name contains one of those strings will be treated as a reasoning model: it gets the reasoning capability icon and the "may not support thinking" warning is suppressed. The kettlebell icon still only appears for models Grom can actually control (Claude, OpenAI o-series, Gemini 2.5+, Qwen3), so listing an R1 fine-tune here will not add it. Matching is case-insensitive and strips provider prefixes (e.g. `lmstudio/` or `ollama/`) before checking.
 
 The UI colour shifts with the mode. So does Grom's personality.
 
@@ -67,26 +109,41 @@ The UI colour shifts with the mode. So does Grom's personality.
 
 ### Providers
 
-Grom works with local servers out of the box — no account, no key. Cloud providers are supported optionally if you want to bring your own key.
+Grom works with local servers out of the box with no account or key. Cloud providers are supported optionally if you want to bring your own key.
 
 **Built-in:**
 
 | Provider | Notes |
 | --- | --- |
-| **Ollama** | Local, `127.0.0.1:11434` — recommended |
+| **Ollama** | Local, `127.0.0.1:11434`, recommended |
 | **LM Studio** | Local, `127.0.0.1:1234` |
-| **Open Code** | `api.opencode.ai` — requires API key |
+| **Open Code** | `api.opencode.ai`, requires API key |
 | **OpenAI** | GPT-4o, o1, o3-mini |
 | **Anthropic** | Claude Sonnet, Claude Opus |
-| **Groq** | Llama 3, Mixtral — fast inference |
+| **Groq** | Llama 3, Mixtral, fast inference |
 | **Mistral** | Mistral Large, Small, Codestral |
-| **Gemini** | Gemini 2.5 Pro, Flash — Google AI API |
+| **Gemini** | Gemini 2.5 Pro, Flash, Google AI API |
 
-**Custom providers** — add any OpenAI-compatible endpoint or Anthropic-compatible proxy via `grom.customProviders`. Gemini, OpenRouter, Together AI, and most other cloud APIs work out of the box. See [Adding a Custom Provider](#adding-a-custom-provider) below.
+**Custom providers:** add any OpenAI-compatible endpoint or Anthropic-compatible proxy via `grom.customProviders`. Gemini, OpenRouter, Together AI, and most other cloud APIs work out of the box. See [Adding a Custom Provider](#adding-a-custom-provider) below.
 
-Switch providers and models without leaving the panel. Each session remembers its own model — switching sessions restores it automatically. Grom detects model capabilities automatically — vision, tool use, and reasoning models each show their own icon. Vision models (llava, qwen2-vl, etc.) can receive images via the `+` button or paste.
+Switch providers and models without leaving the panel. Each session remembers its own model. Switching sessions restores it automatically. Grom detects model capabilities automatically: vision, tool use, and reasoning models each show their own icon. Vision models (llava, qwen2-vl, etc.) can receive images via the `+` button or paste.
 
-Capability detection reads directly from your provider where possible — chat template inspection for Ollama, explicit capability fields from LM Studio — so the icons reflect what your model can actually do rather than guessing from its name. If detection gets it wrong for a particular model, `grom.modelCapabilities` lets you override it.
+Capability detection reads directly from your provider where possible (chat template inspection for Ollama, explicit capability fields from LM Studio), so the icons reflect what your model can actually do rather than guessing from its name. New models always arrive faster than any built-in list, so Grom gives you two ways to fix detection yourself without waiting for an update:
+
+- **`grom.reasoningModels`:** add model name substrings that should be treated as reasoning models. Simpler when you just need the model flagged as a reasoning model.
+- **`grom.modelCapabilities`:** per-model override for any combination of `tools`, `vision`, and `reasoning`. Use this when detection is wrong on more than one capability, or when you need to *disable* a capability the auto-detection got wrong.
+
+```json
+"grom.modelCapabilities": {
+  "my-vision-model": { "vision": true },
+  "broken-tools-model": { "tools": false },
+  "my-r1-finetune": { "reasoning": true }
+}
+```
+
+Keys are partial model names matched case-insensitively. Values win over all auto-detection.
+
+If you find a model that should be in the built-in list, PRs to [`src/model-caps.ts`](src/model-caps.ts) are welcome. That's the single file that owns all capability detection. Adding a keyword or pattern there means everyone benefits.
 
 ### Knows What You're Working On
 
@@ -95,7 +152,7 @@ Use `@` in any message to attach context:
 | Mention | What it includes |
 | --- | --- |
 | `@selection` | Currently selected text in the active editor |
-| `@filename` | Any workspace file — open tabs shown first |
+| `@filename` | Any workspace file, open tabs shown first |
 | `@problems` | All current VS Code errors and warnings |
 | `@git` | Your current uncommitted diff (`git diff HEAD`) |
 | `@terminal` | Recent output from the integrated terminal |
@@ -103,31 +160,31 @@ Use `@` in any message to attach context:
 | `@docs` | Searches all indexed documentation sources (`grom.docSources`) |
 | `@docs:name` | Searches a specific doc source by name |
 
-Auto-context is on by default — Grom reads the file you have open automatically.
+Auto-context is on by default. Grom reads the file you have open automatically.
 
 ### Inline Autocomplete
 
 Ghost-text completions as you type, powered by FIM models.
 
-- **Adaptive debounce** — speeds up when you're accepting, slows down when you're not
-- **Word-by-word accept** — Tab accepts the next word; keep pressing for more
-- **Dedicated model** — set a fast FIM model (e.g. `qwen2.5-coder:1.5b`) separate from your chat model
-- **Per-language routing** — different models for different languages via `grom.languageModels`
-- **Toggle** — click `✦ Grom` in the status bar to enable/disable instantly
+- **Adaptive debounce:** speeds up when you're accepting, slows down when you're not
+- **Word-by-word accept:** Tab accepts the next word; keep pressing for more
+- **Dedicated model:** set a fast FIM model (e.g. `qwen2.5-coder:1.5b`) separate from your chat model
+- **Per-language routing:** different models for different languages via `grom.languageModels`
+- **Toggle:** click `✦ Grom` in the status bar to enable/disable instantly
 
 ### Inline Edit
 
 Select code, press `Ctrl+Shift+I`, describe what you want. Grom rewrites it and opens a diff. Accept or Reject.
 
-### Compose — Multi-file Edit
+### Compose: Multi-file Edit
 
 Press `Ctrl+Shift+O` or type `/compose`. Describe changes across your codebase. Review per-file or apply everything at once. Undo the whole run with one click.
 
-Every code block in compose format gets a **💾 Save** button — opens a syntax-highlighted diff showing exactly what will change.
+Every code block in compose format gets a **💾 Save** button that opens a syntax-highlighted diff showing exactly what will change.
 
 ### Agentic Loop
 
-Enable **⚡ Tools** in the toolbar (BUILD mode only) and Grom doesn't just reply once — it works through tasks step by step, calling tools based on what the last one returned.
+Enable **⚡ Tools** in the toolbar (BUILD mode only) and Grom doesn't just reply once. It works through tasks step by step, calling tools based on what the last one returned.
 
 | Tool | What it does |
 | --- | --- |
@@ -139,7 +196,7 @@ Enable **⚡ Tools** in the toolbar (BUILD mode only) and Grom doesn't just repl
 | `run_terminal` | Run a shell command and return its output |
 | `browse_web` | Fetch a live web page and return its text content |
 
-> **Note on model size:** Tool call accuracy scales with model size. 32B+ local models call tools reliably. Smaller models (1.5B–7B) occasionally write prose instead of a tool call — Grom handles this by re-prompting once and enabling structured JSON mode after the first tool use. For complex agentic tasks, 14B+ is significantly more reliable. Capable Ollama models (qwen2.5, llama3.1, mistral) also support native structured tool calls — Grom detects this automatically and uses it when available.
+> **Note on model size:** Tool call accuracy scales with model size. 32B+ local models call tools reliably. Smaller models (1.5B–7B) occasionally write prose instead of a tool call. Grom handles this by re-prompting once and enabling structured JSON mode after the first tool use. For complex agentic tasks, 14B+ is significantly more reliable. Capable Ollama models (qwen2.5, llama3.1, mistral) also support native structured tool calls, Grom detects this automatically and uses it when available.
 
 When the agent reaches its round limit (`grom.agentMaxIterations`, default 20), Grom tells you in the chat so you know to review and continue manually rather than wondering why it stopped.
 
@@ -157,7 +214,7 @@ Index web documentation so you can reference it with `@docs` in any message. Gro
 
 Each source needs a `name` (short identifier) and a `url` (root page to start crawling). Grom follows links within the configured path only, up to 40 pages per source. Indexing runs at startup and whenever `grom.docSources` changes.
 
-> **Note:** Grom fetches pages directly — it does not run JavaScript. Sites that render content client-side (pure SPAs) will return little or no usable text. Use a server-side rendered URL, a static export, or a local dev server instead.
+> **Note:** Grom fetches pages directly and does not run JavaScript. Sites that render content client-side (pure SPAs) will return little or no usable text. Use a server-side rendered URL, a static export, or a local dev server instead.
 
 Once indexed, use `@docs` to search all sources or `@docs:name` to target one:
 
@@ -168,13 +225,13 @@ Once indexed, use `@docs` to search all sources or `@docs:name` to target one:
 
 ### Voice Input
 
-Speak your prompts instead of typing them. Grom captures audio locally and transcribes it on-device using Whisper — nothing is ever sent to a server.
+Speak your prompts instead of typing them. Grom captures audio locally and transcribes it on-device using Whisper. Nothing is ever sent to a server.
 
 - **Mic button** in the toolbar (enable in Settings → Voice Input on first use)
-- **Push-to-talk** — click to start recording, click again to stop and transcribe
-- **Six Whisper models** — from Tiny EN (~40 MB, fast) up to Small (~244 MB, best accuracy), downloaded on demand. English-only `.en` variants are faster and more accurate for English speakers
-- **Model pre-warming** — the selected model loads silently when Grom starts so the first utterance transcribes without delay
-- **No account, no cloud** — audio stays on your machine. The mic is optional and designed for those who want or need voice input as an accessibility tool.
+- **Push-to-talk:** click to start recording, click again to stop and transcribe
+- **Six Whisper models:** from Tiny EN (~40 MB, fast) up to Small (~244 MB, best accuracy), downloaded on demand. English-only `.en` variants are faster and more accurate for English speakers
+- **Model pre-warming:** the selected model loads silently when Grom starts so the first utterance transcribes without delay
+- **No account, no cloud:** audio stays on your machine. The mic is optional and designed for those who want or need voice input as an accessibility tool.
 - Requires a one-time ffmpeg download (~50 MB), managed entirely within VS Code. Remove it anytime from Settings → Voice Input.
 
 > **Platform support:** Windows (DirectShow), macOS (avfoundation), Linux (PulseAudio/PipeWire, ALSA fallback).
@@ -184,12 +241,12 @@ Speak your prompts instead of typing them. Grom captures audio locally and trans
 Pop Grom out of the sidebar into a standalone window — useful for multi-monitor setups where you want Grom on a second screen while keeping your file tree visible.
 
 - Click the expand arrows button in the header to detach Grom into its own window
-- The sidebar becomes a passive mirror — the **"floating"** pill and a banner confirm it's active
-- The floating window is fully functional — chat, voice input, model switching, all modes work
+- The sidebar becomes a passive mirror: the **"floating"** pill and a banner confirm it's active
+- The floating window is fully functional: chat, voice input, model switching, all modes work
 - Grom's icon changes to the **cloud variant** in the floating window so you always know which panel is live
 - The mic changes Grom's face to the **listening variant** while recording
-- Close the floating window at any time — the sidebar restores automatically
-- The floating panel **persists across VS Code restarts** — it reopens exactly where you left it
+- Close the floating window at any time. The sidebar restores automatically
+- The floating panel **persists across VS Code restarts**. It reopens exactly where you left it
 
 > The sidebar input is disabled while floating is active. Click **Close floating** in the banner to return to the sidebar.
 
@@ -212,17 +269,17 @@ Open it with the brain icon in the header.
 ### Conversations
 
 - Multiple chat sessions, persistent across restarts
-- **Session dates** — the history list shows a relative last-modified timestamp (e.g. "5m ago", "yesterday") next to each session
-- **Prompt history** — up/down arrow in the input cycles your previously sent messages
-- `/compact` trims long histories — a divider marks exactly where the cut was made
+- **Session dates:** the history list shows a relative last-modified timestamp (e.g. "5m ago", "yesterday") next to each session
+- **Prompt history:** up/down arrow in the input cycles your previously sent messages
+- `/compact` trims long histories, and a divider marks exactly where the cut was made
 - Export any conversation as `.md`, import it back to continue
 - Search through any conversation with live highlighting
 - Per-session system prompt override via the chat bubble icon
-- **Context window indicator** — the radial circle in the toolbar shows token usage; hover for exact counts and estimated cost (when pricing is configured in `grom.modelPricing`)
+- **Context window indicator:** the radial circle in the toolbar shows token usage; hover for exact counts and estimated cost (when pricing is configured in `grom.modelPricing`)
 
 ### Custom Prompt Files
 
-Create `.grom/*.md` files in your workspace. A file at `.grom/deploy.md` becomes `/deploy` — shareable with your whole team via git.
+Create `.grom/*.md` files in your workspace. A file at `.grom/deploy.md` becomes `/deploy`, shareable with your whole team via git.
 
 ---
 
@@ -238,8 +295,9 @@ Type `/` to open the command menu:
 | `/tests` | Write unit tests |
 | `/docs` | Write documentation |
 | `/review` | Full code review |
-| `/commit` | Draft a commit message from your actual `git diff` — no `@git` needed |
+| `/commit` | Draft a commit message from your actual `git diff`, no `@git` needed |
 | `/compose` | Multi-file edit mode |
+| `/effort <level>` | Set reasoning effort for the current session: `off`, `low`, `medium`, `high` |
 | `/search <query>` | Web search via DuckDuckGo |
 | `/<name>` | Any `.grom/<name>.md` file in your workspace |
 
@@ -268,19 +326,19 @@ Grom works with local servers (no account or key needed) or cloud providers (bri
 
 Grom runs in VS Code and any VS Code-compatible editor:
 
-- [Visual Studio Code](https://code.visualstudio.com/) — recommended
-- [Google Antigravity](https://antigravity.dev/) — confirmed working
+- [Visual Studio Code](https://code.visualstudio.com/) (recommended)
+- [Google Antigravity](https://antigravity.dev/) (confirmed working)
 - Cursor, Windsurf, and other VS Code forks should work too
 
-**Local — runs entirely on your machine:**
+**Local (runs entirely on your machine):**
 
-- [Ollama](https://ollama.com/) — recommended, free, runs most open models
-- [LM Studio](https://lmstudio.ai/) — great UI for managing models
+- [Ollama](https://ollama.com/): recommended, free, runs most open models
+- [LM Studio](https://lmstudio.ai/): great UI for managing models
 
-**Cloud — optional, requires an API key from each provider:**
+**Cloud (optional, requires an API key from each provider):**
 
-- [OpenAI](https://platform.openai.com/) — GPT-4o, o1, o3-mini
-- [Anthropic](https://console.anthropic.com/) — Claude Sonnet, Claude Opus
+- [OpenAI](https://platform.openai.com/): GPT-4o, o1, o3-mini
+- [Anthropic](https://console.anthropic.com/): Claude Sonnet, Claude Opus
 - [Gemini](https://aistudio.google.com/), [Groq](https://console.groq.com/), [Mistral](https://console.mistral.ai/), [OpenRouter](https://openrouter.ai/), and any OpenAI-compatible endpoint
 
 **Recommended local models:**
@@ -304,32 +362,37 @@ Grom runs in VS Code and any VS Code-compatible editor:
 | `grom.autocompleteModel` | Dedicated FIM model | *(chat model)* |
 | `grom.languageModels` | Per-language model overrides | `{}` |
 | `grom.ragEnabled` | Enable codebase indexing | `true` |
-| `grom.embeddingModel` | Embedding model for semantic RAG — works with Ollama and LM Studio | *(blank)* |
+| `grom.embeddingModel` | Embedding model for semantic RAG, works with Ollama and LM Studio | *(blank)* |
 | `grom.mcpServers` | MCP server definitions | `[]` |
 | `grom.customProviders` | Custom provider endpoints; keys stored securely in OS keychain | `[]` |
 | `grom.robotAnimations` | Enable Grom's animations | `true` |
 | `grom.theme` | UI theme: Grom, Cyberpunk, Classic, High Contrast | `Grom` |
-| `grom.agentEnabled` | Master switch — disables tools globally when off | `true` |
+| `grom.agentEnabled` | Master switch, disables tools globally when off | `true` |
 | `grom.agentMaxIterations` | Max tool-call rounds per task | `20` |
 | `grom.fontSize` | Chat panel font size: `small`, `medium`, `large` | `medium` |
 | `grom.debugLogging` | Write diagnostics to the Grom Output channel | `false` |
 | `grom.hints` | Show in-chat hint cards (e.g. context window full warning) | `true` |
-| `grom.modelCapabilities` | Per-model capability overrides: `{ "model-name": { "tools": true, "vision": false } }`. Overrides auto-detection. | `{}` |
+| `grom.modelCapabilities` | Per-model capability overrides for `tools`, `vision`, and `reasoning`. Keys are partial model names (case-insensitive). Wins over all auto-detection, use to fix wrong detections or force-enable/disable a capability. | `{}` |
 | `grom.modelPricing` | Per-model token pricing and context window size overrides | `{}` |
 | `grom.docSources` | Documentation sources available via `@docs` | `[]` |
 | `grom.presets` | Custom prompt presets shown in the `/` menu | `[]` |
 | `grom.chatLanguageModels` | Per-language chat model overrides (takes priority over `grom.languageModels`) | `{}` |
 | `grom.autocompleteLanguageModels` | Per-language autocomplete model overrides (takes priority over `grom.languageModels`) | `{}` |
 | `grom.customGreeting` | Override the greeting shown in the empty chat state | *(blank)* |
-| `grom.customLogo` | Override the chat logo — URL, `data:` URI, or emoji | *(blank)* |
+| `grom.customLogo` | Override the chat logo, URL, `data:` URI, or emoji | *(blank)* |
+| `grom.reasoningEffort` | Default reasoning effort for new sessions: `off`, `low`, `medium`, `high` | `off` |
+| `grom.showReasoningToggle` | Show the reasoning effort (kettlebell) icon in the toolbar (hidden when `false`) | `true` |
+| `grom.reasoningModels` | Extra model name substrings to treat as reasoning models, extend the built-in list for new or custom models. Example: `["my-r1-finetune"]` | `[]` |
 | `grom.voiceInput` | Enable the mic button in the toolbar | `false` |
 | `grom.voiceModel` | Whisper model: `tiny.en`, `tiny`, `base.en`, `base`, `small.en`, `small` | `tiny.en` |
 | `grom.voiceSensitivity` | Mic energy gate (RMS threshold). Raise if phantom transcriptions appear; lower for quiet mics | `0.010` |
 | `grom.ffmpegPath` | Path to a custom ffmpeg binary (skips the built-in download) | *(blank)* |
 
+The codebase index updates automatically as files change. If search results ever look stale, type `/reindex` (or pick **Reindex** from the `/` menu) to force a full rebuild.
+
 ### Per-Language Model Routing
 
-`grom.languageModels` sets a model for a language in both chat and autocomplete. Use `grom.chatLanguageModels` or `grom.autocompleteLanguageModels` to set them independently — these take priority when set.
+`grom.languageModels` sets a model for a language in both chat and autocomplete. Use `grom.chatLanguageModels` or `grom.autocompleteLanguageModels` to set them independently. These take priority when set.
 
 ```json
 {
@@ -341,11 +404,11 @@ Grom runs in VS Code and any VS Code-compatible editor:
 
 ### Adding a Custom Provider
 
-OpenAI and Anthropic are built-in — select them from the provider dropdown. Use `grom.customProviders` for everything else.
+OpenAI and Anthropic are built-in. Select them from the provider dropdown. Use `grom.customProviders` for everything else.
 
 API keys are **never stored in settings files**. Grom prompts for a key the first time you select a provider that needs one, then stores it securely in the OS keychain (Windows Credential Manager / macOS Keychain / libsecret on Linux). Click the lock icon next to the provider dropdown at any time to update or clear a key.
 
-For custom providers you can also set an `apiKey` field directly in `grom.customProviders` — convenient if you manage settings declaratively, but keep that file out of source control.
+For custom providers you can also set an `apiKey` field directly in `grom.customProviders`. That's convenient if you manage settings declaratively, but keep that file out of source control.
 
 ```json
 [
@@ -382,16 +445,16 @@ For most cloud providers, `name` and `url` are all you need. Optional fields:
 
 ## Context Window
 
-The radial circle in the toolbar shows how full your context window is. Hover it to see the exact token count and window size. When it fills up, `/compact` trims old messages — Grom marks the cut point so you always know what's been removed.
+The radial circle in the toolbar shows how full your context window is. Hover it to see the exact token count and window size. When it fills up, `/compact` trims old messages. Grom marks the cut point so you always know what's been removed.
 
-Grom reads the context window size directly from your model — including architecture-specific keys for Gemma, Mistral, Phi, and other non-Llama families — so the circle and auto-compact threshold are accurate without any manual configuration. Set `grom.modelPricing` to pin a size for a specific model if needed.
+Grom reads the context window size directly from your model, including architecture-specific keys for Gemma, Mistral, Phi, and other non-Llama families, so the circle and auto-compact threshold are accurate without any manual configuration. On Ollama, it prefers the size your model is actually running with (respecting any custom context-length setting you've configured) over the model's raw architectural maximum, so the number reflects what's genuinely available. Set `grom.modelPricing` to pin a size for a specific model if needed.
 
 ---
 
 ## License
 
-[PolyForm Shield 1.0.0](LICENSE) — free to use for any purpose, including commercially. You may not redistribute it as a competing product.
+[PolyForm Shield 1.0.0](LICENSE), free to use for any purpose, including commercially. You may not redistribute it as a competing product.
 
 ---
 
-*Built in Ireland.Shipped with care.*
+*Built in Ireland. Shipped with care.*

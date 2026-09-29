@@ -51,7 +51,7 @@ describe('voice — package.json schema', () => {
   });
 });
 
-// ── webview.html — model picker ───────────────────────────────────────────────
+// ── webview.html: model picker ───────────────────────────────────────────────
 
 describe('voice — model picker HTML', () => {
   for (const id of MODELS) {
@@ -82,7 +82,7 @@ describe('voice — model picker HTML', () => {
   });
 });
 
-// ── webview.html — sensitivity slider ────────────────────────────────────────
+// ── webview.html: sensitivity slider ────────────────────────────────────────
 
 describe('voice — sensitivity slider HTML', () => {
   it('#voice-sensitivity-slider exists', () => {
@@ -113,7 +113,7 @@ describe('voice — sensitivity slider HTML', () => {
   });
 });
 
-// ── webview.html — transcribing / warm-up row ─────────────────────────────────
+// ── webview.html: transcribing / warm-up row ─────────────────────────────────
 
 describe('voice — transcribing row HTML', () => {
   it('#voice-transcribing-row exists', () => {
@@ -127,7 +127,7 @@ describe('voice — transcribing row HTML', () => {
   });
 });
 
-// ── main.js — worker construction ────────────────────────────────────────────
+// ── main.js: worker construction ────────────────────────────────────────────
 
 describe('voice — inline blob worker', () => {
   it('worker is created from a Blob (inline, not a file URL)', () => {
@@ -161,7 +161,7 @@ describe('voice — inline blob worker', () => {
   });
 });
 
-// ── main.js — energy gate ────────────────────────────────────────────────────
+// ── main.js: energy gate ────────────────────────────────────────────────────
 
 describe('voice — energy gate', () => {
   it('_vpEnergyGate variable is declared', () => {
@@ -190,7 +190,7 @@ describe('voice — energy gate', () => {
   });
 });
 
-// ── main.js — PCM accumulation ───────────────────────────────────────────────
+// ── main.js: PCM accumulation ───────────────────────────────────────────────
 
 describe('voice — PCM accumulation', () => {
   it('PCM chunks are merged into a single buffer before transcription', () => {
@@ -211,7 +211,7 @@ describe('voice — PCM accumulation', () => {
   });
 });
 
-// ── main.js — silence pad ────────────────────────────────────────────────────
+// ── main.js: silence pad ────────────────────────────────────────────────────
 
 describe('voice — silence pad', () => {
   it('a silence pad is prepended before sending to Whisper', () => {
@@ -230,7 +230,7 @@ describe('voice — silence pad', () => {
   });
 });
 
-// ── main.js — model state ────────────────────────────────────────────────────
+// ── main.js: model state ────────────────────────────────────────────────────
 
 describe('voice — model state management', () => {
   it('_vpModelId variable is declared', () => {
@@ -264,7 +264,7 @@ describe('voice — model state management', () => {
   });
 });
 
-// ── main.js — warm-up ────────────────────────────────────────────────────────
+// ── main.js: warm-up ────────────────────────────────────────────────────────
 
 describe('voice — model pre-warming', () => {
   it('_vpWarming flag is declared', () => {
@@ -298,7 +298,7 @@ describe('voice — model pre-warming', () => {
   });
 });
 
-// ── styles.css — voice classes ───────────────────────────────────────────────
+// ── styles.css: voice classes ───────────────────────────────────────────────
 
 describe('voice — CSS', () => {
   it('.voice-model-picker exists in styles.css', () => {

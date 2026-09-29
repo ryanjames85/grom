@@ -10,7 +10,7 @@ import { expect } from 'chai';
   Range: class { s: any; e: any; constructor(s: any, e: any) { this.s = s; this.e = e; } },
 };
 
-// Import the pure helper functions by re-exporting them for test — they are module-private
+// Import the pure helper functions by re-exporting them for test; they are module-private
 // so we test them indirectly through the exported cleanCompletion-equivalent logic.
 // We duplicate the logic here to keep editor.ts clean.
 function cleanCompletion(raw: string): string {

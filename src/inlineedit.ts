@@ -1,17 +1,17 @@
 /**
  * inlineedit.ts
  *
- * "Edit selection" command: prompts the user for an instruction, sends the selected code + instruction
- * to the LLM, and opens a VS Code diff view so the user can Accept or Reject the rewrite.
+ * Yields an inline rewrite: prompts for an instruction, sends the selected code to the LLM,
+ * and opens a VS Code diff view so the user can Accept or Reject the result.
  *
- * NOTE: This is intentionally a single-shot call (not streaming) — inline edits are small enough
+ * NOTE: This is intentionally a single-shot call (not streaming), inline edits are small enough
  * that waiting for the full result before showing the diff is the cleaner UX.
  */
 
 import * as vscode from 'vscode';
 import { LocalLLMClient } from './client';
 
-/** Entry point for the grom.inlineEdit command — prompts for an instruction and rewrites the selection. */
+/** Entry point for the grom.inlineEdit command; prompts for an instruction and rewrites the selection. */
 export async function inlineEdit(context: vscode.ExtensionContext) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;

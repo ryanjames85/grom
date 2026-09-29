@@ -6,7 +6,7 @@
  * Each configured server is launched as a child process; tool calls are sent as
  * JSON-RPC requests and results are returned as strings to the agent loop.
  *
- * McpManager is the public interface — it reads server config from VS Code settings,
+ * McpManager is the public interface; it reads server config from VS Code settings,
  * launches all configured servers on initialize(), and exposes their tools via getAllTools().
  * Tool names are namespaced as "serverName__toolName" to avoid collisions across servers.
  *
@@ -197,7 +197,7 @@ export class McpManager {
 
   /**
    * Disposes any running servers, then reads grom.mcpServers from VS Code settings
-   * and launches each configured server. Failed servers are reported as warnings — they
+   * and launches each configured server. Failed servers are reported as warnings; they
    * don't prevent other servers from starting.
    */
   async initialize(): Promise<void> {

@@ -361,7 +361,7 @@ describe('RagIndex endpoint caching', () => {
     });
 
     const idx = new RagIndex();
-    // Two build calls — second is incremental with a changed file
+    // Two build calls: second is incremental with a changed file
     await idx.build(FILE, EMB_CONFIG, true);
     await idx.build([{ path: 'a.ts', content: 'hello world foo bar baz qux changed' }], EMB_CONFIG);
 
@@ -380,7 +380,7 @@ describe('RagIndex endpoint caching', () => {
     await idx.build(FILE, EMB_CONFIG, true);
     fetchStub.resetHistory();
 
-    // Second call — should go straight to /v1/embeddings
+    // Second call: should go straight to /v1/embeddings
     await idx.build([{ path: 'a.ts', content: 'hello world foo bar changed' }], EMB_CONFIG);
 
     const apiEmbedCalls = fetchStub.args.filter((a: any[]) => (a[0] as string).includes('/api/embed'));
@@ -398,7 +398,7 @@ describe('RagIndex endpoint caching', () => {
     await idx.build(FILE, EMB_CONFIG, true);
     const firstProbes = probeCount;
 
-    // Switching to a different apiUrl resets the cache — should probe again
+    // Switching to a different apiUrl resets the cache; should probe again
     await idx.build(FILE, { ...EMB_CONFIG, apiUrl: 'http://localhost:1234' }, true);
     expect(probeCount).to.be.greaterThan(firstProbes);
   });
@@ -501,7 +501,7 @@ describe('RagIndex incremental re-indexing', () => {
     await idx.build(FILE);
     const chunksBefore = idx.getStatus().chunks;
 
-    // Second build with same content — should be a no-op
+    // Second build with same content; should be a no-op
     await idx.build(FILE);
     expect(idx.getStatus().chunks).to.equal(chunksBefore);
   });
@@ -567,7 +567,7 @@ describe('RagIndex incremental re-indexing', () => {
 
       fetchStub.resetHistory();
 
-      // Only b.ts changes — only b.ts should be re-embedded
+      // Only b.ts changes: only b.ts should be re-embedded
       await idx.build([
         { path: 'a.ts', content: 'function alpha() {}' },        // unchanged
         { path: 'b.ts', content: 'function beta() { return 1; }' } // changed
@@ -582,7 +582,7 @@ describe('RagIndex incremental re-indexing', () => {
   });
 
   it('force=true during active build is queued and executed after current build finishes', async () => {
-    // Use an embedding config so build() has an await point — creates a real async gap
+    // Use an embedding config so build() has an await point; creates a real async gap
     // where the second build() call arrives before the first completes.
     const fetchStub = sinon.stub(global, 'fetch' as any);
     fetchStub.resolves({ ok: true, json: async () => ({ embeddings: [[0.1, 0.2, 0.3]] }) });
@@ -592,7 +592,7 @@ describe('RagIndex incremental re-indexing', () => {
       const firstFiles = [{ path: 'a.ts', content: 'function alphaHandler(req: Request) { return req.body; }' }];
       const secondFiles = [{ path: 'b.ts', content: 'function betaProcessor(input: string) { return input.trim(); }' }];
 
-      // Start first build — it awaits _embedChunks internally, creating the async gap
+      // Start first build: it awaits _embedChunks internally, creating the async gap
       const first = idx.build(firstFiles, embConfig);
       // Fire force rebuild immediately while first is suspended at await
       idx.build(secondFiles, undefined, true);
@@ -627,7 +627,7 @@ describe('RagIndex incremental re-indexing', () => {
       const idx = new RagIndex();
       const embConfig = { model: 'nomic-embed-text', apiUrl: 'http://localhost:11434' };
       const firstFiles = [{ path: 'a.ts', content: 'function alphaHandler(req: Request) { return req.body; }' }];
-      // Unique gibberish tokens — no shared subwords between the two files so BM25 scores
+      // Unique gibberish tokens: no shared subwords between the two files so BM25 scores
       // are exactly zero for the wrong file after the rebuild.
       const staleFiles = [{ path: 'stale.ts', content: 'const XQPZBF42 = "xqpzbf42 vhglnw unique sentinel value"' }];
       const latestFiles = [{ path: 'latest.ts', content: 'const RMDKJW99 = "rmdkjw99 tnspxv unique sentinel value"' }];
@@ -638,9 +638,9 @@ describe('RagIndex incremental re-indexing', () => {
 
       await first;
 
-      // 'rmdkjw99' only exists in latest.ts — should be indexed
+      // 'rmdkjw99' only exists in latest.ts; should be indexed
       expect(idx.query('rmdkjw99')).to.include('latest.ts');
-      // 'xqpzbf42' only exists in stale.ts — should NOT be indexed after latest rebuild
+      // 'xqpzbf42' only exists in stale.ts; should NOT be indexed after latest rebuild
       expect(idx.query('xqpzbf42')).to.equal('');
     } finally {
       sinon.restore();
@@ -669,14 +669,14 @@ describe('ConversationRag', () => {
   it('returns empty string when history has fewer turns than excludeLast', () => {
     const rag = new ConversationRag();
     rag.build(makeHistory([['user', 'hello'], ['assistant', 'hi'], ['user', 'how are you']]));
-    // default excludeLast=4, only 3 turns — all excluded
+    // default excludeLast=4, only 3 turns; all excluded
     expect(rag.query('hello')).to.equal('');
   });
 
   it('returns empty string when query terms appear only in excluded recent turns, not in candidates', () => {
     const rag = new ConversationRag();
     // excludeLast=1 → only index 0 is a candidate; index 1 is excluded
-    // The candidate has no overlap with the query; the excluded turn does — so nothing is returned
+    // The candidate has no overlap with the query; the excluded turn does, so nothing is returned
     rag.build(makeHistory([
       ['user', 'setting up the project structure and folders'],
       ['assistant', 'TypeScript compiler configuration for this session'],
