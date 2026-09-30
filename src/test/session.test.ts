@@ -723,13 +723,15 @@ describe('compacted history archive', () => {
     const idx = provider.indexOf('private async _archiveTrimmedMessages');
     const body = provider.slice(idx, idx + 900);
     expect(body, 'reads the existing archive first').to.include('existing = Buffer.from');
-    expect(body, 'writes existing content back plus the new messages').to.include('existing + this._messagesToMarkdown(trimmed)');
+    expect(body, 'writes existing content back plus the new messages').to.include('existing + messagesToMarkdown(trimmed)');
   });
 
   it('export, import, and the archive all reuse the same markdown serialiser and parser', () => {
-    expect(provider, '_exportChat should use the shared serialiser').to.include('this._messagesToMarkdown(current.history)');
-    expect(provider, '_importChat should use the shared parser').to.include('this._markdownToMessages(raw)');
-    expect(provider, '_expandCompactedHistory should use the shared parser too').to.include('this._markdownToMessages(raw)');
+    // messagesToMarkdown/markdownToMessages moved to session-markdown.ts (v0.6.0 provider.ts
+    // split, chunk 1) as pure functions; provider.ts now imports and calls them directly.
+    expect(provider, '_exportChat should use the shared serialiser').to.include('messagesToMarkdown(current.history)');
+    expect(provider, '_importChat should use the shared parser').to.include('markdownToMessages(raw)');
+    expect(provider, '_expandCompactedHistory should use the shared parser too').to.include('markdownToMessages(raw)');
   });
 
   it('a missing archive (nothing to expand) is reported distinctly from an empty one, not silently ignored', () => {

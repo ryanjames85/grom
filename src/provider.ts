@@ -31,6 +31,7 @@ import { AgentLoop } from './agent-loop';
 import { estimateTokens, estimateHistoryTokens, getNonSystemMessages, isCompactMarker, COMPACT_EXTRACTION_PROMPT, buildExtractionInput } from './utils';
 import { log, logError } from './logger';
 import { VoiceManager, findFfmpeg } from './voice';
+import { messagesToMarkdown, markdownToMessages } from './session-markdown';
 import { isReasoningModel, getReasoningControl } from './model-caps';
 
 const MAX_GREETING_LEN = 200;
@@ -1073,40 +1074,6 @@ ${convText}`;
 
   /** Same markdown shape used by export, import, and the on-disk compaction archive, so all
    *  three stay readable by the same parser below instead of drifting into separate formats. */
-  private _messagesToMarkdown(messages: ChatMessage[]): string {
-    let markdown = '';
-    messages.forEach(msg => {
-      if (isCompactMarker(msg)) markdown += `---\n*Earlier messages were compacted.*\n\n`;
-      else if (msg.role !== 'system') markdown += `### ${msg.role === 'user' ? 'User' : 'Assistant'}\n${msg.content}\n\n`;
-    });
-    return markdown;
-  }
-
-  private _markdownToMessages(raw: string): { title: string; history: ChatMessage[] } {
-    const lines = raw.split('\n');
-    const history: ChatMessage[] = [];
-    let title = 'Imported Chat';
-    let currentRole: 'user' | 'assistant' | null = null;
-    let currentContent: string[] = [];
-
-    const flush = () => {
-      if (currentRole && currentContent.length > 0) {
-        history.push({ role: currentRole, content: currentContent.join('\n').trim() });
-        currentRole = null; currentContent = [];
-      }
-    };
-
-    for (const line of lines) {
-      if (line.startsWith('# ')) { title = line.slice(2).replace('Chat Session: ', '').trim(); }
-      else if (line === '---') { flush(); history.push({ role: 'system', content: '__compacted__' }); }
-      else if (line === '### User') { flush(); currentRole = 'user'; }
-      else if (line === '### Assistant') { flush(); currentRole = 'assistant'; }
-      else if (currentRole && !line.startsWith('> ')) { currentContent.push(line); }
-    }
-    flush();
-    return { title, history };
-  }
-
   /** Path to the ever-growing, never-trimmed archive for one session's compacted-away messages.
    *  Lives in the extension's own workspace storage, never sent to the model, so keeping it
    *  costs disk space only, not tokens. undefined when no workspace folder is open. */
@@ -1126,7 +1093,7 @@ ${convText}`;
       await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(this._context.storageUri!, 'archives'));
       let existing = '';
       try { existing = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8'); } catch { /* first compaction for this session */ }
-      await vscode.workspace.fs.writeFile(uri, Buffer.from(existing + this._messagesToMarkdown(trimmed)));
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(existing + messagesToMarkdown(trimmed)));
     } catch (e) {
       logError('[grom] failed to archive compacted messages', e);
     }
@@ -1138,7 +1105,7 @@ ${convText}`;
     if (!uri) { this._post({ type: 'archivedHistory', sessionId: id, messages: null }); return; }
     try {
       const raw = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
-      const { history } = this._markdownToMessages(raw);
+      const { history } = markdownToMessages(raw);
       this._post({ type: 'archivedHistory', sessionId: id, messages: history.filter(m => m.role !== 'system') });
     } catch {
       // No archive file: either nothing has been compacted yet, or this session was compacted
@@ -1150,7 +1117,7 @@ ${convText}`;
   private async _exportChat() {
     const current = this._sessionManager.getCurrentSession();
     if (current.history.length === 0) return;
-    const markdown = `# Chat Session: ${current.title}\n\n> Import this file into Grom to continue the conversation.\n\n` + this._messagesToMarkdown(current.history);
+    const markdown = `# Chat Session: ${current.title}\n\n> Import this file into Grom to continue the conversation.\n\n` + messagesToMarkdown(current.history);
     const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(`grom-chat-${current.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`), filters: { 'Markdown': ['md'] } });
     if (uri) { await vscode.workspace.fs.writeFile(uri, Buffer.from(markdown)); vscode.window.showInformationMessage(`Exported to ${uri.fsPath}`); }
   }
@@ -1159,7 +1126,7 @@ ${convText}`;
     const uris = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Markdown': ['md'] }, title: 'Import Grom Chat' });
     if (!uris || uris.length === 0) return;
     const raw = Buffer.from(await vscode.workspace.fs.readFile(uris[0])).toString('utf8');
-    const { title, history } = this._markdownToMessages(raw);
+    const { title, history } = markdownToMessages(raw);
 
     if (history.length === 0) { vscode.window.showWarningMessage('No messages found in file.'); return; }
 
