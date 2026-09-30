@@ -1567,6 +1567,32 @@ describe('fetchContextLength', () => {
     expect(fetchStub.callCount).to.equal(4); // 3 probes first call + 1 cached second call
   });
 
+  it('falls back to the full probe chain when the cached endpoint stops working, instead of permanently returning null', async () => {
+    // First call: caches 'lmstudio-native'.
+    const nativeResp = showOk({ models: [{ key: 'model', loaded_instances: [{ config: { context_length: 65536 } }] }] });
+    fetchStub.onCall(0).resolves(notOk());  // api/ps
+    fetchStub.onCall(1).resolves(notOk());  // api/show
+    fetchStub.onCall(2).resolves(nativeResp); // lmstudio-native
+    const first = await fetchContextLength('http://localhost:1234', 'model');
+    expect(first).to.equal(65536);
+
+    // Second call: the model changed and the cached lmstudio-native probe no longer finds it -
+    // must NOT just return null; must fall through and try the rest of the chain.
+    fetchStub.onCall(3).resolves(notOk());  // cached lmstudio-native retried, now fails
+    fetchStub.onCall(4).resolves(notOk());  // fallback chain: api/ps
+    fetchStub.onCall(5).resolves(notOk());  // fallback chain: api/show
+    fetchStub.onCall(6).resolves(notOk());  // fallback chain: lmstudio-native (again, fails again)
+    fetchStub.onCall(7).resolves(showOk({ data: [{ id: 'model', context_length: 32768 }] })); // openai-v1 succeeds
+    const second = await fetchContextLength('http://localhost:1234', 'model');
+    expect(second, 'must recover via a different probe instead of staying null forever').to.equal(32768);
+
+    // Third call: the newly-cached 'openai-v1' endpoint is now used directly again.
+    fetchStub.onCall(8).resolves(showOk({ data: [{ id: 'model', context_length: 32768 }] }));
+    const third = await fetchContextLength('http://localhost:1234', 'model');
+    expect(third).to.equal(32768);
+    expect(fetchStub.callCount, 'third call should hit only the newly cached endpoint').to.equal(9);
+  });
+
   it('separate server URLs maintain independent cache entries', async () => {
     // Ollama at :11434: api/ps empty, api/show works
     fetchStub.onFirstCall().resolves(notOk());                                                    // api/ps

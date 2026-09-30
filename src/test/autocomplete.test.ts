@@ -1,4 +1,6 @@
 import { expect } from 'chai';
+import * as fs from 'fs';
+import * as path from 'path';
 
 (global as any).vscode = {
   workspace: { getConfiguration: () => ({ get: (k: string, d: any) => d }) },
@@ -98,5 +100,37 @@ describe('cleanCompletion sad path', () => {
   it('does not strip fence mid-string (only leading/trailing)', () => {
     const result = cleanCompletion('const x = "```code```";');
     expect(result).to.equal('const x = "```code```";');
+  });
+});
+
+// ── partial-accept buffer document scoping (v0.5.7 bug fix) ─────────────────
+
+describe('GromInlineCompletionProvider — partial buffer is scoped to the document it came from', () => {
+  const ts = fs.readFileSync(path.join(process.cwd(), 'src', 'autocomplete.ts'), 'utf8');
+
+  it('the partial-accept reuse check requires the document to match, not just that a buffer exists', () => {
+    // Regression test: GromInlineCompletionProvider is registered once globally for every file.
+    // The reuse check only verified a non-empty buffer and a stored position, never that the
+    // CURRENT document was the one the buffer was generated for - so accepting a partial
+    // completion in file A, then switching to file B and typing (an Automatic trigger), served
+    // file A's leftover ghost text at an unrelated location in file B.
+    const idx = ts.indexOf('If triggered after partial accept');
+    expect(idx, 'partial-accept reuse comment not found').to.be.greaterThan(-1);
+    const body = ts.slice(idx, idx + 500);
+    expect(body, 'must compare the current document against the one the buffer was captured for').to.include('this._partialDocumentUri === document.uri.toString()');
+  });
+
+  it('the document URI is captured alongside the buffer when a fresh completion is stored', () => {
+    const idx = ts.indexOf('Store full completion for partial accept');
+    expect(idx, 'buffer-store comment not found').to.be.greaterThan(-1);
+    const body = ts.slice(idx, idx + 300);
+    expect(body).to.include('this._partialDocumentUri = document.uri.toString()');
+  });
+
+  it('clearPartial() resets the document scope too, not just the buffer and position', () => {
+    const idx = ts.indexOf('clearPartial()');
+    expect(idx, 'clearPartial not found').to.be.greaterThan(-1);
+    const line = ts.slice(idx, ts.indexOf('\n', idx));
+    expect(line).to.include('this._partialDocumentUri = undefined');
   });
 });

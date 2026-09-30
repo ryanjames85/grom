@@ -204,12 +204,12 @@ window.cycleReasoningEffort = () => {
 window.toggleHistory = () => { const overlay = document.getElementById('history-overlay'); overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex'; };
 
 window.switchHistoryTab = (tab) => {
-  const isSessions = tab === 'sessions';
-  document.getElementById('session-list').style.display = isSessions ? '' : 'none';
-  const tlp = document.getElementById('task-log-panel');
-  tlp.style.display = isSessions ? 'none' : 'flex';
-  document.getElementById('tab-sessions').classList.toggle('active', isSessions);
-  document.getElementById('tab-tasklog').classList.toggle('active', !isSessions);
+  document.getElementById('session-list').style.display = tab === 'sessions' ? '' : 'none';
+  document.getElementById('task-log-panel').style.display = tab === 'tasklog' ? 'flex' : 'none';
+  document.getElementById('prompt-history-panel').style.display = tab === 'prompthistory' ? 'flex' : 'none';
+  document.getElementById('tab-sessions').classList.toggle('active', tab === 'sessions');
+  document.getElementById('tab-tasklog').classList.toggle('active', tab === 'tasklog');
+  document.getElementById('tab-prompthistory').classList.toggle('active', tab === 'prompthistory');
 };
 
 function renderTaskLog(entries) {
@@ -242,6 +242,59 @@ function appendTaskLogEntry(entry) {
   applyDeepLinks(div);
   if (list) list.prepend(div);
 }
+
+/** Renders the Prompt History tab: newest first, each entry gets a hover-revealed Copy button
+ *  (matching the code-block button convention), text is escaped since it's raw user input. */
+function renderPromptHistory(entries) {
+  const list = document.getElementById('prompt-history-list');
+  const empty = document.getElementById('prompt-history-empty');
+  if (!list || !empty) return;
+  if (!entries || !entries.length) { empty.style.display = ''; list.innerHTML = ''; return; }
+  empty.style.display = 'none';
+  list.innerHTML = entries.slice().reverse().map((text, i) => {
+    const idx = entries.length - 1 - i;
+    return `<div class="prompt-history-entry">
+      <div class="prompt-history-text">${escapeHtml(text)}</div>
+      <button class="prompt-history-copy-btn" onclick="window.copyPromptHistoryEntry(this, ${idx})" title="Copy">Copy</button>
+    </div>`;
+  }).join('');
+  list.dataset.entries = JSON.stringify(entries);
+}
+
+window.copyPromptHistoryEntry = (btn, idx) => {
+  const entries = JSON.parse(document.getElementById('prompt-history-list').dataset.entries || '[]');
+  const text = entries[idx];
+  if (text === undefined) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const original = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => { btn.textContent = original; }, 1200);
+  }).catch(() => {});
+};
+
+// Destructive, project-wide action: confirmed with the same click-twice pattern used for
+// disableThinking (VS Code webviews block window.confirm()/alert()/prompt() silently, so a
+// native dialog would just do nothing here).
+window.clearPromptHistoryConfirm = (btn) => {
+  if (btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Click to confirm';
+    btn.title = 'Click again to permanently clear this project\'s prompt history';
+    clearTimeout(btn._confirmTimer);
+    btn._confirmTimer = setTimeout(() => {
+      btn.dataset.confirming = '0';
+      btn.textContent = 'Clear';
+      btn.title = "Clear this project's prompt history";
+    }, 4000);
+    return;
+  }
+  clearTimeout(btn._confirmTimer);
+  btn.dataset.confirming = '0';
+  btn.textContent = 'Clear';
+  btn.title = "Clear this project's prompt history";
+  _inputHistory = []; _historyIdx = -1;
+  vscode.postMessage({ type: 'clearPromptHistory' });
+};
 
 function linkifyPaths(text) {
   const pathRegex = /(?:\s|^)([\w\-][\w\-\/]*\.\w{1,8})(?:\s|$|[.,!?;])/g;
@@ -825,7 +878,7 @@ sendBtn.onclick = () => {
   renderMsg('user', val, [...pendingImages]);
   let fullText = val; if (uploadedContext.length > 0) { fullText += "\n\nADDITIONAL UPLOADED CONTEXT:\n" + uploadedContext.map(u => `[File: ${u.name}]\n${u.content}`).join('\n\n'); }
   vscode.postMessage({ type: 'send', text: fullText, images: [...pendingImages], mode: currentMode });
-  if (val && (_inputHistory.length === 0 || _inputHistory[_inputHistory.length - 1] !== val)) { _inputHistory.push(val); if (_inputHistory.length > 50) _inputHistory.shift(); }
+  if (val && (_inputHistory.length === 0 || _inputHistory[_inputHistory.length - 1] !== val)) { _inputHistory.push(val); if (_inputHistory.length > 50) _inputHistory.shift(); renderPromptHistory(_inputHistory); }
   _historyIdx = -1;
   prompt.value = ''; currentAiText = ""; currentAiDiv = renderMsg('ai', '');
   currentAiDiv.querySelector('.msg-body').innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span><span class="elapsed-time"></span></div><div class="ai-content"></div>';
@@ -1497,6 +1550,16 @@ window.addEventListener('message', e => {
   const m = e.data;
   switch (m.type) {
     case 'filesUsed': _lastAutoFiles = m.files || []; updateContextChips(_lastAutoFiles); break;
+    case 'languageOverrideActive': {
+      const badge = document.getElementById('language-override-badge');
+      if (m.active) {
+        badge.style.display = '';
+        badge.title = `${m.language} requests currently route to ${m.model} (grom.chatLanguageModels), not the model shown`;
+      } else {
+        badge.style.display = 'none';
+      }
+      break;
+    }
     case 'showMemory':
       _memoryOriginal = m.memory || '';
       document.getElementById('memory-editor').value = _memoryOriginal;
@@ -1537,6 +1600,10 @@ window.addEventListener('message', e => {
     }
     case 'compacting':
     case 'compacted': {
+      // Compaction runs async (up to 20s for the summary call) against the session that was active
+      // when it was triggered, not whatever session is on screen when it finishes - if the user
+      // switched sessions in the meantime, the notice must not land on the wrong conversation.
+      if (m.sessionId && m.sessionId !== _currentSessionId) break;
       // A single compaction fires BOTH events (start, then finish), and both reach this handler —
       // without this, one compact action left two stacked notices behind. Only one marker ever
       // survives in the saved history at a time, so the live chat should only ever show one too.
@@ -1594,6 +1661,7 @@ window.addEventListener('message', e => {
       }
       _updateEffortVisibility();
       _inputHistory = m.promptHistory || []; _historyIdx = -1;
+      renderPromptHistory(_inputHistory);
       document.body.classList.remove('font-small', 'font-medium', 'font-large');
       document.body.classList.add('font-' + (m.fontSize || 'medium'));
 
@@ -1714,6 +1782,17 @@ window.addEventListener('message', e => {
           });
       }
       break;
+    // A permanent record on this one reply of which model actually answered it, since the
+    // toolbar dropdown always shows the global default and never a per-language override that
+    // was actually used for a specific request. Attached only to the div this exact request
+    // owns (same staleness guard as 'chunk' below), so it never lands on the wrong message if
+    // the user has already moved on by the time this arrives.
+    case 'modelOverrideUsed': if (currentAiDiv && currentAiDiv._requestId === _requestId && !currentAiDiv.querySelector('.model-override-note')) {
+      const note = document.createElement('div');
+      note.className = 'model-override-note';
+      note.textContent = `🔀 via ${m.model} (${m.language} override)`;
+      currentAiDiv.insertBefore(note, currentAiDiv.firstChild);
+    } break;
     case 'chunk': if (currentAiDiv && currentAiDiv._requestId === _requestId) {
       currentAiText += m.text;
       // updateAiDisplay owns the loading dots' visibility itself now (see its stillWorking check),
@@ -1895,7 +1974,9 @@ window.addEventListener('message', e => {
           avatar.className = 'nudge-avatar'; nudge.appendChild(avatar);
         }
         const body = document.createElement('div'); body.className = 'msg-body nudge-body';
-        body.innerHTML = `Context is <strong>${m.percent}% full</strong>. Consider running <code>/compact</code> to trim history and keep responses accurate.`;
+        body.innerHTML = m.contextKnown
+          ? `Context is <strong>${m.percent}% full</strong>. Consider running <code>/compact</code> to trim history and keep responses accurate.`
+          : `Context size couldn't be detected for this model. The percentage above is a conservative estimate. This conversation may be getting large; <code>/compact</code> is available if needed.`;
         const btn = document.createElement('button'); btn.className = 'nudge-btn';
         btn.textContent = 'Run /compact';
         btn.onclick = () => { prompt.value = '/compact'; sendBtn.onclick(); nudge.remove(); };
@@ -2020,13 +2101,23 @@ window.addEventListener('message', e => {
       _setReasoningEffort(m.effort);
       break;
     }
+    case 'promptHistoryUpdated': {
+      _inputHistory = m.history || []; _historyIdx = -1;
+      renderPromptHistory(_inputHistory);
+      break;
+    }
     case 'usageUpdate': {
       const circle = document.getElementById('usage-fill'), circ = 56.5;
       circle.style.strokeDashoffset = circ - (m.contextPercent / 100) * circ;
       const total = (m.inputTokens || 0) + (m.outputTokens || 0);
       const totalCost = (m.inputCost || 0) + (m.outputCost || 0);
       const costStr = totalCost > 0 ? ` • $${totalCost.toFixed(4)}` : '';
-      document.getElementById('usage-display').title = `${total.toLocaleString()} / ${(m.contextWindow || 0).toLocaleString()} tokens (${m.contextPercent || 0}%)${costStr}`;
+      // When the provider's real context size couldn't be detected, say so plainly rather than
+      // showing a fallback number with the same confident phrasing as a real detected value.
+      const windowStr = m.contextKnown
+        ? `${(m.contextWindow || 0).toLocaleString()} tokens (${m.contextPercent || 0}%)`
+        : `~${(m.contextWindow || 0).toLocaleString()} tokens, context size unknown, estimate shown`;
+      document.getElementById('usage-display').title = `${total.toLocaleString()} / ${windowStr}${costStr}`;
       break;
     }
     case 'setTheme':

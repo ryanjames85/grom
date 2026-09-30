@@ -1,48 +1,13 @@
 // @ts-nocheck
 const sinon = require('sinon');
 const cp = require('child_process');
+const { installVscodeMock } = require('./_vscode-mock');
 
-// self-contained mock
-const vscodeMock = {
-  workspace: {
-    workspaceFolders: [{ uri: { fsPath: '/test-workspace' } }],
-    fs: {
-      readFile: sinon.stub(),
-      writeFile: sinon.stub(),
-      createDirectory: sinon.stub(),
-      readDirectory: sinon.stub(),
-      delete: sinon.stub(),
-    },
-    asRelativePath: (uri) => (uri.fsPath || uri || '').replace('/test-workspace/', ''),
-    findFiles: sinon.stub(),
-    openTextDocument: sinon.stub().resolves({}),
-  },
-  window: {
-    activeTerminal: { show: sinon.stub(), sendText: sinon.stub() },
-    createTerminal: sinon.stub().returns({ show: sinon.stub(), sendText: sinon.stub() }),
-    showTextDocument: sinon.stub(),
-  },
-  Uri: {
-    joinPath: (...args) => ({ fsPath: args.map(a => a.fsPath || a).join('/') }),
-    file: (path) => ({ fsPath: path }),
-  },
-  FileType: {
-    File: 1,
-    Directory: 2,
-  }
-};
-
-const Module = require('module');
-const originalRequire = Module.prototype.require;
-Module.prototype.require = function(id) {
-  if (id === 'vscode') return vscodeMock;
-  return originalRequire.apply(this, arguments);
-};
-
-global.vscode = vscodeMock;
-
+// This file's own require('../builtin-tools') must see the REAL module, not a stub some
+// other test file installed and never cleaned up (see project_test_harness_bug.md) — restore
+// the patch in after() so it can never leak into whatever mocha loads next.
+const { mock: vscode, restore: restoreVscodeMock } = installVscodeMock();
 const { executeBuiltinTool } = require('../builtin-tools');
-const vscode = vscodeMock;
 
 let expect;
 
@@ -54,6 +19,8 @@ describe('Builtin Tools', () => {
     const chai = await import('chai');
     expect = chai.expect;
   });
+
+  after(restoreVscodeMock);
 
   beforeEach(() => {
     fetchStub = sinon.stub(global, 'fetch');
@@ -92,6 +59,15 @@ describe('Builtin Tools', () => {
 
     it('returns error for absolute paths', async () => {
       const result = await executeBuiltinTool('read_file', { path: 'C:/windows/system32/cmd.exe' });
+      expect(result).to.include('Path traversal or absolute paths not allowed');
+    });
+
+    it('returns error for a leading-slash absolute path, not just drive-letter ones', async () => {
+      // Regression coverage: safePath used to strip the leading slash before checking for one,
+      // making that half of the check permanently dead code (same bug class fixed in
+      // /compose's applyComposerPatches). Not currently exploitable since the result still goes
+      // through Uri.joinPath, but the check itself must actually run.
+      const result = await executeBuiltinTool('read_file', { path: '/etc/passwd' });
       expect(result).to.include('Path traversal or absolute paths not allowed');
     });
 
@@ -208,6 +184,31 @@ describe('Builtin Tools', () => {
       vscode.workspace.fs.readFile.resolves(Buffer.from('line 1\nmatch me\nline 3'));
       const result = await executeBuiltinTool('search_files', { pattern: 'match' });
       expect(result).to.include('src/test.ts:2: match me');
+    });
+
+    it('returns a clear error instead of silently matching everything when pattern is missing', async () => {
+      const result = await executeBuiltinTool('search_files', {});
+      expect(result).to.include("'pattern'");
+      expect(vscode.workspace.findFiles.called, 'must not search at all without a real pattern').to.equal(false);
+    });
+
+    it('returns a clear error when pattern is not a string', async () => {
+      const result = await executeBuiltinTool('search_files', { pattern: 123 });
+      expect(result).to.include("'pattern'");
+    });
+
+    it('does not hang on a catastrophic-backtracking pattern against a long line (v0.5.7 bug fix)', async () => {
+      // Regression test: `pattern` is model-controlled and gets compiled straight into a RegExp
+      // tested against every line of every matched file. A classic ReDoS pattern like (a+)+b
+      // against a sufficiently long non-matching line can take exponential time with no built-in
+      // timeout - this used to test the FULL line (a long minified file, a huge log line), now
+      // it's capped before testing so the worst case stays bounded.
+      vscode.workspace.findFiles.resolves([{ fsPath: '/test-workspace/evil.ts' }]);
+      const longLine = 'a'.repeat(5000) + '!'; // no trailing 'b', forces worst-case backtracking
+      vscode.workspace.fs.readFile.resolves(Buffer.from(longLine));
+      const start = Date.now();
+      await executeBuiltinTool('search_files', { pattern: '(a+)+b' });
+      expect(Date.now() - start, 'must stay fast even against a classic ReDoS pattern on a long line').to.be.lessThan(2000);
     });
   });
 

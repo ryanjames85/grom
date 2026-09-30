@@ -321,3 +321,40 @@ describe('voice — CSS', () => {
       '.voice-download-row CSS missing');
   });
 });
+
+// ── dispose() timer cleanup (v0.5.7 bug fix) ────────────────────────────────
+
+describe('voice — dispose() clears both recording timers', () => {
+  const ts = fs.readFileSync(path.join(root, 'src', 'voice.ts'), 'utf8');
+
+  it('dispose() clears _maxRecordTimer and _chunkTimer, not just the ffmpeg process', () => {
+    // Regression test: dispose() used to only call _killProc(), leaving both timers armed if
+    // the extension/webview was disposed mid-recording. _maxRecordTimer would still fire _stop()
+    // against a possibly-torn-down webview, and _chunkTimer (a setInterval) would keep re-firing
+    // indefinitely since nothing else ever clears it, holding `this` alive forever.
+    const idx = ts.indexOf('dispose() {');
+    expect(idx, 'dispose() not found').to.be.greaterThan(-1);
+    const body = ts.slice(idx, idx + 700);
+    expect(body, 'must clear _maxRecordTimer in dispose()').to.include('clearTimeout(this._maxRecordTimer)');
+    expect(body, 'must clear _chunkTimer in dispose()').to.include('clearInterval(this._chunkTimer)');
+  });
+});
+
+// ── recording length never exceeds what gets transcribed (v0.5.7 bug fix) ──
+
+describe('voice — MAX_RECORD_MS cannot exceed what the webview will actually transcribe', () => {
+  const ts = fs.readFileSync(path.join(root, 'src', 'voice.ts'), 'utf8');
+
+  it('MAX_RECORD_MS (extension side) does not exceed _VP_MAX_SAMPLES (webview side, 28s @ 16kHz)', () => {
+    // Regression test: transcription only ever runs once, on the final chunk, and truncates
+    // anything beyond _VP_MAX_SAMPLES (16000 * 28 = 28s of audio) with no partial transcript
+    // ever produced for the truncated tail. MAX_RECORD_MS used to allow recording up to 30s,
+    // silently dropping the last ~2 seconds of any recording that ran that long.
+    const m = ts.match(/MAX_RECORD_MS\s*=\s*(\d+)_?(\d+)?/);
+    expect(m, 'MAX_RECORD_MS not found').to.not.be.null;
+    const maxRecordMs = Number(m![0].match(/=\s*([\d_]+)/)![1].replace(/_/g, ''));
+    const VP_MAX_SAMPLES = 16000 * 28;
+    const vpMaxMs = (VP_MAX_SAMPLES / 16000) * 1000;
+    expect(maxRecordMs, 'a recording must never be allowed to run longer than what will actually be transcribed').to.be.at.most(vpMaxMs);
+  });
+});

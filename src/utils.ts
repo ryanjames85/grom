@@ -127,20 +127,31 @@ export function isPrivateUrl(raw: string): boolean {
   try { url = new URL(raw); } catch { return true; } // unparseable → block
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return true;
   const h = url.hostname.toLowerCase().replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+  // An IPv4-mapped (::ffff:127.0.0.1) or the older, deprecated IPv4-compatible (::127.0.0.1)
+  // IPv6 literal embeds a real IPv4 address, but the URL parser always normalises either form to
+  // hex-group form (::ffff:7f00:1 / ::7f00:1), never the dotted form - so unwrap the hex groups
+  // back into dotted-decimal here, otherwise none of the IPv4 patterns below ever match and every
+  // IPv4 rule is silently bypassed via either alternate representation. A bare "::<hex>:<hex>" is
+  // ambiguous with a genuine (if unusual) native IPv6 address, but treating it as the IPv4 form
+  // it might be errs toward blocking, which is the safe direction for this check.
+  const v4Mapped = h.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  const h4 = v4Mapped
+    ? [parseInt(v4Mapped[1], 16) >> 8, parseInt(v4Mapped[1], 16) & 0xff, parseInt(v4Mapped[2], 16) >> 8, parseInt(v4Mapped[2], 16) & 0xff].join('.')
+    : h.replace(/^::ffff:/, ''); // also handle a literal dotted form, in case some other caller ever passes one directly
 
   // Loopback
   if (h === 'localhost' || h === '0.0.0.0') return true;
-  if (/^127\./.test(h)) return true;
+  if (/^127\./.test(h4)) return true;
   if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
 
   // Link-local (AWS/GCP metadata)
-  if (/^169\.254\./.test(h)) return true;
+  if (/^169\.254\./.test(h4)) return true;
   if (/^fe80:/i.test(h)) return true;
 
   // RFC-1918 private ranges
-  if (/^10\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
+  if (/^10\./.test(h4)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h4)) return true;
+  if (/^192\.168\./.test(h4)) return true;
 
   // Unique-local IPv6
   if (/^fc/i.test(h) || /^fd/i.test(h)) return true;

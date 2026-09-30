@@ -103,6 +103,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       docs: this._docs,
       postMessage: (msg) => this._post(msg),
       requestApproval: (id, tool, args) => this._requestApproval(id, tool, args),
+      cancelApproval: (id) => { this._pendingApprovals.delete(id); },
       appendTaskLog: (sid, tool, args, result) => this._appendTaskLog(sid, tool, args, result),
       getMemory: () => this._context.globalState.get<string>('gromMemory', ''),
       getContextLength: () => this._detectedContextLength,
@@ -209,6 +210,9 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         if (e.affectsConfiguration('grom.mcpServers')) {
           this._mcp.initialize().then(() => this._checkConnection());
         }
+        if (e.affectsConfiguration('grom.chatLanguageModels') || e.affectsConfiguration('grom.languageModels') || e.affectsConfiguration('grom.model')) {
+          this._updateLanguageOverrideBadge();
+        }
       }
     });
 
@@ -294,11 +298,12 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
             this._post({ type: 'status', text: 'Ready' });
             break;
           }
-          const ph = this._context.globalState.get<string[]>('promptHistory', []);
+          const ph = this._getPromptHistory();
           if (data.text && (ph.length === 0 || ph[ph.length - 1] !== data.text)) {
             ph.push(data.text);
             if (ph.length > 50) ph.shift();
-            void this._context.globalState.update('promptHistory', ph);
+            this._setPromptHistory(ph);
+            this._post({ type: 'promptHistoryUpdated', history: ph });
           }
           // Serialise through the queue: if a previous message is still streaming,
           // this one waits for it to fully complete before starting. Prevents two
@@ -338,7 +343,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
         case 'deleteSession': this._deleteSession(data.sessionId); break;
         case 'compactSession': this._compactSession(); break;
         case 'expandCompactedHistory': this._expandCompactedHistory(data.sessionId); break;
-        case 'clearPromptHistory': void this._context.globalState.update('promptHistory', []); break;
+        case 'clearPromptHistory': this._setPromptHistory([]); this._post({ type: 'promptHistoryUpdated', history: [] }); break;
         case 'reindexWorkspace': void vscode.commands.executeCommand('grom.reindex'); break;
         case 'renameSession': this._renameSession(data.title, data.sessionId); break;
         case 'exportChat': this._exportChat(); break;
@@ -753,11 +758,61 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       files.push({ name, tokens });
     }
     this._post({ type: 'filesUsed', files });
+    this._updateLanguageOverrideBadge();
+  }
+
+  /**
+   * Live toolbar badge: shows whether the CURRENTLY active file's language has a configured
+   * model override (grom.chatLanguageModels / grom.languageModels) different from the global
+   * default, so a user glancing at the toolbar can tell a request would route elsewhere before
+   * even sending it. This is the "current file" half of the indicator; the other half is a
+   * permanent per-reply note (see agent-loop.ts's 'modelOverrideUsed' post) recording which
+   * model actually answered a specific past message, since the active file can change later.
+   */
+  private _updateLanguageOverrideBadge() {
+    if (!this._view && !this._popout) return;
+    const config = vscode.workspace.getConfiguration('grom');
+    const lang = this._lastActiveEditor?.document.languageId;
+    if (!lang) { this._post({ type: 'languageOverrideActive', active: false }); return; }
+    const baseModel = config.get<string>('model') || 'qwen2.5-coder';
+    const chatLangModels = config.get<Record<string, string>>('chatLanguageModels', {});
+    const fallbackLangModels = config.get<Record<string, string>>('languageModels', {});
+    const overrideModel = chatLangModels[lang] || fallbackLangModels[lang];
+    if (overrideModel && overrideModel !== baseModel) {
+      this._post({ type: 'languageOverrideActive', active: true, model: overrideModel, language: lang });
+    } else {
+      this._post({ type: 'languageOverrideActive', active: false });
+    }
   }
 
   private _updateTheme() {
     const theme = vscode.workspace.getConfiguration('grom').get<string>('theme') || 'Claude';
     this._post({ type: 'setTheme', theme });
+  }
+
+  /**
+   * Prompt history is scoped per workspace folder, not global: keyed by the first workspace
+   * folder's path inside one globalState map, so each project keeps its own list and a prompt
+   * typed in one project never leaks into another's up-arrow history. Returns undefined when
+   * no workspace folder is open, since there is no meaningful project to scope history to.
+   */
+  private _promptHistoryKey(): string | undefined {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  private _getPromptHistory(): string[] {
+    const key = this._promptHistoryKey();
+    if (!key) return [];
+    const all = this._context.globalState.get<Record<string, string[]>>('grom.promptHistoryByWorkspace', {});
+    return all[key] ?? [];
+  }
+
+  private _setPromptHistory(history: string[]) {
+    const key = this._promptHistoryKey();
+    if (!key) return;
+    const all = this._context.globalState.get<Record<string, string[]>>('grom.promptHistoryByWorkspace', {});
+    all[key] = history;
+    void this._context.globalState.update('grom.promptHistoryByWorkspace', all);
   }
 
   /** Persists all sessions and the active session ID to workspaceState so they survive VS Code restarts. */
@@ -802,7 +857,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       reasoningEffort: current.reasoningEffort ?? vscode.workspace.getConfiguration('grom').get<string>('reasoningEffort', 'off'),
       showReasoningToggle: vscode.workspace.getConfiguration('grom').get<boolean>('showReasoningToggle', true),
       showThinking: vscode.workspace.getConfiguration('grom').get<boolean>('showThinking', true),
-      promptHistory: this._context.globalState.get<string[]>('promptHistory', [])
+      promptHistory: this._getPromptHistory()
     });
     this._updateUsageDisplay();
   }
@@ -924,7 +979,7 @@ export class LocalChatViewProvider implements vscode.WebviewViewProvider {
       this._saveState();
       this._updateUsageDisplay();
       const marker = this._sessionManager.getSessions()[current.id].history.find(m => isCompactMarker(m));
-      this._post({ type: 'compacted', compactedAt: marker?.compactedAt });
+      this._post({ type: 'compacted', sessionId: current.id, compactedAt: marker?.compactedAt });
     } else {
       vscode.window.showInformationMessage('Nothing to compact.');
     }
@@ -1292,6 +1347,11 @@ ${convText}`;
     // 8192 default is more representative of typical local models than 32000
     const p = modelKey ? pricing[modelKey] : { input: 0, output: 0, context: 8192 };
     // Prefer auto-detected context length over manual config over default
+    // True only when a real value was actually detected from the provider. p.context and the
+    // trailing ?? 8192 are both guesses, indistinguishable from each other and from a real
+    // detected 8192 once collapsed into contextLength below, so this flag is captured BEFORE
+    // that collapse, the only point where "known" and "guessed" are still different things.
+    const contextKnown = this._detectedContextLength !== null && this._detectedContextLength !== undefined;
     const contextLength = this._detectedContextLength ?? p.context ?? 8192;
     // Derive live token count from actual history so the circle fills as the conversation grows
     const liveTokens = estimateHistoryTokens(s.history) + s.tokens.output;
@@ -1303,7 +1363,8 @@ ${convText}`;
       inputCost: (s.tokens.input / 1000000) * p.input,
       outputCost: (s.tokens.output / 1000000) * p.output,
       contextPercent,
-      contextWindow: contextLength
+      contextWindow: contextLength,
+      contextKnown
     });
 
     // Fire a once-per-session hint when context is 80%+ full
@@ -1311,13 +1372,13 @@ ${convText}`;
     const sessionId = this._sessionManager.getCurrentSessionId();
     if (hintsEnabled && contextPercent >= 80 && !this._contextHintSent.has(sessionId)) {
       this._contextHintSent.add(sessionId);
-      this._post({ type: 'gromHint', hint: 'context', percent: contextPercent });
+      this._post({ type: 'gromHint', hint: 'context', percent: contextPercent, contextKnown });
     }
   }
 
   /** Delegates to AgentLoop.run(): context assembly, tool execution, and streaming all happen there. */
   private async _handleChat(text: string, images?: string[], mode: 'plan' | 'build' = 'plan') {
-    if (!this._view && !this._popout) return;
+    if (!this._view && !this._popout) { this._isStreaming = false; return; }
 
     // If @docs is used but no sources are configured, show the hint and skip the model call entirely.
     // Grom already knows the answer, so there's nothing useful to send to the provider.

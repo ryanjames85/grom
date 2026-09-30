@@ -42,6 +42,7 @@ export interface ChatSession {
 export class SessionManager {
   private sessions: Record<string, ChatSession>;
   private currentSessionId: string;
+  private _idCounter = 0;
 
   /**
    * Initialises the manager with persisted session data loaded from workspaceState.
@@ -72,7 +73,11 @@ export class SessionManager {
 
   /** Creates a new empty session, switches to it, and returns its ID. */
   createNewSession(agentEnabled = false) {
-    const id = Date.now().toString();
+    // Date.now() alone has 1ms resolution: two createNewSession() calls landing in the same
+    // millisecond (e.g. two queued 'newSession' webview messages, or one racing _importChat's
+    // own session creation) would collide and the second call would silently clobber the
+    // first's entry in this.sessions. The counter guarantees uniqueness regardless of timing.
+    const id = `${Date.now()}-${++this._idCounter}`;
     // Tools start off so plain chat is fast; user enables ⚡ Tools per session when needed.
     // mode stays 'plan' regardless of agentEnabled; the user switches to BUILD when they want it.
     this.sessions[id] = { id, title: 'Untitled', history: [], tokens: { input: 0, output: 0 }, lastModified: Date.now(), mode: 'plan', agentEnabled: false };

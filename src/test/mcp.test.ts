@@ -1,8 +1,16 @@
 // @ts-nocheck
+// mcp.ts imports vscode directly; this file used to rely on an earlier-loaded test file's
+// leftover global mock to make that resolve, which broke if run standalone or in a different
+// load order (see project_test_harness_bug.md). Now self-contained.
+const { installVscodeMock } = require('./_vscode-mock');
+const { restore: restoreVscodeMock } = installVscodeMock();
+
 const { parseToolCall, buildToolSystemPrompt, extractJsonObjects } = require('../mcp-parser');
 const { resolveSpawnArgs } = require('../mcp');
 
 let expect;
+
+after(restoreVscodeMock);
 
 describe('resolveSpawnArgs', () => {
   let expect;

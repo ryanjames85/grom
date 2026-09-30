@@ -116,6 +116,7 @@ export class GromInlineCompletionProvider implements vscode.InlineCompletionItem
   private _lastRequestId = 0;
   private _partialBuffer = '';
   private _partialPosition?: vscode.Position;
+  private _partialDocumentUri?: string;
 
   constructor(context?: vscode.ExtensionContext) {
     if (context) {
@@ -133,10 +134,14 @@ export class GromInlineCompletionProvider implements vscode.InlineCompletionItem
     const config = vscode.workspace.getConfiguration('grom');
     if (!config.get<boolean>('autocomplete', true)) return null;
 
-    // If triggered after partial accept, serve next word from buffer
+    // If triggered after partial accept, serve next word from buffer. The provider is
+    // registered once globally for every file, so the document must also match the one the
+    // buffer was generated for - otherwise switching files while a partial buffer is pending
+    // serves leftover ghost text from the old file at an unrelated location in the new one.
     if (
       this._partialBuffer &&
       this._partialPosition &&
+      this._partialDocumentUri === document.uri.toString() &&
       context.triggerKind === vscode.InlineCompletionTriggerKind.Automatic
     ) {
       const nextWord = nextWordChunk(this._partialBuffer);
@@ -166,6 +171,7 @@ export class GromInlineCompletionProvider implements vscode.InlineCompletionItem
           // Store full completion for partial accept
           this._partialBuffer = result;
           this._partialPosition = position;
+          this._partialDocumentUri = document.uri.toString();
           const firstChunk = nextWordChunk(result);
           this._partialBuffer = result.slice(firstChunk.length);
 
@@ -182,7 +188,7 @@ export class GromInlineCompletionProvider implements vscode.InlineCompletionItem
   }
 
   /** Clears the partial-accept buffer and records a full accept for the acceptance-rate tracker. */
-  clearPartial() { this._partialBuffer = ''; this._partialPosition = undefined; _recordAccepted(); }
+  clearPartial() { this._partialBuffer = ''; this._partialPosition = undefined; this._partialDocumentUri = undefined; _recordAccepted(); }
 
   private async _fetchCompletion(
     document: vscode.TextDocument,

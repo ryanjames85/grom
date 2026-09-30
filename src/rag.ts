@@ -78,9 +78,13 @@ export class RagIndex {
   private _fileHashes: Map<string, string> = new Map();
   // Set when an embedding model is configured but all embedding attempts fail
   private _embeddingFailed = false;
-  // Set when build(force=true) arrives while a build is already running.
-  // The in-progress build checks this on completion and re-runs immediately.
-  private _pendingRebuild: { files: RagFile[]; embConfig?: EmbeddingConfig } | null = null;
+  // Set when build() arrives while a build is already running, regardless of force - a plain
+  // incremental call (e.g. a file-watcher event firing mid-build) used to be silently dropped
+  // if not force=true, leaving that file's change unindexed until some later build happened to
+  // include it again. The in-progress build checks this on completion and re-runs immediately.
+  // `resolvers` lets every caller that got queued here actually wait for the real rebuild to
+  // finish, instead of a queued call's own promise resolving the instant it was merely queued.
+  private _pendingRebuild: { files: RagFile[]; embConfig?: EmbeddingConfig; resolvers: Array<() => void> } | null = null;
 
   /**
    * @param _onProgress Optional callback invoked with status messages during indexing.
@@ -109,9 +113,19 @@ export class RagIndex {
    */
   async build(files: RagFile[], embConfig?: EmbeddingConfig, force = false): Promise<void> {
     if (this._indexing) {
-      // Queue the rebuild: the current build will pick it up when it finishes
-      if (force) this._pendingRebuild = { files, embConfig };
-      return;
+      // Queue the rebuild: the current build will pick it up when it finishes. Queued
+      // regardless of force so an incremental call arriving mid-build is never dropped; merges
+      // into any already-queued rebuild so only the latest file list/config is used, but every
+      // caller waiting on this promise still resolves once that rebuild actually runs.
+      return new Promise<void>((resolve) => {
+        if (this._pendingRebuild) {
+          this._pendingRebuild.files = files;
+          this._pendingRebuild.embConfig = embConfig;
+          this._pendingRebuild.resolvers.push(resolve);
+        } else {
+          this._pendingRebuild = { files, embConfig, resolvers: [resolve] };
+        }
+      });
     }
 
     // Invalidate endpoint cache and dimension guard when the provider config changes
@@ -153,6 +167,7 @@ export class RagIndex {
       if (pending) {
         this._pendingRebuild = null;
         await this.build(pending.files, pending.embConfig, true);
+        pending.resolvers.forEach(r => r());
       }
     }
   }
@@ -206,6 +221,7 @@ export class RagIndex {
       if (pending) {
         this._pendingRebuild = null;
         await this.build(pending.files, pending.embConfig, true);
+        pending.resolvers.forEach(r => r());
       }
     }
   }

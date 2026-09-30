@@ -123,7 +123,10 @@ const EXCLUDE_GLOB = '{**/node_modules/**,**/build/**,**/.dart_tool/**,**/.pub-c
 /** Auto-attaches workspace files whose names fuzzy-match words in the user's message.
  *  usedFiles prevents the same file being attached twice across multiple context passes. */
 export async function findRelevantContext(text: string, usedFiles: Set<string>): Promise<string> {
-  const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 5);
+  // Deduping avoids scanning the same word twice, and the cap keeps a large paste (a log dump,
+  // a multi-thousand-word doc) from turning into a long serial chain of findFiles() calls that
+  // silently stalls sending the message - each one is a real filesystem scan, not free.
+  const words = [...new Set(text.toLowerCase().split(/\W+/).filter(w => w.length > 5))].slice(0, 25);
   let content = "";
   for (const word of words) {
     const matches = await vscode.workspace.findFiles(`**/*${word}*`, EXCLUDE_GLOB, 2);
@@ -247,19 +250,34 @@ export async function resolveMentions(text: string, usedFiles: Set<string>, docs
       continue;
     }
 
-    // @filename: workspace file
-    const results = await vscode.workspace.findFiles(`**/${name}*`, '**/node_modules/**', 1);
-    if (results.length > 0 && !usedFiles.has(name)) {
-      usedFiles.add(name);
-      try {
-        const stat = await vscode.workspace.fs.stat(results[0]);
-        if (stat.size > MAX_FILE_BYTES) {
-          content += `[Attached: ${name}]\n*(file too large to include — ${Math.round(stat.size / 1024)}KB)*\n\n`;
-          continue;
-        }
-        const data = await vscode.workspace.fs.readFile(results[0]);
-        content += `[Attached: ${name}]\n${Buffer.from(data).toString()}\n\n`;
-      } catch { content += `[Attached: ${name}]\nError: could not read file (deleted or inaccessible).\n\n`; }
+    // @filename: workspace file. A mention containing glob-special characters (e.g. an unbalanced
+    // "@file[test" or "@thing{unclosed") can make the glob engine reject the pattern outright;
+    // without this guard that throw would abort processing of every OTHER mention still left in
+    // the loop, not just this one.
+    let results: vscode.Uri[];
+    try {
+      results = await vscode.workspace.findFiles(`**/${name}*`, '**/node_modules/**', 1);
+    } catch {
+      content += `[Attached: ${name}]\nError: could not read file (invalid file name).\n\n`;
+      continue;
+    }
+    if (results.length > 0) {
+      // Dedup by the resolved file's own name, not the raw @mention text: two different
+      // mentions in the same message (e.g. "@app" and "@App.ts") can resolve to the same
+      // underlying file, and keying on the typed text alone let both attach its content.
+      const resolvedName = results[0].fsPath.split(/[\\\/]/).pop() || name;
+      if (!usedFiles.has(resolvedName)) {
+        usedFiles.add(resolvedName);
+        try {
+          const stat = await vscode.workspace.fs.stat(results[0]);
+          if (stat.size > MAX_FILE_BYTES) {
+            content += `[Attached: ${name}]\n*(file too large to include — ${Math.round(stat.size / 1024)}KB)*\n\n`;
+            continue;
+          }
+          const data = await vscode.workspace.fs.readFile(results[0]);
+          content += `[Attached: ${name}]\n${Buffer.from(data).toString()}\n\n`;
+        } catch { content += `[Attached: ${name}]\nError: could not read file (deleted or inaccessible).\n\n`; }
+      }
     }
   }
   return content;

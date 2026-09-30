@@ -14,6 +14,7 @@
  */
 
 import * as vscode from 'vscode';
+import * as vm from 'vm';
 import { stripHtml, isPrivateUrl } from './utils';
 
 export interface ToolDef {
@@ -126,11 +127,13 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
     if (typeof raw !== 'string') {
       return { error: `Missing or invalid 'path' argument. Expected a workspace-relative file path as a string.` };
     }
-    // Normalize and prevent absolute paths or traversal
-    const rel = raw.replace(/\\/g, '/').replace(/^\/+/, '');
-    if (rel.includes('..') || /^[a-zA-Z]:/.test(rel) || rel.startsWith('/')) {
+    // Normalize and prevent absolute paths or traversal. Check before stripping the leading
+    // slash, not after - stripping first would make the startsWith('/') check a permanent no-op.
+    const normalised = raw.replace(/\\/g, '/');
+    if (normalised.includes('..') || /^[a-zA-Z]:/.test(normalised) || normalised.startsWith('/')) {
       return { error: 'Path traversal or absolute paths not allowed.' };
     }
+    const rel = normalised.replace(/^\/+/, '');
     return { uri: vscode.Uri.joinPath(root, rel), rel };
   }
 
@@ -204,12 +207,30 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
     }
 
     case 'search_files': {
-      const pattern = args.pattern as string;
+      if (typeof args.pattern !== 'string' || !args.pattern) {
+        return `Error: Missing or invalid 'pattern' argument. Expected a regex or plain-text search pattern as a string.`;
+      }
+      const pattern = args.pattern;
       const glob = (args.glob as string) || '**/*';
       const exclude = Array.from(BLOCKED_DIRS).map(d => `**/${d}/**`).join(',');
       try {
         let re: RegExp;
         try { re = new RegExp(pattern, 'gi'); } catch { re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); }
+
+        // pattern is model-controlled; a catastrophic-backtracking regex (e.g. (a+)+b) tested
+        // against an ordinary line can take exponential time, and RegExp.prototype.test has no
+        // built-in timeout. Run each test inside a vm.Script with a real timeout instead - V8
+        // can interrupt synchronous script execution mid-run, including mid-regex-backtrack,
+        // which a plain length cap on the tested string cannot meaningfully guard against
+        // (blowup is already severe well under a hundred characters for a bad pattern).
+        const testScript = new vm.Script('re.lastIndex = 0; re.test(line);');
+        const testSandbox = vm.createContext({ re: null as RegExp | null, line: '' });
+        function safeTest(regex: RegExp, line: string): boolean {
+          testSandbox.re = regex;
+          testSandbox.line = line;
+          try { return !!testScript.runInContext(testSandbox, { timeout: 200 }); }
+          catch { return false; } // runaway pattern on this line - treat as no match and move on
+        }
 
         async function performSearch(regex: RegExp): Promise<string[]> {
           const files = await vscode.workspace.findFiles(glob, `{${exclude}}`, 300);
@@ -222,8 +243,7 @@ export async function executeBuiltinTool(name: string, args: Record<string, any>
               const lines = text.split('\n');
               const rel = vscode.workspace.asRelativePath(uri);
               for (let i = 0; i < lines.length && results.length < 60; i++) {
-                regex.lastIndex = 0;
-                if (regex.test(lines[i])) results.push(`${rel}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
+                if (safeTest(regex, lines[i])) results.push(`${rel}:${i + 1}: ${lines[i].trim().slice(0, 120)}`);
               }
             } catch { /* unreadable file — skip */ }
           }

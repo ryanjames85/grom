@@ -25,6 +25,30 @@ export interface ParsedToolCall {
 }
 
 /**
+ * Finds the index of the closing paren matching the paren at `openIdx`, respecting quoted
+ * strings so a literal ')' inside a quoted arg value (e.g. fn(path="notes (draft).txt")) doesn't
+ * end the scan early. A plain `[^)]*` capture would stop at that inner ')', truncating the args
+ * string and silently dropping every argument on the JSON.parse/regex failure that follows.
+ * Returns -1 if no balanced close is found.
+ */
+function findMatchingParen(text: string, openIdx: number): number {
+  let depth = 0, inStr = false, quote = '', escape = false;
+  for (let i = openIdx; i < text.length; i++) {
+    const c = text[i];
+    if (escape) { escape = false; continue; }
+    if (inStr) {
+      if (c === '\\') escape = true;
+      else if (c === quote) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'") { inStr = true; quote = c; continue; }
+    if (c === '(') depth++;
+    if (c === ')') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+/**
  * Ordered list of parsing strategies. Each pattern attempts to extract a tool call
  * from the raw model output text. The first successful match wins.
  */
@@ -34,7 +58,14 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
   (text) => {
     const candidates = extractJsonObjects(text);
     for (const obj of candidates) {
-      const name = obj.tool ?? obj.name ?? obj.function;
+      // obj.tool is the documented field (see buildToolSystemPrompt) and is trusted on its own.
+      // obj.name/obj.function are leniency fallbacks for models that echo an OpenAI-style shape
+      // instead - but "name" alone is also just an ordinary English word that shows up in plain
+      // JSON examples a model might quote in prose (e.g. {"name":"Alice","role":"admin"}), so
+      // only trust those fallbacks when an args-shaped field is present too, the way every real
+      // tool-call shape (documented or leniency) actually has one.
+      const hasArgsField = obj.args !== undefined || obj.arguments !== undefined || obj.parameters !== undefined || obj.input !== undefined;
+      const name = obj.tool ?? (hasArgsField ? (obj.name ?? obj.function) : undefined);
       const args = obj.args ?? obj.arguments ?? obj.parameters ?? obj.input ?? {};
       if (typeof name === 'string' && name.length > 0 && typeof args === 'object' && args !== null) {
         return { tool: name, args, raw: JSON.stringify(obj) };
@@ -63,10 +94,27 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
   (text) => {
     const nameMatch = text.match(/(?:^|\n)\s*tool\s*[:=]\s*["']?([a-zA-Z0-9_:.-]+)["']?/i);
     if (!nameMatch) return null;
-    const argsMatch = text.match(/\bargs?\s*[:=]\s*(\{[\s\S]*?\})/i);
+    // Locate where the args object starts, then find its matching close brace by depth-counting
+    // rather than a non-greedy regex capture - `\{[\s\S]*?\}` stops at the FIRST `}`, which is
+    // wrong whenever the args contain a nested object (e.g. args: {"query": {"nested": 1}}).
+    // That used to truncate the capture into invalid JSON, silently drop to empty args on the
+    // JSON.parse failure, and fire the tool call anyway with every argument lost.
+    const argsHead = text.match(/\bargs?\s*[:=]\s*\{/i);
     let args: Record<string, any> = {};
-    if (argsMatch) {
-      try { args = JSON.parse(argsMatch[1]); } catch {}
+    if (argsHead && argsHead.index !== undefined) {
+      const openIdx = argsHead.index + argsHead[0].length - 1;
+      let depth = 0, closeIdx = -1, inStr = false, escape = false;
+      for (let i = openIdx; i < text.length; i++) {
+        const c = text[i];
+        if (escape) { escape = false; continue; }
+        if (inStr) { if (c === '\\') escape = true; else if (c === '"') inStr = false; continue; }
+        if (c === '"') { inStr = true; continue; }
+        if (c === '{') depth++;
+        if (c === '}') { depth--; if (depth === 0) { closeIdx = i; break; } }
+      }
+      if (closeIdx !== -1) {
+        try { args = JSON.parse(text.slice(openIdx, closeIdx + 1)); } catch {}
+      }
     }
     return { tool: nameMatch[1], args, raw: nameMatch[0] };
   },
@@ -76,11 +124,38 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
   // Parse key-value pairs directly to avoid regex corruption of large string values (e.g. Dart code
   // with named params like `, listen: false` that would otherwise get treated as JSON keys).
   (text) => {
-    const m = text.match(/<\|?tool_call\|?>\s*(?:call:)?([a-zA-Z0-9_]+)\s*(\{[\s\S]*\})\s*(?:<tool_call\|>|$)/i);
-    if (!m) return null;
+    const head = text.match(/<\|?tool_call\|?>\s*(?:call:)?([a-zA-Z0-9_]+)\s*\{/i);
+    if (!head || head.index === undefined) return null;
+    const name = head[1];
+    const openIdx = head.index + head[0].length - 1; // index of the opening `{`
+    // Find the matching close brace with depth counting, respecting both this format's
+    // <|"|>...<|"|> string delimiter and plain "..." strings, so a SECOND <|tool_call|> block
+    // later in the text can't get swallowed into this one's body - the old greedy, unanchored
+    // `[\s\S]*` regex matched through to the LAST `}` anywhere in the text, corrupting parsing
+    // whenever more than one tool call appeared in the same response.
+    let depth = 0, closeIdx = -1, inStr = false, escape = false;
+    for (let i = openIdx; i < text.length; i++) {
+      if (text.startsWith('<|"|>', i)) {
+        const end = text.indexOf('<|"|>', i + 5);
+        if (end === -1) break;
+        i = end + 4; // loop's i++ lands past the closing delimiter
+        continue;
+      }
+      const c = text[i];
+      if (escape) { escape = false; continue; }
+      if (inStr) {
+        if (c === '\\') escape = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') { inStr = true; continue; }
+      if (c === '{') depth++;
+      if (c === '}') { depth--; if (depth === 0) { closeIdx = i; break; } }
+    }
+    if (closeIdx === -1) return null;
     try {
       const args: Record<string, any> = {};
-      let body = m[2].slice(1, -1).trim(); // strip outer { }
+      let body = text.slice(openIdx + 1, closeIdx).trim(); // content between the outer { }
 
       while (body.length > 0) {
         // Match key with optional type annotation (e.g. content:markdown: → key=content)
@@ -120,7 +195,11 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
         body = body.replace(/^\s*,\s*/, '');
       }
 
-      return { tool: m[1], args, raw: m[0] };
+      // Consume an immediately-following closing tag as part of the raw match, matching the
+      // old regex's behaviour, but it's optional - some models omit it.
+      const closeTag = text.slice(closeIdx + 1).match(/^\s*(?:<tool_call\|>)/i);
+      const raw = text.slice(head.index, closeIdx + 1 + (closeTag ? closeTag[0].length : 0));
+      return { tool: name, args, raw };
     } catch { return null; }
   },
 
@@ -129,10 +208,13 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
     const block = text.match(/<tool_code>\s*([\s\S]*?)\s*<\/tool_code>/i);
     if (!block) return null;
     const inner = block[1].trim();
-    const fnMatch = inner.match(/^([a-zA-Z0-9_]+)\s*\(([^)]*)\)/s);
-    if (!fnMatch) return null;
+    const head = inner.match(/^([a-zA-Z0-9_]+)\s*\(/);
+    if (!head || head.index === undefined) return null;
+    const openIdx = head.index + head[0].length - 1;
+    const closeIdx = findMatchingParen(inner, openIdx);
+    if (closeIdx === -1) return null;
     let args: Record<string, any> = {};
-    const body = fnMatch[2].trim();
+    const body = inner.slice(openIdx + 1, closeIdx).trim();
     if (body.startsWith('{')) {
       try { args = JSON.parse(body); } catch {}
     } else {
@@ -140,17 +222,20 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
         args[m[1]] = m[2] ?? m[3] ?? m[4];
       }
     }
-    return { tool: fnMatch[1], args, raw: block[0] };
+    return { tool: head[1], args, raw: block[0] };
   },
 
   // Pattern 4: function-call syntax, tool_name({"key":"val"}) or tool_name(key="val", ...)
   // Requires double-underscore (server__tool) to avoid matching normal function calls in prose.
   // Single-name built-in functions are caught by Pattern 4c above.
   (text) => {
-    const fnMatch = text.match(/\b([a-zA-Z0-9_]{2,}__[a-zA-Z0-9_]+)\s*\(([^)]*)\)/);
-    if (!fnMatch) return null;
+    const head = text.match(/\b([a-zA-Z0-9_]{2,}__[a-zA-Z0-9_]+)\s*\(/);
+    if (!head || head.index === undefined) return null;
+    const openIdx = head.index + head[0].length - 1;
+    const closeIdx = findMatchingParen(text, openIdx);
+    if (closeIdx === -1) return null;
     let args: Record<string, any> = {};
-    const body = fnMatch[2].trim();
+    const body = text.slice(openIdx + 1, closeIdx).trim();
     if (body.startsWith('{')) {
       try { args = JSON.parse(body); } catch {}
     } else {
@@ -158,7 +243,7 @@ const PATTERNS: Array<(text: string) => ParsedToolCall | null> = [
         args[m[1]] = m[2] ?? m[3] ?? m[4];
       }
     }
-    return { tool: fnMatch[1], args, raw: fnMatch[0] };
+    return { tool: head[1], args, raw: text.slice(head.index, closeIdx + 1) };
   }
 ];
 

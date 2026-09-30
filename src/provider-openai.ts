@@ -247,7 +247,10 @@ export class OpenAICompatibleProvider implements ILLMProvider {
 
     // If any tool_calls were accumulated, return the first one as a native tool call
     if (accTC.size > 0) {
-      const first = accTC.get(0)!;
+      // Prefer index 0 (the spec-compliant case), but fall back to whichever entry actually
+      // arrived - a non-compliant server that indexes tool calls starting at 1 would otherwise
+      // throw here despite having a perfectly usable tool call accumulated.
+      const first = accTC.get(0) ?? accTC.values().next().value!;
       try {
         const args = JSON.parse(first.args || '{}');
         return { text: fullText, toolCall: { id: first.id || nextId(), name: first.name, args } };

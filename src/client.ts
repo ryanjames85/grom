@@ -162,12 +162,17 @@ export async function fetchContextLength(url: string, model: string): Promise<nu
   const cached = _ctxCache.get(url);
 
   if (cached) {
+    let cachedResult: number | null = null;
     switch (cached) {
-      case 'ollama-show':     return _probeOllamaShow(url, model);
-      case 'lmstudio-native': return _probeLMStudioNative(url, model);
-      case 'openai-v1':       return _probeOpenAIV1(url, model);
-      case 'props':           return _probeProps(url);
+      case 'ollama-show':     cachedResult = await _probeOllamaShow(url, model); break;
+      case 'lmstudio-native': cachedResult = await _probeLMStudioNative(url, model); break;
+      case 'openai-v1':       cachedResult = await _probeOpenAIV1(url, model); break;
+      case 'props':           cachedResult = await _probeProps(url); break;
     }
+    if (cachedResult) return cachedResult;
+    // The cached probe stopped working (model switch, server restart, etc.) - fall through
+    // and try the full chain again rather than permanently returning null for this server.
+    _ctxCache.delete(url);
   }
 
   let n: number | null;

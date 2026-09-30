@@ -2,7 +2,7 @@
   "name": "grom",
   "displayName": "Grom",
   "description": "Local-first agent harness for VS Code. Bring your own LLM — no cloud, no account, no telemetry. Your model, your machine, your rules.",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "publisher": "RyanConnolly",
   "icon": "resources/icon.png",
   "license": "PolyForm-Shield-1.0.0",
@@ -384,7 +384,12 @@
         },
         "grom.reasoningEffort": {
           "type": "string",
-          "enum": ["off", "low", "medium", "high"],
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
           "default": "off",
           "description": "Default reasoning effort for models that support extended thinking (OpenAI o-series, Claude extended thinking). 'off' disables thinking entirely. 'low' is fast; 'high' is thorough but slower. Can be overridden per session with the toolbar icon or /effort command."
         },
@@ -400,7 +405,9 @@
         },
         "grom.reasoningModels": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Extra model name substrings to treat as reasoning models. Grom maintains a built-in list of known reasoning models (DeepSeek-R1, QwQ, Qwen3, o-series, etc.) — add entries here for new or custom models not yet recognised. Example: [\"my-r1-finetune\", \"local-thinker\"]."
         },
@@ -450,7 +457,14 @@
         },
         "grom.voiceModel": {
           "type": "string",
-          "enum": ["tiny", "tiny.en", "base", "base.en", "small.en", "small"],
+          "enum": [
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small.en",
+            "small"
+          ],
           "enumDescriptions": [
             "Whisper Tiny (~40 MB) — multilingual, fastest.",
             "Whisper Tiny English (~40 MB) — English-only, fast. Recommended default.",
@@ -464,9 +478,9 @@
         },
         "grom.voiceSensitivity": {
           "type": "number",
-          "default": 0.010,
+          "default": 0.01,
           "minimum": 0.001,
-          "maximum": 0.100,
+          "maximum": 0.1,
           "description": "Mic energy gate for voice input (RMS threshold). Lower = more sensitive (picks up quiet speech and background noise). Higher = less sensitive (ignores noise but may miss quiet speech). Default 0.010 works for most setups; raise to 0.020–0.030 if phantom transcriptions appear."
         },
         "grom.ffmpegPath": {
@@ -566,8 +580,10 @@
     "copy-media": "node scripts/build-highlight.mjs && node -e \"const fs=require('fs');fs.mkdirSync('media',{recursive:true});fs.cpSync('node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css','media/github-dark.min.css');fs.cpSync('node_modules/marked/lib/marked.umd.js','media/marked.min.js');\"",
     "vscode:prepublish": "npm run build",
     "tsc": "tsc",
-    "test": "mocha -r ts-node/register \"src/test/**/*.test.ts\"",
-    "test:integration": "mocha -r ts-node/register -r chai \"src/test/integration/**/*.itest.ts\" --timeout 180000"
+    "test": "node scripts/run-tests.mjs",
+    "test:fast": "mocha -r ts-node/register \"src/test/*.test.ts\"",
+    "test:integration": "mocha -r ts-node/register -r chai \"src/test/integration/**/*.itest.ts\" --timeout 180000",
+    "test:e2e": "mocha -r ts-node/register -r chai \"src/test/e2e/**/*.e2e.test.ts\" --timeout 120000"
   },
   "devDependencies": {
     "@highlightjs/cdn-assets": "^11.11.1",
@@ -581,6 +597,7 @@
     "highlight.js": "^11.11.1",
     "marked": "^18.0.2",
     "mocha": "^11.3.0",
+    "playwright-core": "^1.63.0",
     "sinon": "^21.1.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.0"

@@ -1,46 +1,11 @@
 // @ts-nocheck
 const sinon = require('sinon');
+const { installVscodeMock } = require('./_vscode-mock');
 
-// Mock vscode
-const vscodeMock = {
-  workspace: {
-    getConfiguration: sinon.stub().returns({
-      get: (key, def) => def,
-    }),
-    workspaceFolders: [{ uri: { fsPath: '/test' } }],
-    fs: { readFile: sinon.stub(), writeFile: sinon.stub(), createDirectory: sinon.stub(), readDirectory: sinon.stub(), delete: sinon.stub() },
-    findFiles: sinon.stub().resolves([]),
-    asRelativePath: (uri) => (uri.fsPath || uri || '').replace('/test/', ''),
-    openTextDocument: sinon.stub().resolves({}),
-  },
-  window: {
-    activeTextEditor: undefined,
-    showTextDocument: sinon.stub(),
-    createTerminal: sinon.stub().returns({ show: sinon.stub(), sendText: sinon.stub() }),
-  },
-  Uri: {
-    joinPath: (...args) => ({ fsPath: args.map(a => a.fsPath || a).join('/') }),
-    file: (path) => ({ fsPath: path }),
-  },
-  FileType: { File: 1, Directory: 2 },
-};
-
-const Module = require('module');
-const originalRequire = Module.prototype.require;
-Module.prototype.require = function(id) {
-  if (id === 'vscode') return vscodeMock;
-  // Stub builtin-tools so it is never cached with this partial mock,
-  // allowing builtin-tools.test.ts to load it fresh with its own mock.
-  if (id.includes('builtin-tools')) return {
-    BUILTIN_TOOLS: [{ name: 'read_file' }, { name: 'write_file' }, { name: 'delete_file' }, { name: 'list_directory' }, { name: 'search_files' }, { name: 'run_terminal' }, { name: 'browse_web' }],
-    isBuiltinTool: (name) => ['read_file','write_file','delete_file','list_directory','search_files','run_terminal','browse_web'].includes(name),
-    executeBuiltinTool: sinon.stub().resolves('ok'),
-  };
-  return originalRequire.apply(this, arguments);
-};
-
-// @ts-ignore
-global.vscode = vscodeMock;
+// Restore the patch in after() so it never leaks into whatever mocha loads next (see
+// project_test_harness_bug.md — this file's own un-restored patch used to be the reason
+// builtin-tools.test.ts's entire suite silently vanished when both loaded in the same run).
+const { mock: vscodeMock, restore: restoreVscodeMock } = installVscodeMock();
 
 const clientModule = require('../client');
 const contextModule = require('../context');
@@ -48,9 +13,12 @@ const mcpModule = require('../mcp');
 // parseToolCall is re-exported from mcp-parser via a non-configurable getter, so sinon
 // must stub the source module (mcp-parser) where the property is writable.
 const mcpParserModule = require('../mcp-parser');
+const builtinToolsModule = require('../builtin-tools');
 const { AgentLoop } = require('../agent-loop');
 
 let expect;
+
+after(restoreVscodeMock);
 
 describe('findRelevantContext', () => {
   before(async () => {
@@ -150,6 +118,13 @@ describe('AgentLoop', () => {
     sinon.stub(contextModule, 'resolveSlashCommand').callsFake(async (t) => t);
     sinon.stub(contextModule, 'findRelevantContext').resolves('');
     sinon.stub(contextModule, 'resolveMentions').resolves('');
+
+    // These tests care about the agentic loop's own control flow, not real file/terminal I/O,
+    // so executeBuiltinTool is stubbed here directly (sinon, auto-restored in afterEach) rather
+    // than faking out the whole builtin-tools module at the require() level, which used to also
+    // poison builtin-tools.test.ts's own later require() of the real module (see
+    // project_test_harness_bug.md).
+    sinon.stub(builtinToolsModule, 'executeBuiltinTool').resolves('ok');
   });
 
   afterEach(() => {
@@ -202,6 +177,34 @@ describe('AgentLoop', () => {
 
     expect(deps.postMessage.calledWith(sinon.match({ type: 'toolCall', tool: 'read_file' }))).to.be.true;
     expect(deps.appendTaskLog.calledOnce).to.be.true;
+  });
+
+  it('reports the real detail when a tool throws a non-Error value, instead of "Error: undefined"', async () => {
+    // Regression test: `Error: ${e.message}` assumed the caught value was always an Error
+    // instance. Some MCP servers throw a plain string, which has no .message and used to
+    // silently become the literal text "Error: undefined" in the tool result sent to the model.
+    const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+    const toolCallJson = '{"tool": "read_file", "args": {"path": "test.ts"}}';
+    clientStub.streamChatWithCallback.onFirstCall().callsFake(async (msgs, onChunk) => {
+      onChunk(toolCallJson);
+      return { text: toolCallJson };
+    });
+    clientStub.streamChatWithCallback.onSecondCall().callsFake(async (msgs, onChunk) => {
+      onChunk('Done.');
+      return { text: 'Done.' };
+    });
+    sinon.stub(mcpParserModule, 'parseToolCall')
+      .onFirstCall().returns({ tool: 'read_file', args: { path: 'test.ts' }, raw: toolCallJson })
+      .onSecondCall().returns(null);
+
+    builtinToolsModule.executeBuiltinTool.restore();
+    sinon.stub(builtinToolsModule, 'executeBuiltinTool').callsFake(async () => { throw 'disk unavailable'; });
+
+    await loop.run('Read test.ts', undefined, 'build', session, () => {}, () => {});
+
+    expect(deps.appendTaskLog.calledOnce).to.be.true;
+    const rawResult = deps.appendTaskLog.firstCall.args[3] as string;
+    expect(rawResult, 'must surface the actual thrown value, not "undefined"').to.equal('Error: disk unavailable');
   });
 
   it('posts clearToolCallChunk with raw text before toolCall', async () => {
@@ -260,6 +263,33 @@ describe('AgentLoop', () => {
 
     expect(deps.requestApproval.calledOnce).to.be.true;
     expect(deps.postMessage.calledWith(sinon.match({ type: 'toolCall', tool: 'write_file' }))).to.be.true;
+  });
+
+  it('cleans up the pending approval when the request is aborted before the user answers', async () => {
+    // Regression test: aborting while a destructive-tool approval prompt is still open used to
+    // leave the pending approval's resolver in provider.ts's _pendingApprovals map forever, since
+    // it was only ever deleted by the (never-arriving) 'toolApprovalResponse' handler.
+    const session = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+    const toolCallJson = '{"tool": "delete_file", "args": {"path": "test.ts"}}';
+    clientStub.streamChatWithCallback.callsFake(async (msgs, onChunk) => {
+      onChunk(toolCallJson);
+      return { text: toolCallJson };
+    });
+    sinon.stub(mcpParserModule, 'parseToolCall').returns({ tool: 'delete_file', args: { path: 'test.ts' }, raw: toolCallJson });
+
+    let capturedId: string | undefined;
+    deps.cancelApproval = sinon.stub();
+    deps.requestApproval = sinon.stub().callsFake((id: string) => {
+      capturedId = id;
+      // Simulate the user aborting (e.g. closing the panel) while the approval prompt is still open.
+      setTimeout(() => loop.abort(), 0);
+      return new Promise(() => {}); // never resolves on its own
+    });
+
+    await loop.run('Delete it', undefined, 'build', session, () => {}, () => {});
+
+    expect(deps.cancelApproval.calledOnce, 'the pending approval must be cleaned up on abort').to.be.true;
+    expect(deps.cancelApproval.firstCall.args[0]).to.equal(capturedId);
   });
 
   it('denies tool execution if user rejects', async () => {
@@ -824,6 +854,24 @@ describe('AgentLoop', () => {
   });
 
   describe('MAX_ROUNDS exhaustion', () => {
+    it('shows the model\'s prose answer on the final round instead of silently discarding it for a reprompt that can never be sent', async () => {
+      // Regression test: on the very last allowed round, a model that replies with plain text
+      // instead of a tool call used to get queued a "use a tool" reprompt via `continue` - but
+      // there were no rounds left to actually send it, so the model's real answer was never
+      // shown and the user only saw the generic "reached max rounds" message.
+      vscodeMock.workspace.getConfiguration.returns({ get: (key, def) => key === 'agentMaxIterations' ? 1 : def });
+
+      const session: any = { id: 's1', history: [], tokens: { input: 0, output: 0 }, mode: 'build', agentEnabled: true };
+      clientStub.streamChatWithCallback.resolves({ text: 'Here is the answer to your question.', toolCall: undefined });
+
+      await loop.run('Answer this', undefined, 'build', session, () => {}, () => {});
+
+      const chunks = deps.postMessage.getCalls()
+        .filter(c => c.args[0]?.type === 'chunk')
+        .map(c => c.args[0].text as string);
+      expect(chunks.some(t => t.includes('Here is the answer to your question.')), 'the real reply must reach the user').to.be.true;
+    });
+
     it('posts user-visible message when MAX_ROUNDS is hit', async () => {
       // Override agentMaxIterations to 2 for speed
       vscodeMock.workspace.getConfiguration.returns({ get: (key, def) => key === 'agentMaxIterations' ? 2 : def });

@@ -89,6 +89,22 @@ describe('parseToolCall — Pattern 1 (JSON object)', () => {
     expect(result).to.be.null;
   });
 
+  it('does not misread an ordinary JSON example with a bare "name" field as a tool call (v0.5.7 bug fix)', () => {
+    // Regression test: obj.name used to be trusted unconditionally, so any JSON object anywhere
+    // in prose with a "name" key (an ordinary English word, not a tool-call signal on its own)
+    // was misparsed as a tool call with empty args - e.g. a model quoting an example API
+    // response. Pattern 3 also requires "tool:" at line start for the same reason; Pattern 1
+    // was missing the equivalent guard for its "name"/"function" leniency fallbacks.
+    const result = parseToolCall('Here is an example response: {"name":"Alice","role":"admin"}');
+    expect(result).to.be.null;
+  });
+
+  it('still accepts "name" as the tool key when paired with a real args-shaped field', () => {
+    const result = parseToolCall('{"name":"write_file","arguments":{"path":"x"}}');
+    expect(result).to.not.be.null;
+    expect(result!.tool).to.equal('write_file');
+  });
+
   it('extracts JSON embedded in prose', () => {
     const result = parseToolCall('I will call: {"tool":"read_file","args":{"path":"foo.ts"}} now.');
     expect(result!.tool).to.equal('read_file');
@@ -143,6 +159,18 @@ describe('parseToolCall — Pattern 3 (loose key-value)', () => {
     // Pattern 3 should not match; no other pattern matches this format either.
     expect(result).to.be.null;
   });
+
+  it('parses args containing a nested JSON object instead of silently dropping every argument (v0.5.7 bug fix)', () => {
+    // Regression test: the old non-greedy \{[\s\S]*?\} capture stopped at the FIRST `}`, which
+    // is wrong when args contain a nested object. That truncated the capture into invalid JSON,
+    // JSON.parse threw, and the catch silently fell back to args={} - the tool call fired anyway
+    // with every argument lost, no error surfaced anywhere.
+    const text = 'tool: search\nargs: {"query": {"nested": 1}, "limit": 5}';
+    const result = parseToolCall(text);
+    expect(result!.tool).to.equal('search');
+    expect(result!.args.query, 'the nested object must survive, not get truncated away').to.deep.equal({ nested: 1 });
+    expect(result!.args.limit).to.equal(5);
+  });
 });
 
 // ── parseToolCall: Pattern 4b (Gemma/Qwen tag format) ───────────────────────
@@ -179,6 +207,20 @@ describe('parseToolCall — Pattern 4b (tool_call tag)', () => {
     expect(result!.args.path).to.equal('out.ts');
     expect(result!.args.content).to.equal('hello');
   });
+
+  it('does not swallow a second tool_call block into the first call\'s "raw" text when two appear in one response (v0.5.7 bug fix)', () => {
+    // Regression test: the old regex's body capture (\{[\s\S]*\}) was greedy and unanchored, so
+    // with two tool_call blocks in one text, .raw (the text stripped from the visible chunk via
+    // agent-loop.ts's clearToolCallChunk) spanned from the first block through to the LAST `}`
+    // in the whole text - silently deleting the second block (and anything between them) from
+    // what the user sees, even though only the first call is ever actually executed.
+    const text = '<|tool_call|>call:read_file{path:"a.ts"}<tool_call|> then <|tool_call|>call:read_file{path:"b.ts"}<tool_call|>';
+    const result = parseToolCall(text);
+    expect(result).to.not.be.null;
+    expect(result!.tool).to.equal('read_file');
+    expect(result!.args.path).to.equal('a.ts');
+    expect(result!.raw, 'raw must not extend past the first call\'s own closing tag into the second block').to.not.include('b.ts');
+  });
 });
 
 // ── parseToolCall: Pattern 4c (tool_code tags) ───────────────────────────────
@@ -204,6 +246,14 @@ describe('parseToolCall — Pattern 4c (tool_code tags)', () => {
     const result = parseToolCall(text);
     expect(result!.tool).to.equal('search');
     expect(result!.args.query).to.equal('useState');
+  });
+
+  it('parses correctly when a string arg value contains a literal close-paren (v0.5.7 bug fix)', () => {
+    const text = '<tool_code>write_file(path="notes (draft).txt", content="ok")</tool_code>';
+    const result = parseToolCall(text);
+    expect(result!.tool).to.equal('write_file');
+    expect(result!.args.path).to.equal('notes (draft).txt');
+    expect(result!.args.content).to.equal('ok');
   });
 });
 
@@ -232,6 +282,17 @@ describe('parseToolCall — Pattern 4 (server__tool function call)', () => {
     // Pattern 1–3 also won't match this format.
     const result = parseToolCall(text);
     expect(result).to.be.null;
+  });
+
+  it('parses correctly when a string arg value contains a literal close-paren (v0.5.7 bug fix)', () => {
+    // Regression test: the old \(([^)]*)\) capture stopped at the FIRST ')' anywhere, including
+    // one inside a quoted string value. "notes (draft).txt" truncated the whole args capture,
+    // silently dropping every argument instead of parsing the real path.
+    const text = 'mcp__write_file(path="notes (draft).txt", content="ok")';
+    const result = parseToolCall(text);
+    expect(result!.tool).to.equal('mcp__write_file');
+    expect(result!.args.path, 'must capture the full path including the parenthesised part').to.equal('notes (draft).txt');
+    expect(result!.args.content).to.equal('ok');
   });
 });
 

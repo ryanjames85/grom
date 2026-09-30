@@ -365,6 +365,33 @@ describe('OpenAICompatibleProvider', () => {
       expect(result.toolCall!.id).to.equal('call_1');
     });
 
+    it('uses the tool call it received even when a non-compliant server indexes it starting at 1, not 0', async () => {
+      // Regression test: a hard `accTC.get(0)!` assumed index 0 always exists once any tool call
+      // was accumulated. A server that never emits index 0 would previously crash here instead of
+      // returning the tool call it actually sent.
+      fetchStub.resolves({
+        ok: true,
+        body: sseLines(
+          toolCallChunk(1, 'call_1', 'read_file', '{"pa'),
+          toolCallChunk(1, '', '', 'th":"foo.ts"}'),
+          DONE_LINE
+        )
+      } as any);
+
+      const result = await provider.streamChat(
+        'gpt-4o',
+        [{ role: 'user', content: 'read it' }],
+        () => {},
+        undefined,
+        undefined,
+        [{ name: 'read_file', description: 'Read a file', inputSchema: { properties: { path: { type: 'string' } } } }]
+      );
+
+      expect(result.toolCall).to.exist;
+      expect(result.toolCall!.name).to.equal('read_file');
+      expect(result.toolCall!.args.path).to.equal('foo.ts');
+    });
+
     it('handles legacy function_call format', async () => {
       fetchStub.resolves({
         ok: true,

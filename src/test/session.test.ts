@@ -70,6 +70,19 @@ describe('SessionManager', () => {
       const id = mgr.createNewSession();
       expect(mgr.getSessions()).to.have.property(id);
     });
+
+    it('two sessions created back-to-back never collide on ID, even within the same millisecond (v0.5.7 bug fix)', () => {
+      // Regression test: the ID used to be plain Date.now().toString(), which has 1ms
+      // resolution. Two createNewSession() calls landing in the same millisecond (e.g. two
+      // queued 'newSession' webview messages, or /import racing a plain New Chat) produced
+      // identical IDs, and the second call silently overwrote the first session's entry in
+      // getSessions() - one of the two logically distinct sessions just vanished.
+      const mgr = makeManager();
+      const ids = new Set<string>();
+      for (let i = 0; i < 50; i++) ids.add(mgr.createNewSession());
+      expect(ids.size, 'every created session must keep its own distinct entry').to.equal(50);
+      expect(Object.keys(mgr.getSessions()).length).to.be.at.least(50);
+    });
   });
 
   describe('switchSession', () => {
@@ -747,10 +760,10 @@ describe('compacted history archive', () => {
   it('both the manual /compact command and auto-compact (in agent-loop.ts) set compactedAt and archive what they trim', () => {
     const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
     const agentLoop = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'agent-loop.ts'), 'utf8');
-    expect(provider, 'manual /compact must post the timestamp back to the webview').to.include("this._post({ type: 'compacted', compactedAt");
+    expect(provider, 'manual /compact must post the timestamp back to the webview').to.include("this._post({ type: 'compacted', sessionId: current.id, compactedAt");
     expect(agentLoop, 'auto-compact must set compactedAt on its own marker').to.include('content: markerContent, compactedAt');
     expect(agentLoop, 'auto-compact must also archive before trimming, not just manual /compact').to.include('await this.deps.archiveTrimmedMessages?.(session.id, toTrim)');
-    expect(agentLoop, 'auto-compact must post the timestamp too').to.include("this.deps.postMessage({ type: 'compacted', compactedAt })");
+    expect(agentLoop, 'auto-compact must post the timestamp too').to.include("this.deps.postMessage({ type: 'compacted', sessionId: session.id, compactedAt })");
   });
 
   it('loadSessions detects a compact marker even when it carries a summary, not just the bare marker', () => {
@@ -787,7 +800,7 @@ describe('compacted history archive', () => {
   it('a single compaction does not leave two stacked notices behind (both compacting and compacted reach this handler)', () => {
     const idx = js.indexOf("case 'compacting':");
     expect(idx, "case 'compacting' not found").to.be.greaterThan(-1);
-    const body = js.slice(idx, idx + 500);
+    const body = js.slice(idx, idx + 900);
     expect(body, 'must remove any existing notice for this session before appending a new one').to.include('querySelectorAll(`.compact-notice[data-session-id=');
     expect(body).to.include('.forEach(n => n.remove())');
   });
@@ -798,5 +811,273 @@ describe('compacted history archive', () => {
     expect(body, 'must not jump to the newest message the user has already seen').to.not.include('chatContainer.scrollTop = chatContainer.scrollHeight');
     expect(body, 'scrolls the first newly-inserted message into view instead').to.include('chatContainer.scrollTop = Math.max(0, firstDiv.offsetTop');
     expect(body, 'must not call scrollIntoView, which is unreliable right after a batch of DOM insertions').to.not.include('.scrollIntoView(');
+  });
+
+  it('a compaction notice is dropped, not shown, if it belongs to a session other than the one currently on screen (v0.5.7 bug fix)', () => {
+    // Compaction runs a ~20s background summary call against whatever session triggered it; if the
+    // user switches sessions before it finishes, the notice must not land on the wrong conversation.
+    const idx = js.indexOf("case 'compacting':");
+    const body = js.slice(idx, idx + 700);
+    expect(body, 'must bail out before rendering when the event belongs to a different session').to.include("if (m.sessionId && m.sessionId !== _currentSessionId) break;");
+  });
+
+  it('the backend tags the compacted event with the session it belongs to, for both manual and auto compact (v0.5.7 bug fix)', () => {
+    const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+    const agentLoop = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'agent-loop.ts'), 'utf8');
+    expect(provider).to.include("this._post({ type: 'compacted', sessionId: current.id, compactedAt");
+    expect(agentLoop).to.include("this.deps.postMessage({ type: 'compacted', sessionId: session.id, compactedAt })");
+  });
+});
+
+describe('_isStreaming is not left stuck true when _handleChat exits early (v0.5.7 bug fix)', () => {
+  const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+
+  it('resets _isStreaming before the early return when neither the sidebar view nor a popout exists', () => {
+    // The 'send' handler sets _isStreaming = true synchronously before queueing this call. If
+    // _handleChat then returns here without resetting it, _isStreaming gets stuck true forever,
+    // permanently disabling the "reuse empty session" fast path and the visibility-driven refresh,
+    // both of which gate on !this._isStreaming.
+    const idx = provider.indexOf('private async _handleChat(');
+    expect(idx, '_handleChat not found').to.be.greaterThan(-1);
+    const body = provider.slice(idx, idx + 300);
+    expect(body, 'must reset _isStreaming on this early return, not just in the try/finally below').to.match(/if \(!this\._view && !this\._popout\) \{ this\._isStreaming = false; return; \}/);
+  });
+});
+
+describe('prompt history: per-workspace scoping (v0.5.7)', () => {
+  const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+  const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
+  const html = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'webview.html'), 'utf8');
+  const css = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'styles.css'), 'utf8');
+
+  it('is keyed by the first workspace folder path, not a single flat global list', () => {
+    const idx = provider.indexOf('_promptHistoryKey()');
+    expect(idx, '_promptHistoryKey not found').to.be.greaterThan(-1);
+    const body = provider.slice(idx, idx + 200);
+    expect(body).to.include('workspaceFolders?.[0]?.uri.fsPath');
+  });
+
+  it('reads and writes through a per-workspace map, not the old flat promptHistory key', () => {
+    expect(provider).to.include("globalState.get<Record<string, string[]>>('grom.promptHistoryByWorkspace'",
+      '_getPromptHistory/_setPromptHistory must use the new per-workspace map key');
+    // The old flat key must not still be read or written anywhere in provider.ts.
+    expect(provider).to.not.match(/globalState\.(get|update)\('promptHistory'/,
+      'the old flat, non-scoped promptHistory globalState key must not be used anymore');
+  });
+
+  it('returns an empty list when no workspace folder is open, rather than throwing or using a fallback key', () => {
+    const idx = provider.indexOf('private _getPromptHistory()');
+    const body = provider.slice(idx, idx + 200);
+    expect(body).to.include('if (!key) return [];');
+  });
+
+  it('clearing prompt history notifies the webview so the new tab updates live', () => {
+    const idx = provider.indexOf("case 'clearPromptHistory':");
+    const line = provider.slice(idx, provider.indexOf('\n', idx));
+    expect(line).to.include("type: 'promptHistoryUpdated'");
+    expect(line).to.include('history: []');
+  });
+
+  it('sending a new prompt notifies the webview with the updated history too', () => {
+    const idx = provider.indexOf('this._setPromptHistory(ph);');
+    expect(idx, '_setPromptHistory(ph) call site not found').to.be.greaterThan(-1);
+    const body = provider.slice(idx, idx + 150);
+    expect(body).to.include("type: 'promptHistoryUpdated'");
+  });
+
+  it('has a third History-panel tab for Prompt History, alongside Sessions and Task Log', () => {
+    expect(html).to.include('id="tab-prompthistory"');
+    expect(html).to.include("window.switchHistoryTab('prompthistory')");
+    expect(html).to.include('id="prompt-history-panel"');
+    expect(html).to.include('id="prompt-history-list"');
+  });
+
+  it('switchHistoryTab shows and hides all three panels correctly', () => {
+    const idx = js.indexOf('window.switchHistoryTab = (tab) =>');
+    const body = js.slice(idx, idx + 500);
+    expect(body).to.include("document.getElementById('prompt-history-panel').style.display = tab === 'prompthistory' ? 'flex' : 'none'");
+  });
+
+  it('renderPromptHistory shows the newest entry first', () => {
+    const idx = js.indexOf('function renderPromptHistory(entries)');
+    expect(idx, 'renderPromptHistory not found').to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 700);
+    expect(body, 'must reverse the array so the most recent prompt renders first').to.include('.slice().reverse()');
+  });
+
+  it('renderPromptHistory escapes prompt text (it is raw, untrusted user input)', () => {
+    const idx = js.indexOf('function renderPromptHistory(entries)');
+    const body = js.slice(idx, idx + 700);
+    expect(body).to.include('escapeHtml(text)');
+  });
+
+  it('each entry has a Copy button that only appears on hover, matching the code-block convention', () => {
+    expect(css).to.include('.prompt-history-copy-btn');
+    expect(css).to.match(/\.prompt-history-copy-btn\s*\{[^}]*opacity:\s*0/,
+      'copy button must be hidden until hover, like .code-header buttons');
+    expect(css).to.include('.prompt-history-entry:hover .prompt-history-copy-btn { opacity: 1; }');
+  });
+
+  it('copying an entry writes it to the clipboard', () => {
+    const idx = js.indexOf('window.copyPromptHistoryEntry');
+    expect(idx, 'copyPromptHistoryEntry not found').to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 600);
+    expect(body).to.include('navigator.clipboard.writeText');
+  });
+
+  it('clearing requires a click-twice confirmation, not window.confirm (blocked in VS Code webviews)', () => {
+    const idx = js.indexOf('window.clearPromptHistoryConfirm');
+    expect(idx, 'clearPromptHistoryConfirm not found').to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 1400);
+    expect(body).to.not.include('window.confirm(');
+    expect(body, 'first click arms a confirmation state').to.include("btn.dataset.confirming = '1'");
+    expect(body, 'second click actually clears').to.include("type: 'clearPromptHistory'");
+  });
+
+  it('the promptHistoryUpdated message keeps the up-arrow input history and the tab list in sync', () => {
+    const idx = js.indexOf("case 'promptHistoryUpdated':");
+    expect(idx, "case 'promptHistoryUpdated' not found").to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 200);
+    expect(body).to.include('_inputHistory = m.history');
+    expect(body).to.include('renderPromptHistory(_inputHistory)');
+  });
+});
+
+describe('code-block header floats as a corner overlay, not a full-width flow row (v0.5.7)', () => {
+  const css = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'styles.css'), 'utf8');
+
+  // On narrow blocks a file-suggestion code block can carry up to 7 buttons (Diff, Apply,
+  // Insert, Run, Copy, Accept, Reject). The old negative-margin flow trick let a wrapped
+  // second row stretch across the block's full width, covering multiple lines of code.
+  // Floating it absolutely in the corner keeps any wrap contained to a small column instead.
+  it('<pre> is a positioned container for the header to float inside', () => {
+    const idx = css.indexOf('pre { background');
+    expect(idx, 'pre rule not found').to.be.greaterThan(-1);
+    const rule = css.slice(idx, css.indexOf('}', idx));
+    expect(rule).to.include('position: relative');
+  });
+
+  it('.code-header is absolutely positioned in the corner, not pushed into flow with a negative margin', () => {
+    const idx = css.indexOf('.code-header {');
+    expect(idx, '.code-header rule not found').to.be.greaterThan(-1);
+    const rule = css.slice(idx, css.indexOf('}', idx));
+    expect(rule).to.include('position: absolute');
+    expect(rule, 'the old overlap-by-negative-margin trick must be gone').to.not.include('margin-bottom: -30px');
+  });
+
+  it('.code-header wraps within a constrained width instead of stretching full-width', () => {
+    const idx = css.indexOf('.code-header {');
+    const rule = css.slice(idx, css.indexOf('}', idx));
+    expect(rule).to.include('flex-wrap: wrap');
+    expect(rule).to.include('max-width: calc(100% - 12px)');
+  });
+});
+
+describe('language-override indicator (v0.5.7)', () => {
+  const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+  const agentLoop = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'agent-loop.ts'), 'utf8');
+  const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
+  const html = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'webview.html'), 'utf8');
+
+  // Half 1: a permanent per-reply note recording which model actually answered a SPECIFIC
+  // past message, independent of whatever file happens to be active when you read it later.
+  it('agent-loop posts modelOverrideUsed only when the resolved model differs from the global default', () => {
+    const idx = agentLoop.indexOf("if (model !== baseModel) {");
+    expect(idx, 'model !== baseModel guard not found').to.be.greaterThan(-1);
+    const body = agentLoop.slice(idx, idx + 200);
+    expect(body).to.include("type: 'modelOverrideUsed'");
+  });
+
+  it('the per-reply note is only attached to the div this exact request owns (same staleness guard as chunk)', () => {
+    const idx = js.indexOf("case 'modelOverrideUsed':");
+    expect(idx, "case 'modelOverrideUsed' not found").to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 500);
+    expect(body).to.include('currentAiDiv._requestId === _requestId');
+  });
+
+  it('the per-reply note is not duplicated if somehow posted twice for the same message', () => {
+    const idx = js.indexOf("case 'modelOverrideUsed':");
+    const body = js.slice(idx, idx + 500);
+    expect(body).to.include("!currentAiDiv.querySelector('.model-override-note')");
+  });
+
+  // Half 2: a live toolbar badge reflecting whether the CURRENTLY active file's language has
+  // an override configured, independent of any message having been sent at all.
+  it('the badge only lights up when the override model actually differs from the global default', () => {
+    const idx = provider.indexOf('private _updateLanguageOverrideBadge()');
+    expect(idx, '_updateLanguageOverrideBadge not found').to.be.greaterThan(-1);
+    const body = provider.slice(idx, idx + 900);
+    expect(body).to.include('overrideModel !== baseModel');
+  });
+
+  it('the badge reacts to changing the active editor (reuses the existing _updateActiveContext lifecycle)', () => {
+    const idx = provider.indexOf('private async _updateActiveContext()');
+    const body = provider.slice(idx, idx + 700);
+    expect(body).to.include('this._updateLanguageOverrideBadge();');
+  });
+
+  it('the badge also reacts to editing grom.chatLanguageModels/languageModels/model in settings, not just switching files', () => {
+    const idx = provider.indexOf("e.affectsConfiguration('grom.chatLanguageModels')");
+    expect(idx, 'config-change guard for language override settings not found').to.be.greaterThan(-1);
+    const body = provider.slice(idx, idx + 200);
+    expect(body).to.include('this._updateLanguageOverrideBadge();');
+  });
+
+  it('the badge element exists in the toolbar next to the model dropdown, hidden by default', () => {
+    const idx = html.indexOf('id="language-override-badge"');
+    expect(idx, 'language-override-badge element not found').to.be.greaterThan(-1);
+    const tag = html.slice(html.lastIndexOf('<', idx), html.indexOf('>', idx) + 1);
+    expect(tag).to.include('display:none');
+  });
+
+  it('the webview shows/hides the badge and sets an explanatory tooltip', () => {
+    const idx = js.indexOf("case 'languageOverrideActive':");
+    expect(idx, "case 'languageOverrideActive' not found").to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 400);
+    expect(body).to.include("badge.style.display = ''");
+    expect(body).to.include("badge.style.display = 'none'");
+    expect(body).to.include('badge.title =');
+  });
+});
+
+describe('context display is honest about a guessed vs a real detected size (v0.5.7)', () => {
+  const provider = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'provider.ts'), 'utf8');
+  const js = require('fs').readFileSync(require('path').join(process.cwd(), 'media', 'main.js'), 'utf8');
+
+  // p.context and the trailing ?? 8192 are both guesses that become indistinguishable from a
+  // real detected value once collapsed into contextLength, so contextKnown must be captured
+  // from _detectedContextLength directly, before that collapse, the only point where a real
+  // detected value and a guess are still different things.
+  it('contextKnown reflects whether a real value was ever detected, captured before the guess collapses in', () => {
+    const idx = provider.indexOf('const contextKnown =');
+    expect(idx, 'contextKnown computation not found').to.be.greaterThan(-1);
+    const collapseIdx = provider.indexOf('const contextLength =');
+    expect(idx, 'contextKnown must be computed before contextLength collapses detected/guessed into one number').to.be.lessThan(collapseIdx);
+    const line = provider.slice(idx, provider.indexOf('\n', idx));
+    expect(line).to.include('this._detectedContextLength !== null');
+  });
+
+  it('contextKnown is included in both the usageUpdate post and the context-full hint post', () => {
+    const usageIdx = provider.indexOf("type: 'usageUpdate'");
+    expect(provider.slice(usageIdx, usageIdx + 300)).to.include('contextKnown');
+    const hintIdx = provider.indexOf("type: 'gromHint', hint: 'context'");
+    expect(hintIdx, "gromHint 'context' post not found").to.be.greaterThan(-1);
+    expect(provider.slice(hintIdx, hintIdx + 100)).to.include('contextKnown');
+  });
+
+  it('the toolbar tooltip says the size is unknown instead of stating a fake percentage as fact', () => {
+    const idx = js.indexOf("case 'usageUpdate':");
+    expect(idx, "case 'usageUpdate' not found").to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 1100);
+    expect(body, 'must branch on contextKnown').to.include('m.contextKnown');
+    expect(body, 'must say the size is unknown when it genuinely is').to.include('context size unknown');
+  });
+
+  it('the context-full hint card is honest that it is an estimate, not a confident reading, when the size is unknown', () => {
+    const idx = js.indexOf("if (m.hint === 'context')");
+    expect(idx, "gromHint 'context' handler not found").to.be.greaterThan(-1);
+    const body = js.slice(idx, idx + 900);
+    expect(body, 'must branch on contextKnown').to.include('m.contextKnown');
+    expect(body, "must not claim a confident percentage when the size wasn't really detected").to.include("couldn't be detected for this model");
   });
 });

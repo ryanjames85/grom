@@ -646,6 +646,58 @@ describe('RagIndex incremental re-indexing', () => {
       sinon.restore();
     }
   });
+
+  it('a non-force build() arriving mid-build is queued too, not silently dropped (v0.5.7 bug fix)', async () => {
+    // Regression test: only force=true calls used to be queued while a build was in progress;
+    // a plain incremental call (e.g. a file-watcher event firing mid-build) just returned doing
+    // nothing, so that file's change was lost until some later build call happened to include
+    // it again.
+    const fetchStub = sinon.stub(global, 'fetch' as any);
+    fetchStub.resolves({ ok: true, json: async () => ({ embeddings: [[0.1, 0.2, 0.3]] }) });
+    try {
+      const idx = new RagIndex();
+      const embConfig = { model: 'nomic-embed-text', apiUrl: 'http://localhost:11434' };
+      const firstFiles = [{ path: 'a.ts', content: 'function alphaHandler(req: Request) { return req.body; }' }];
+      const watcherFiles = [
+        ...firstFiles,
+        { path: 'watched.ts', content: 'const YXWVUT77 = "yxwvut77 qponml unique sentinel value"' }
+      ];
+
+      const first = idx.build(firstFiles, embConfig); // suspends at the embed await
+      const queued = idx.build(watcherFiles, embConfig); // force=false, arrives mid-build
+
+      await first;
+      await queued; // must resolve once the real, merged rebuild actually runs
+
+      expect(idx.query('yxwvut77'), 'a non-force call arriving mid-build must not be silently dropped').to.include('watched.ts');
+    } finally {
+      sinon.restore();
+    }
+  });
+
+  it('awaiting a queued build() only resolves once the real rebuild has actually finished, not the instant it was queued (v0.5.7 bug fix)', async () => {
+    // Regression test: a queued build() call used to resolve immediately (nothing ran after it
+    // set _pendingRebuild and returned), so code like `await rag.build(..., true); rag.query(...)`
+    // could run its query before the queued rebuild's data was actually indexed.
+    const fetchStub = sinon.stub(global, 'fetch' as any);
+    fetchStub.resolves({ ok: true, json: async () => ({ embeddings: [[0.1, 0.2, 0.3]] }) });
+    try {
+      const idx = new RagIndex();
+      const embConfig = { model: 'nomic-embed-text', apiUrl: 'http://localhost:11434' };
+      const firstFiles = [{ path: 'a.ts', content: 'function alphaHandler(req: Request) { return req.body; }' }];
+      const queuedFiles = [{ path: 'q.ts', content: 'const WZYXVU33 = "wzyxvu33 tsrqpo unique sentinel value"' }];
+
+      const first = idx.build(firstFiles, embConfig); // suspends at the embed await
+      const queued = idx.build(queuedFiles, undefined, true); // queued, resolves only when it really runs
+      await queued;
+
+      // If `queued` resolved before the rebuild actually ran, this query would miss.
+      expect(idx.query('wzyxvu33'), 'must be indexed by the time the queued build() promise resolves').to.include('q.ts');
+      await first;
+    } finally {
+      sinon.restore();
+    }
+  });
 });
 
 // ── ConversationRag ───────────────────────────────────────────────────────────

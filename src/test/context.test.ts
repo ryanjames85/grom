@@ -1,22 +1,26 @@
 // @ts-nocheck
-// context.ts is already loaded with the vscode mock by agent-loop.test.ts (which runs first
-// alphabetically and patches Module.prototype.require). We stub child_process.execSync on the
-// cached module: the inline `const { execSync } = require('child_process')` inside
-// resolveSlashCommand destructures at call time, so the stub is picked up correctly.
+// This file used to rely on agent-loop.test.ts (loaded first, alphabetically) leaving its
+// vscode mock installed globally and never restoring it; that made context.test.ts's own
+// require('vscode') work by accident, but crash if run standalone, and made the whole suite
+// fragile to load order (see project_test_harness_bug.md). Now self-contained: installs its
+// own mock before requiring context.ts, and restores it in after() so it never leaks either.
 const sinon = require('sinon');
+const { installVscodeMock } = require('./_vscode-mock');
+
+// The base mock already includes workspace.fs.stat (see _vscode-mock.ts).
+const { mock: vscode, restore: restoreVscodeMock } = installVscodeMock();
+
+// We stub child_process.execSync on the required module: the inline
+// `const { execSync } = require('child_process')` inside resolveSlashCommand destructures
+// at call time, so the stub is picked up correctly.
 const childProcess = require('child_process');
 const { resolveSlashCommand, resolveMentions, resolveWebSearch } = require('../context');
 const terminalBuffer = require('../terminal-buffer');
 const pkg = require('../../package.json');
 
-// Grab the vscode mock that context.ts was loaded with (set up by agent-loop.test.ts).
-// We add `fs.stat` here since agent-loop's mock only has readFile/writeFile/etc.
-const vscode = require('vscode');
-if (!vscode.workspace.fs.stat) {
-  vscode.workspace.fs.stat = sinon.stub();
-}
-
 let expect;
+
+after(restoreVscodeMock);
 
 describe('resolveSlashCommand /commit', () => {
   before(async () => {
@@ -182,6 +186,19 @@ describe('resolveMentions', () => {
     vscode.workspace.fs.stat.rejects(new Error('file not found'));
     const result = await resolveMentions('@missing.ts', new Set());
     expect(result).to.include('Error: could not read file');
+  });
+
+  it('two different @mention spellings that resolve to the same file only attach it once (v0.5.7 bug fix)', async () => {
+    // Regression test: dedup used to be keyed on the raw @mention text typed by the user, not
+    // the resolved file's real name. "@app" and "@App.ts" resolving to the same underlying file
+    // (case difference, or a partial name vs the full name) both passed the usedFiles check
+    // since they're different strings, so the file's content was attached twice.
+    vscode.workspace.findFiles.resolves([{ fsPath: '/test/app.ts' }]);
+    vscode.workspace.fs.stat.resolves({ size: 100 });
+    vscode.workspace.fs.readFile.resolves(Buffer.from('export const app = 1;'));
+    const result = await resolveMentions('@app @App.ts', new Set());
+    const occurrences = result.split('export const app = 1;').length - 1;
+    expect(occurrences, 'the same underlying file must not be attached twice under two different spellings').to.equal(1);
   });
 });
 

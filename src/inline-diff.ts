@@ -141,11 +141,15 @@ export async function applyComposerPatches(patches: FilePatch[]): Promise<void> 
     return;
   }
 
-  // Validate all paths and reject any traversal attempts before touching the filesystem
+  // Validate all paths and reject any traversal attempts before touching the filesystem.
+  // Check BEFORE stripping anything: a leading slash or drive letter must be rejected, not
+  // silently normalised away and then let through (that made the '/'-prefix check dead code,
+  // since by the time it ran the leading slash had already been stripped from the very same
+  // value it was checking — found via inline-diff.test.ts, matches builtin-tools.ts's safePath).
   const safe: Array<{ path: string; content: string; uri: vscode.Uri; isNew: boolean }> = [];
   for (const patch of patches) {
-    const normalised = patch.path.replace(/\\/g, '/').replace(/^\/+/, '');
-    if (normalised.includes('..') || normalised.startsWith('/')) {
+    const normalised = patch.path.replace(/\\/g, '/');
+    if (normalised.includes('..') || normalised.startsWith('/') || /^[a-zA-Z]:/.test(normalised)) {
       vscode.window.showWarningMessage(`Grom: skipping unsafe path "${patch.path}"`);
       continue;
     }
@@ -211,7 +215,6 @@ export async function applyComposerPatches(patches: FilePatch[]): Promise<void> 
       if (original === patch.content) continue;
 
       if (applyAll) {
-        await vscode.workspace.fs.writeFile(uri, Buffer.from(patch.content, 'utf8'));
         const doc = await vscode.workspace.openTextDocument(uri);
         const editor = await vscode.window.showTextDocument(doc);
         await InlineDiffSession.start(editor, patch.content);

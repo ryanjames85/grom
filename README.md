@@ -270,7 +270,7 @@ Open it with the brain icon in the header.
 
 - Multiple chat sessions, persistent across restarts
 - **Session dates:** the history list shows a relative last-modified timestamp (e.g. "5m ago", "yesterday") next to each session
-- **Prompt history:** up/down arrow in the input cycles your previously sent messages
+- **Prompt history:** up/down arrow in the input cycles your previously sent messages, and a dedicated tab in the History panel lists every prompt for the current project with a one-click copy button. Scoped per workspace folder — a prompt typed in one project never shows up in another's
 - `/compact` trims long histories, and a divider marks exactly where the cut was made
 - Export any conversation as `.md`, import it back to continue
 - Search through any conversation with live highlighting
@@ -393,6 +393,8 @@ The codebase index updates automatically as files change. If search results ever
 ### Per-Language Model Routing
 
 `grom.languageModels` sets a model for a language in both chat and autocomplete. Use `grom.chatLanguageModels` or `grom.autocompleteLanguageModels` to set them independently. These take priority when set.
+
+A small 🔀 badge appears next to the model dropdown whenever the active file's language has an override configured, so it's never a surprise which model actually answers. Each reply that used a routed model also carries a permanent note recording which one, independent of whatever file happens to be open when you read it back later.
 
 ```json
 {

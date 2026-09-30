@@ -41,6 +41,8 @@ export interface AgentLoopDeps {
   postMessage: (msg: any) => void;
   /** Pauses the loop and asks the user for Allow / Allow All / Deny. */
   requestApproval: (id: string, tool: string, args: Record<string, any>) => Promise<'allow' | 'allowAll' | 'deny'>;
+  /** Cleans up a pending approval that will never be answered (the request was aborted). */
+  cancelApproval?: (id: string) => void;
   /** Records a completed tool call in the session task log. */
   appendTaskLog: (sessionId: string, tool: string, args: Record<string, any>, result: string) => void;
   /** Returns the user's persistent memory string. */
@@ -112,6 +114,14 @@ export class AgentLoop {
     const chatLangModels = config.get<Record<string, string>>('chatLanguageModels', {});
     const fallbackLangModels = config.get<Record<string, string>>('languageModels', {});
     const model = chatLangModels[activeLang] || fallbackLangModels[activeLang] || baseModel;
+    // The toolbar dropdown always shows the global default model, never a per-language
+    // override actually in use for this one request, so a user can easily forget they set
+    // one and be confused about which model actually answered. Tell the webview so it can
+    // attach a small note to this specific reply, an accurate permanent record independent
+    // of the active file at read time.
+    if (model !== baseModel) {
+      this.deps.postMessage({ type: 'modelOverrideUsed', model, language: activeLang });
+    }
     const useOllamaFormat = config.get<boolean>('useOllamaFormat') || false;
     const resolved = await this.deps.resolveProviderConfig?.(apiUrl, useOllamaFormat);
     const apiKey = resolved?.key ?? (config.get<string>('apiKey', '') || undefined);
@@ -219,7 +229,7 @@ export class AgentLoop {
       session.tokens.output = 0;
       messagesForApi = [...session.history, { role: 'user', content: contextPrompt, images }];
       saveState();
-      this.deps.postMessage({ type: 'compacted', compactedAt });
+      this.deps.postMessage({ type: 'compacted', sessionId: session.id, compactedAt });
     }
     session.history.push({ role: 'user', content: rawText, images });
     saveState();
@@ -348,7 +358,7 @@ export class AgentLoop {
         if (!parsed) {
           // Model wrote prose without calling a tool; nudge it once, but ONLY on the very first
           // turn before any tool has been called. After a tool succeeds, prose = task complete.
-          if (!toolCallMade && repromptsLeft > 0 && fullText.trim()) {
+          if (!toolCallMade && repromptsLeft > 0 && fullText.trim() && !hitMaxRounds) {
             repromptsLeft--;
             toolMessages = [...toolMessages,
               { role: 'assistant', content: fullText },
@@ -387,7 +397,7 @@ export class AgentLoop {
           const signal = this._abortController!.signal;
           const abortPromise = new Promise<'deny'>(res => signal.addEventListener('abort', () => res('deny'), { once: true }));
           const decision = await Promise.race([this.deps.requestApproval(approvalId, parsed.tool, parsed.args), abortPromise]);
-          if (signal.aborted) break;
+          if (signal.aborted) { this.deps.cancelApproval?.(approvalId); break; }
           if (decision === 'allowAll') { trustAll = true; }
           if (decision === 'deny') {
             toolMessages = [...toolMessages, ...buildFeedback(nativeTc, fullText, `The user denied \`${parsed.tool}\`. Do not retry this action. Ask the user what they'd like to do instead, or try a different approach.`)];
@@ -405,7 +415,7 @@ export class AgentLoop {
             ? await executeBuiltinTool(parsed.tool, parsed.args, this._backups)
             : await this.deps.mcp.callTool(parsed.tool, parsed.args);
         } catch (e: any) {
-          rawResult = `Error: ${e.message}`;
+          rawResult = `Error: ${e?.message ?? String(e)}`;
         }
 
         this.deps.appendTaskLog(session.id, parsed.tool, parsed.args, rawResult);

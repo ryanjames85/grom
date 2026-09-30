@@ -222,6 +222,7 @@ export function activate(context: vscode.ExtensionContext) {
       }));
     }
   } catch { /* proposed API not available in this VS Code build — @terminal context will be empty */ }
+  context.subscriptions.push({ dispose: () => clearTimeout(_errorDebounce) });
 
   // ── Commands ─────────────────────────────────────────────────────────────
   context.subscriptions.push(vscode.commands.registerCommand('grom.start', async () => {

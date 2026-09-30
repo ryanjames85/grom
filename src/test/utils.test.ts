@@ -156,6 +156,31 @@ describe('isPrivateUrl', () => {
     expect(isPrivateUrl('http://[::1]/')).to.be.true;
   });
 
+  it('blocks an IPv4-mapped IPv6 literal wrapping loopback (SSRF filter bypass, v0.5.7 bug fix)', () => {
+    // Regression test: ::ffff:127.0.0.1 embeds a real IPv4 address in a form none of the IPv4
+    // patterns matched as-is (the hostname after stripping brackets is "::ffff:127.0.0.1", which
+    // doesn't start with "127."), silently bypassing the loopback block entirely.
+    expect(isPrivateUrl('http://[::ffff:127.0.0.1]/')).to.be.true;
+  });
+
+  it('blocks an IPv4-mapped IPv6 literal wrapping the AWS/GCP metadata address', () => {
+    expect(isPrivateUrl('http://[::ffff:169.254.169.254]/')).to.be.true;
+  });
+
+  it('blocks an IPv4-mapped IPv6 literal wrapping an RFC-1918 private address', () => {
+    expect(isPrivateUrl('http://[::ffff:10.0.0.1]/')).to.be.true;
+  });
+
+  it('blocks the older, deprecated IPv4-compatible IPv6 form too, not just IPv4-mapped (v0.5.7 bug fix)', () => {
+    // Regression test: ::127.0.0.1 (no "ffff:") is a DIFFERENT deprecated IPv6 form embedding
+    // an IPv4 address (RFC 4291 "IPv4-compatible"), also normalised by the URL parser to the
+    // same kind of hex-group form (::7f00:1) - the ::ffff:-only fix for the mapped form left
+    // this bare form completely unblocked.
+    expect(isPrivateUrl('http://[::127.0.0.1]/')).to.be.true;
+    expect(isPrivateUrl('http://[::169.254.169.254]/')).to.be.true;
+    expect(isPrivateUrl('http://[::10.0.0.1]/')).to.be.true;
+  });
+
   // ── Link-local (AWS/GCP metadata) ──────────────────────────────────────────
 
   it('blocks http://169.254.169.254 (AWS metadata endpoint)', () => {

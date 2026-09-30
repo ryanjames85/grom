@@ -182,7 +182,14 @@ class StdioMcpServer implements McpServer {
     this._dead = true;
     this._pending.forEach(p => { clearTimeout(p.timer); p.reject(new Error('disposed')); });
     this._pending.clear();
-    try { this._proc.kill('SIGTERM'); } catch {}
+    // On Windows the process is spawned via `cmd.exe /c <command>` (see resolveSpawnArgs) so
+    // killing it only terminates the cmd.exe wrapper, not the grandchild it launched - leaving
+    // the real MCP server process running. taskkill /t kills the whole tree instead.
+    if (process.platform === 'win32' && this._proc.pid) {
+      try { cp.exec(`taskkill /pid ${this._proc.pid} /t /f`); } catch {}
+    } else {
+      try { this._proc.kill('SIGTERM'); } catch {}
+    }
   }
 }
 
@@ -194,6 +201,7 @@ export class McpManager {
   private _servers: McpServer[] = [];
   private _ready = false;
   private _initPromise: Promise<void> | null = null;
+  private _initGeneration = 0;
 
   /**
    * Disposes any running servers, then reads grom.mcpServers from VS Code settings
@@ -207,17 +215,32 @@ export class McpManager {
   }
 
   private async _doInitialize(): Promise<void> {
+    // A config change (or a manual re-init) can call initialize() again before a prior call's
+    // servers finish connecting. Without this guard, both generations' async spawns land in
+    // this._servers, duplicating every tool and permanently leaking the loser's child processes
+    // (its dispose() call only touched whatever was in this._servers before IT started, which
+    // may not yet include the other generation's servers). Any generation superseded before its
+    // own spawns land discards its results instead of registering them.
+    const generation = ++this._initGeneration;
+
     this._servers.forEach(s => s.dispose());
     this._servers = [];
 
-    const configs = vscode.workspace.getConfiguration('grom').get<any[]>('mcpServers') || [];
+    const configs = (vscode.workspace.getConfiguration('grom').get<any[]>('mcpServers') || []).filter(c => c?.command);
     const results = await Promise.allSettled(
-      configs.filter(c => c?.command).map(async (cfg) => {
+      configs.map(async (cfg) => {
         const server = new StdioMcpServer(cfg.name || cfg.command, cfg.command, cfg.args || [], cfg.env || {});
         await server.initialize();
         return server;
       })
     );
+
+    if (generation !== this._initGeneration) {
+      // Superseded by a later initialize() call while we were connecting - dispose what we
+      // started instead of registering it, so it doesn't leak or duplicate the newer generation.
+      for (const r of results) if (r.status === 'fulfilled') r.value.dispose();
+      return;
+    }
 
     for (let i = 0; i < results.length; i++) {
       const r = results[i];

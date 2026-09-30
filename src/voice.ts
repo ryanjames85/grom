@@ -217,7 +217,11 @@ export class VoiceManager {
   private _maxRecordTimer: NodeJS.Timeout | null = null;
   private _chunkTimer: NodeJS.Timeout | null = null;
   private _sentPcmLength: number = 0;
-  private static readonly MAX_RECORD_MS = 30_000;
+  // Must not exceed the webview's _VP_MAX_SAMPLES (media/main.js): transcription is only ever
+  // run once, on the final chunk (see _vpAppendPcm), and truncates anything beyond that sample
+  // cap with no partial transcript ever produced for the truncated tail - so letting a recording
+  // run longer than what will actually get transcribed silently drops the end of what was said.
+  private static readonly MAX_RECORD_MS = 28_000;
   private static readonly CHUNK_BYTES = 16000 * 4 * 3; // 3s of f32le @ 16kHz
 
   constructor(
@@ -253,6 +257,12 @@ export class VoiceManager {
   }
 
   dispose() {
+    // Without this, a dispose mid-recording left both timers armed: _maxRecordTimer would still
+    // fire _stop() against a webview that may already be torn down, and _chunkTimer would keep
+    // re-firing every second indefinitely (nothing else ever clears it, and it holds a reference
+    // to `this`, so neither timer nor manager can be garbage collected).
+    if (this._maxRecordTimer) { clearTimeout(this._maxRecordTimer); this._maxRecordTimer = null; }
+    if (this._chunkTimer) { clearInterval(this._chunkTimer); this._chunkTimer = null; }
     this._killProc();
   }
 
